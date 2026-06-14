@@ -21,6 +21,21 @@ def get_secret(name: str) -> str:
     return value
 
 
+def get_optional(name: str) -> str:
+    """Секрет, которого может и не быть (пустая строка, если не задан)."""
+    return (os.getenv(name) or "").strip()
+
+
+def agent_api_key(cfg: dict) -> str:
+    """Ключ Claude для агента: свой (cfg['api_key_env']) или общий ANTHROPIC_API_KEY."""
+    env = cfg.get("api_key_env")
+    if env:
+        own = get_optional(env)
+        if own:
+            return own
+    return get_secret("ANTHROPIC_API_KEY")
+
+
 def load_agent(name: str) -> dict:
     """Загрузить агента: его конфиг (config.yaml) + личность (SKILL.md)."""
     agent_dir = ROOT / "agents" / name

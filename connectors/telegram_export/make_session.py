@@ -1,28 +1,27 @@
-"""РАЗОВЫЙ вход вручную — запусти ЭТОТ файл в СВОЁМ терминале.
+"""Полностью готовый файл. Ничего менять не нужно — просто запусти его.
 
-Зачем: получить «строку сессии» Telegram у себя (где Telegram тебе доверяет),
-чтобы не логиниться из рабочей среды. Строку пришлёшь — вставим в .env.
-
-Подготовка (один раз):
-    pip install telethon
-
-Запуск:
-    python make_session.py
-
-Скрипт спросит api_id, api_hash, телефон и код из Telegram (и пароль 2FA,
-если он у тебя есть), затем напечатает длинную строку сессии. Скопируй её ВСЮ.
-
-ВНИМАНИЕ: строка сессии = доступ к твоему аккаунту. Никому не показывай,
-кроме как вставить в .env (он в git не попадает). Отозвать можно в
-Telegram → Настройки → Устройства.
+Он сам поставит telethon (если её нет) и спросит:
+  - телефон  -> введи +REDACTED
+  - код из Telegram -> введи сразу, как придёт
+  - (если есть) пароль 2FA
+В конце напечатает СТРОКУ СЕССИИ — пришли её ассистенту.
 """
-from telethon.sync import TelegramClient
-from telethon.sessions import StringSession
+import subprocess
+import sys
 
-api_id = int(input("api_id (число): ").strip())
-api_hash = input("api_hash (строка): ").strip()
+try:
+    from telethon.sync import TelegramClient
+    from telethon.sessions import StringSession
+except ModuleNotFoundError:
+    print("Ставлю telethon, подожди...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon"])
+    from telethon.sync import TelegramClient
+    from telethon.sessions import StringSession
 
-with TelegramClient(StringSession(), api_id, api_hash) as client:
-    print("\n=== ТВОЯ СТРОКА СЕССИИ (скопируй её целиком и пришли) ===\n")
+API_ID = REDACTED
+API_HASH = "ROTATED_SEE_ENV"
+
+with TelegramClient(StringSession(), API_ID, API_HASH) as client:
+    print("\n\n========== СТРОКА СЕССИИ — скопируй ВСЮ строку ниже ==========")
     print(client.session.save())
-    print("\n=========================================================\n")
+    print("========== и пришли её ассистенту ==========\n")
