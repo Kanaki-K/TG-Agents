@@ -70,5 +70,5 @@ async def chat(m: Message) -> None:
 
 
 async def main() -> None:
-    bot = Bot(config.get_secret("TELEGRAM_BOT_TOKEN"))
+    bot = Bot(config.get_secret(AGENT["token_env"]))
     await dp.start_polling(bot)
