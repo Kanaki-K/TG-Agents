@@ -1,0 +1,5 @@
+# Зависимости личного ассистента (Python)
+aiogram>=3.7,<4        # Telegram-бот
+anthropic>=0.40        # клиент Claude API
+python-dotenv>=1.0     # чтение .env
+PyYAML>=6.0            # конфиги агентов
