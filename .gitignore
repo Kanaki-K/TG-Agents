@@ -1,0 +1,33 @@
+# --- Секреты (НИКОГДА не коммитим) ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+
+# --- Telegram ---
+*.session
+*.session-journal
+
+# --- Память: бэкапим отдельно, но сами файлы памяти версионируем.
+#     Сырые/большие выгрузки — НЕ в git ---
+data/
+exports/
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# --- Локальные настройки Claude Code (не делим через git) ---
+.claude/settings.local.json
+
+# --- IDE / прочее ---
+.idea/
+.vscode/
+.DS_Store
+*.log

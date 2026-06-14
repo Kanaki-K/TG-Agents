@@ -1,0 +1,14 @@
+services:
+  claude:
+    build: .
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    environment:
+      - HOME=/claude-home
+    volumes:
+      - .:/workspace              # ТОЛЬКО папка проекта
+      - claude-home:/claude-home  # логин хранится в Docker, не на твоём диске
+
+volumes:
+  claude-home:
