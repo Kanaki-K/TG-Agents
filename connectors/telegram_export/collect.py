@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import FloodWaitError, SessionPasswordNeededError
 
 from core import config
 
@@ -35,6 +35,12 @@ def _client() -> TelegramClient:
     DATA.mkdir(exist_ok=True)
     api_id = int(config.get_secret("TELEGRAM_API_ID"))
     api_hash = config.get_secret("TELEGRAM_API_HASH")
+    # Если в .env есть готовая строка сессии (сделанная вручную через make_session.py)
+    # — используем её и не логинимся здесь вообще.
+    session_str = (os.getenv("TELEGRAM_SESSION") or "").strip()
+    if session_str:
+        from telethon.sessions import StringSession
+        return TelegramClient(StringSession(session_str), api_id, api_hash)
     return TelegramClient(SESSION, api_id, api_hash)
 
 
@@ -46,9 +52,35 @@ async def send_code() -> None:
         await client.disconnect()
         return
     phone = config.get_secret("TELEGRAM_PHONE")
-    sent = await client.send_code_request(phone)
+    try:
+        sent = await client.send_code_request(phone)
+    except FloodWaitError as e:
+        print(f"Telegram просит подождать {e.seconds} сек перед новой отправкой кода.")
+        await client.disconnect()
+        return
     HASH_FILE.write_text(sent.phone_code_hash, encoding="utf-8")
-    print(f"Код отправлен в Telegram на {phone}. Дай его командой: sign-in <код>")
+    delivery = type(sent.type).__name__  # SentCodeTypeApp / ...Sms / ...Call / ...
+    print(f"Код отправлен на {phone}. Способ доставки: {delivery}. "
+          f"Дай его командой: sign-in <код>")
+    await client.disconnect()
+
+
+async def resend() -> None:
+    """Попросить Telegram доставить код следующим способом (обычно SMS)."""
+    from telethon.tl.functions.auth import ResendCodeRequest
+    client = _client()
+    await client.connect()
+    phone = config.get_secret("TELEGRAM_PHONE")
+    code_hash = HASH_FILE.read_text(encoding="utf-8").strip()
+    try:
+        sent = await client(ResendCodeRequest(phone_number=phone, phone_code_hash=code_hash))
+    except FloodWaitError as e:
+        print(f"Telegram просит подождать {e.seconds} сек перед повтором.")
+        await client.disconnect()
+        return
+    HASH_FILE.write_text(sent.phone_code_hash, encoding="utf-8")
+    print(f"Повторно отправлено. Способ доставки: {type(sent.type).__name__}. "
+          f"Дай код: sign-in <код>")
     await client.disconnect()
 
 
@@ -121,6 +153,8 @@ def main() -> None:
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "send-code":
         asyncio.run(send_code())
+    elif cmd == "resend":
+        asyncio.run(resend())
     elif cmd == "sign-in" and len(sys.argv) > 2:
         asyncio.run(sign_in(sys.argv[2]))
     elif cmd == "collect":
