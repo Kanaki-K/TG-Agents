@@ -1,49 +1,56 @@
 # TG-Agents
 
-Персональная ИИ-команда вокруг Telegram-канала. Полный чертёж — в [docs/PLAN.md](docs/PLAN.md),
-короткий контекст — в [CLAUDE.md](CLAUDE.md).
+Персональная мульти-агентная ИИ-команда («контент-завод») вокруг Telegram-канала и бренда владельца.
+Каждый агент — отдельный Telegram-бот на общем «движке агента». Память — отдельный общий слой.
 
-## Что уже есть (v0): Личный ассистент
+- **Зачем и куда идём:** [docs/PLAN.md](docs/PLAN.md)
+- **Как устроено (инженеру):** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- **Контекст для Claude Code:** [CLAUDE.md](CLAUDE.md)
 
-Telegram-бот, которому ты скидываешь мысли и задачи. Он раскладывает их на задачи,
-ведёт «живой ТуДу», помнит контекст о тебе и делает саммари сессий. Под капотом —
-общий «движок агента» (`core/`), который дальше переиспользуем для остальных сотрудников.
+## Команда
+
+| Агент | Роль | Запуск | Модель | README |
+|---|---|---|---|---|
+| Личный ассистент | ассистент по жизни + живой ТуДу | `python main.py` | Haiku 4.5 | [agents/personal-assistant](agents/personal-assistant/README.md) |
+| Аналитик канала | судит контент по метрикам (внутрь) | `python run_analyst.py` | Haiku 4.5 | [agents/channel-analyst](agents/channel-analyst/README.md) |
+| Разработчик | правит личности агентов через гейт | `python run_dev.py` | Opus 4.8 | [agents/developer](agents/developer/README.md) |
+| Скаут | разведка трендов/источников (наружу) | `python run_scout.py` | Sonnet 4.6 | [agents/scout](agents/scout/README.md) |
+| Криейтор | пишет посты по направлению | `python run_creator.py` | Opus 4.8 | [agents/creator](agents/creator/README.md) |
+
+Рабочий контент-конвейер: **разведка (Скаут/дип-ресёрч) + метрики (Аналитик) → Криейтор пишет → владелец правит и публикует.**
+
+## Структура
 
 ```
-core/                     движок: бот (aiogram) + память + вызов Claude
-  bot.py  config.py  memory.py  tools.py  llm.py
-agents/personal-assistant/ личность ассистента (SKILL.md) + конфиг (модель)
-memory/                   общий слой памяти
-  profile.md  tasks.json (+tasks.md)  journal/
+core/         движок (agent_runtime, llm, config, tg_format) + общие слои (memory, analytics)
+              + реализация агентов: <agent>_bot.py / <agent>_tools.py  (см. ARCHITECTURE)
+agents/<name>/ данные агента: config.yaml + SKILL.md (личность) + README.md
+connectors/   руки: telegram_export (MTProto-сбор), telegram_scan (чтение каналов), web_sources (RSS/веб)
+memory/       общий слой: brand.md, post_standard.md, sources.md (канон); profile/tasks/journal (ассистент)
+data/         собранные метрики канала (не в git)
+docs/         PLAN.md (стратегия), ARCHITECTURE.md (карта кода)
+run_*.py      точки входа (по одной на агента)
 ```
 
-## Команда (другие агенты на том же движке)
+> Почему код агентов в `core/`, а не в `agents/<name>/`: папки агентов с дефисами — это данные
+> (имя агента), а не Python-пакеты. Подробно — в [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- **Аналитик канала** — судит о контенте по метрикам Telegram. Запуск: `python run_analyst.py`
-  (нужен `ANALYST_BOT_TOKEN`; данные готовит `connectors/telegram_export`).
-- **Разработчик** — улучшает личности других агентов по запросу. Запуск: `python run_dev.py`
-  (нужен `DEVELOPER_BOT_TOKEN`). Работает строго через гейт: предлагает изменение → показывает
-  diff → ты одобряешь → применяет (с бэкапом и откатом). Код ядра пока не трогает.
-```
+## Запуск
 
-## Как запустить
-
-1. Установить зависимости:
+1. Зависимости:
    ```
    pip install -r requirements.txt
    ```
-2. Создать бота в **@BotFather**, получить токен.
-3. Скопировать `.env.example` → `.env` и заполнить:
-   - `TELEGRAM_BOT_TOKEN` — токен из BotFather
-   - `ANTHROPIC_API_KEY` — ключ Claude API
-4. Запустить:
-   ```
-   python main.py
-   ```
-5. Написать боту в Telegram. Команды: `/tasks` — задачи, `/summary` — итог сессии.
+2. Завести бота в **@BotFather** на каждого агента, получить токены.
+3. `cp .env.example .env` и заполнить:
+   - `<AGENT>_BOT_TOKEN` — токены ботов (`SECRETARY_BOT_TOKEN`, `ANALYST_BOT_TOKEN`, `DEVELOPER_BOT_TOKEN`, `SCOUT_BOT_TOKEN`, `CREATOR_BOT_TOKEN`)
+   - `ANTHROPIC_API_KEY` — общий ключ Claude (можно задать отдельные `<AGENT>_ANTHROPIC_KEY`)
+   - для Скаута/Аналитика: `TELEGRAM_API_ID/HASH/SESSION` (MTProto, см. `connectors/telegram_export`)
+4. Запустить нужного агента (см. таблицу) и написать его боту в Telegram.
 
 ## Принципы
 
+- **Мозги vs руки:** LLM-логика дёшева и единообразна; сложное — коннекторы. Ядро отделено от коннекторов.
 - **Память — общий внешний слой**, её можно открыть и проверить руками.
-- **Ядро отделено от коннекторов** — добавление нового агента = новая папка в `agents/` + токен.
-- **Секреты только в `.env`** (в git не попадает).
+- **Секреты только в `.env`** (в git не попадает; образец — `.env.example`).
+- **Новый агент** = папка в `agents/` (config+SKILL+README) + `core/<name>_bot.py`(+`_tools.py`) + `run_<name>.py`. Чеклист — в ARCHITECTURE.
