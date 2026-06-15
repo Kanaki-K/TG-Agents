@@ -24,6 +24,23 @@ from core import config, llm
 logging.basicConfig(level=logging.INFO)
 
 
+def _trim_history(hist: list, keep: int = 12) -> list:
+    """Короткий хвост диалога, но обязательно начинающийся с «настоящего»
+    хода пользователя (роль user + строковый content).
+
+    Просто `hist[-keep:]` опасен: срез может попасть между `tool_use` и его
+    `tool_result`, и тогда первым сообщением окажется `tool_result` без парного
+    `tool_use` — Anthropic API отклоняет это с ошибкой 400. Поэтому после среза
+    отбрасываем ведущие сообщения (assistant-ходы и блоки tool_result), пока в
+    начале не окажется обычная реплика пользователя.
+    """
+    tail = hist[-keep:]
+    while tail and not (tail[0].get("role") == "user"
+                        and isinstance(tail[0].get("content"), str)):
+        tail = tail[1:]
+    return tail
+
+
 async def run(
     agent_name: str,
     *,
@@ -43,11 +60,13 @@ async def run(
     async def _turn(m: Message, user_text: str) -> None:
         uid = m.from_user.id
         await m.bot.send_chat_action(m.chat.id, "typing")
+        # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
+        prior = _trim_history(history.get(uid, []))
         text, hist = await asyncio.to_thread(
-            llm.reply, model, system_builder(), history.get(uid, []),
+            llm.reply, model, system_builder(), prior,
             user_text, tools_schema, dispatch, api_key,
         )
-        history[uid] = hist[-12:]
+        history[uid] = _trim_history(hist)
         await m.answer(text or "…")
 
     @dp.message(Command("start"))
