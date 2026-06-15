@@ -98,6 +98,7 @@ async def run(
     api_key = config.agent_api_key(agent)   # свой ключ агента или общий
     commands = commands or {}
     history: dict[int, list] = {}   # короткий хвост диалога по пользователю
+    busy: set[int] = set()          # пользователи с уже идущим запросом (защита от параллельного дубля)
     dp = Dispatcher()
 
     async def _turn(m: Message, user_text: str) -> None:
@@ -107,15 +108,25 @@ async def run(
         if not (user_text or "").strip():
             await m.answer("Пока понимаю только текст — пришли, пожалуйста, сообщением.")
             return
-        await m.bot.send_chat_action(m.chat.id, "typing")
-        # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
-        prior = _trim_history(history.get(uid, []))
-        text, hist = await asyncio.to_thread(
-            llm.reply, model, system_builder(), prior,
-            user_text, tools_schema, dispatch, api_key,
-        )
-        history[uid] = _trim_history(hist)
-        await _send(m, text or "…")
+        # один запрос на пользователя за раз: aiogram обрабатывает апдейты параллельно,
+        # а долгий /scan (инструменты + веб-поиск) при повторном тапе запускался дважды
+        # — два отчёта и порча общей истории. Пока занят — просим подождать.
+        if uid in busy:
+            await m.answer("Ещё думаю над прошлым запросом — секунду, отвечу по нему.")
+            return
+        busy.add(uid)
+        try:
+            await m.bot.send_chat_action(m.chat.id, "typing")
+            # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
+            prior = _trim_history(history.get(uid, []))
+            text, hist = await asyncio.to_thread(
+                llm.reply, model, system_builder(), prior,
+                user_text, tools_schema, dispatch, api_key,
+            )
+            history[uid] = _trim_history(hist)
+            await _send(m, text or "…")
+        finally:
+            busy.discard(uid)
 
     @dp.message(Command("start"))
     async def _start(m: Message) -> None:
