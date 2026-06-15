@@ -33,6 +33,20 @@ def _ts() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+def _write(path: Path, text: str) -> None:
+    """Запись текста с нормализацией: всегда LF и финальный перевод строки.
+
+    Без этого на Windows текстовый режим превращает \\n в \\r\\n (CRLF), а текст
+    от модели часто без концевого \\n — и git показывает SKILL.md «переписанным
+    целиком». Читаемый diff — половина смысла гейта propose→apply, поэтому держим
+    файлы в LF.
+    """
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not text.endswith("\n"):
+        text += "\n"
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
 def _agent_dir(name: str) -> Path:
     """Папка агента с защитой от выхода за пределы agents/."""
     if not name or "/" in name or "\\" in name or ".." in name:
@@ -96,9 +110,10 @@ def propose(name: str, new_skill: str, rationale: str = "") -> str:
     """Сохранить ПРЕДЛОЖЕНИЕ новой версии SKILL.md и вернуть diff. Живой файл не трогаем."""
     d = _agent_dir(name)
     current = (d / "SKILL.md").read_text(encoding="utf-8")
+    new_skill = new_skill.replace("\r\n", "\n").replace("\r", "\n")
     if new_skill.strip() == current.strip():
         return "Предложение совпадает с текущей версией — менять нечего."
-    (d / PROPOSED).write_text(new_skill, encoding="utf-8")
+    _write(d / PROPOSED, new_skill)
     head = f"Предложение для '{name}' сохранено (боевой SKILL.md пока не тронут).\n"
     if rationale:
         head += f"Обоснование: {rationale}\n"
@@ -129,8 +144,8 @@ def apply(name: str) -> str:
     hist = d / HISTORY
     hist.mkdir(exist_ok=True)
     backup = hist / f"SKILL.{_ts()}.md"
-    backup.write_text(current, encoding="utf-8")
-    (d / "SKILL.md").write_text(new, encoding="utf-8")
+    _write(backup, current)
+    _write(d / "SKILL.md", new)
     prop.unlink()
     return (f"Готово: новая версия '{name}' применена. "
             f"Прежняя сохранена в {HISTORY}/{backup.name} (откат — rollback_agent). "
@@ -155,7 +170,7 @@ def rollback(name: str) -> str:
     if not backups:
         return f"Для '{name}' нет сохранённых версий для отката."
     last = backups[-1]
-    (d / "SKILL.md").write_text(last.read_text(encoding="utf-8"), encoding="utf-8")
+    _write(d / "SKILL.md", last.read_text(encoding="utf-8"))
     last.unlink()
     return (f"Откатил '{name}' к версии {last.name}. "
             f"⚠️ Перезапусти этого агента, чтобы откат вступил в силу.")
