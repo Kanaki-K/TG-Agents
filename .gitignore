@@ -31,6 +31,9 @@ __pycache__/
 agents/*/SKILL.proposed.md
 agents/*/.history/
 
+# --- Скаут: очередь предложенных источников (транзиентная, владелец разбирает) ---
+memory/sources.pending.md
+
 # --- IDE / прочее ---
 .idea/
 .vscode/

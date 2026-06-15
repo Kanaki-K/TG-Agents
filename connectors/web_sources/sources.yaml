@@ -1,0 +1,9 @@
+# Фиды Тир-2 для Скаута (проверены WebFetch). Тиры и обоснование — в memory/sources.md.
+# Это РЕФЕРЕНС-ЯДРО, не закрытый список: Скаут калибруется на нём и ищет глубже сам.
+feeds:
+  - name: Lyn Alden
+    url: https://www.lynalden.com/feed/
+  - name: Arthur Hayes
+    url: https://cryptohayes.substack.com/feed
+  - name: Glassnode Research
+    url: https://research.glassnode.com/rss/

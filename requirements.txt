@@ -1,8 +1,9 @@
 # Зависимости личного ассистента (Python)
 aiogram>=3.7,<4        # Telegram-бот
-anthropic>=0.40        # клиент Claude API
+anthropic>=0.40        # клиент Claude API (для веб-поиска Скаута нужен свежий SDK: pip install -U anthropic)
 python-dotenv>=1.0     # чтение .env
 PyYAML>=6.0            # конфиги агентов
 telethon>=1.36         # Telegram Client API (MTProto) — сбор истории канала
 openpyxl>=3.1          # выгрузка таблицы в Excel
 qrcode>=7.4            # QR-вход в Telegram без кода по номеру (login.py)
+feedparser>=6.0        # чтение RSS/Atom-фидов — источники Скаута (Тир-2)
