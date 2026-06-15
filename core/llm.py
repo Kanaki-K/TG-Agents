@@ -13,6 +13,7 @@ from anthropic import Anthropic
 from core import config
 
 MAX_TOKENS = 4096  # с запасом: Разработчик выдаёт целый SKILL.md как аргумент инструмента
+MAX_STEPS = 16     # предохранитель: максимум проходов цикла инструментов за один ход
 
 # Кэш клиентов по ключу — у каждого агента может быть свой API-ключ.
 _clients: dict[str, Anthropic] = {}
@@ -41,7 +42,9 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
     client = _client(api_key)
     messages = history + [{"role": "user", "content": user_text}]
 
+    steps = 0
     while True:
+        steps += 1
         resp = client.messages.create(
             model=model,
             max_tokens=MAX_TOKENS,
@@ -49,13 +52,23 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
             tools=tools_schema,
             messages=messages,
         )
-        # сохраняем ответ ассистента (включая блоки tool_use) в историю
+        # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю
         messages.append({"role": "assistant", "content": resp.content})
 
+        # клиентские инструменты (наши «руки»); серверные (веб-поиск) тип server_tool_use —
+        # их выполняет Anthropic, мы их здесь не диспетчеризуем
         tool_uses = [b for b in resp.content if b.type == "tool_use"]
         if not tool_uses:
+            # серверный инструмент мог приостановить ход (pause_turn) — возобновляем,
+            # повторно отправив накопленные messages (без добавления «Continue»)
+            if resp.stop_reason == "pause_turn" and steps < MAX_STEPS:
+                continue
             text = "".join(b.text for b in resp.content if b.type == "text")
             return text.strip(), messages
+
+        if steps >= MAX_STEPS:  # предохранитель от зацикливания на инструментах
+            text = "".join(b.text for b in resp.content if b.type == "text")
+            return (text or "(достигнут предел шагов инструментов)").strip(), messages
 
         # выполняем инструменты и возвращаем результаты модели
         results = []
