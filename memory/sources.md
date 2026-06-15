@@ -23,7 +23,9 @@
 
 ---
 
-## Тир 2 — старт (RSS проверены ✓, прямо в нишу макро/BTC/ходл)
+## Тир 2 — RSS-ядро (проверены ✓), по трекам
+
+### track: crypto (макро/BTC/ходл)
 | Источник | Кто это / зачем | RSS |
 |---|---|---|
 | **Lyn Alden** | независимый макро-аналитик, автор «Broken Money»; макро+BTC+инвест, спокойно и на данных | https://www.lynalden.com/feed/ |
@@ -32,6 +34,12 @@
 
 > ⚠ **Каденс низкий:** все трое публикуют раз в 1–3 мес. Тир-2 = глубина тезиса, НЕ «что хайпит
 > сейчас». Для скорости нужен Тир-3 (ТГ). Без него Скаут умный, но «тихий».
+
+### track: ai (стратегия техно/AI)
+| Источник | Кто это / зачем | RSS |
+|---|---|---|
+| **Stratechery (Ben Thompson)** | стратегия техно/AI/бизнес-моделей; глубоко, по делу (часть платная, свободные статьи в фиде есть) | https://stratechery.com/feed/ |
+| **Import AI (Jack Clark)** | еженедельный разбор ресёрча и политики AI; свежо, бесплатно | https://importai.substack.com/feed |
 
 ### Отклонены при проверке
 - **Nic Carter** (medium.com/feed/@nic__carter) — фид мёртв с ноября 2024.
@@ -46,9 +54,12 @@
 
 ## Тир 3 — ТГ-каналы (подключены через MTProto, инструмент `scan_telegram`; поздно, но видно скорость)
 «Норм», но **не авторитетные** — всё отсюда Скаут проверяет на достоверность и прослеживание к Тир-1/2.
-Машинный список (источник правды) — `connectors/telegram_scan/channels.yaml`. Первые 5 владелец читает сам:
-@crypto_hd, @alexatamcrypto, @a01k_crypto, @DnevnikCapitanika, @Coin_Post,
+Машинный список (источник правды) — `connectors/telegram_scan/channels.yaml`, сгруппирован по трекам.
+
+**track: crypto** — @crypto_hd, @alexatamcrypto, @a01k_crypto, @DnevnikCapitanika, @Coin_Post,
 @trade001k, @incrypted, @DeCenter, @kopeechkav, @CRYPTUS_MEDIA
+**track: ai** — @prompt_design, @maxtreysi, @your_pet_project, @ai_volution, @ai_newz,
+@denissexy, @cgevent, @seeallochnay, @tips_ai, @cryptoEssay
 
 ## Тир 1 — позже (платно/сложно)
 - Ончейн: Glassnode/Nansen/Arkham API (платные).

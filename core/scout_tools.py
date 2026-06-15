@@ -19,11 +19,13 @@ PENDING = config.ROOT / "memory" / "sources.pending.md"
 TOOLS = [
     {
         "name": "scan_sources",
-        "description": "Свежие записи из проверенных источников Тир-2 (Lyn Alden, Arthur Hayes, "
-                       "Glassnode Research). Начинай разведку с него. Можно сузить параметром source.",
+        "description": "Свежие записи из проверенных RSS-источников Тир-2 по трекам: "
+                       "crypto (Lyn Alden, Arthur Hayes, Glassnode) и ai (Stratechery, Import AI). "
+                       "Начинай разведку с него. Фильтры: track ('crypto'|'ai') и source (имя).",
         "input_schema": {
             "type": "object",
             "properties": {
+                "track": {"type": "string", "description": "трек: 'crypto' | 'ai' (пусто = оба)"},
                 "source": {"type": "string", "description": "фильтр по имени источника (необязательно)"},
                 "per_source": {"type": "integer", "description": "сколько записей с источника (по умолч. 4)"},
             },
@@ -31,12 +33,13 @@ TOOLS = [
     },
     {
         "name": "scan_telegram",
-        "description": "Свежие сообщения из ТГ-каналов Тир-3 — что разгоняется СЕЙЧАС (скорость/хайп). "
-                       "Источники НЕ авторитетные: всё отсюда обязательно проверяй на достоверность "
-                       "и прослеживание к Тир-1/2 (правило достоверности), не выдавай за факт.",
+        "description": "Свежие сообщения из ТГ-каналов Тир-3 по трекам crypto/ai — что разгоняется "
+                       "СЕЙЧАС (скорость/хайп). Источники НЕ авторитетные: всё отсюда обязательно "
+                       "проверяй на достоверность и прослеживание к Тир-1/2, не выдавай за факт.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "track": {"type": "string", "description": "трек: 'crypto' | 'ai' (пусто = оба)"},
                 "channel": {"type": "string", "description": "фильтр по имени канала (необязательно)"},
                 "limit_per_channel": {"type": "integer", "description": "сообщений с канала (по умолч. 5)"},
             },
@@ -97,7 +100,7 @@ def _render(items: list[dict]) -> str:
         if it.get("error"):
             out.append(f"⚠ {it['name']}: фид не прочитан ({it['error']})")
             continue
-        line = f"[{it['name']}] {it['title']}"
+        line = f"[{it.get('track', '?')} | {it['name']}] {it['title']}"
         if it.get("published"):
             line += f" ({it['published']})"
         if it.get("summary"):
@@ -116,7 +119,7 @@ def _render_tg(items: list[dict]) -> str:
         if it.get("error"):
             out.append(f"⚠ {it.get('channel', 'TG')}: {it['error']}")
             continue
-        line = f"[{it['channel']}]"
+        line = f"[{it.get('track', '?')} | {it['channel']}]"
         if it.get("date"):
             line += f" {it['date']}"
         if it.get("text"):
@@ -139,9 +142,11 @@ def _propose_source(args: dict) -> str:
 
 def dispatch(name: str, args: dict) -> str:
     if name == "scan_sources":
-        return _render(feeds.fetch_recent(int(args.get("per_source", 4)), args.get("source", "")))
+        return _render(feeds.fetch_recent(int(args.get("per_source", 4)),
+                                          args.get("source", ""), args.get("track", "")))
     if name == "scan_telegram":
-        return _render_tg(tg_read.recent(int(args.get("limit_per_channel", 5)), args.get("channel", "")))
+        return _render_tg(tg_read.recent(int(args.get("limit_per_channel", 5)),
+                                         args.get("channel", ""), args.get("track", "")))
     if name == "find_posts":
         return analytics.find_posts(args["query"], int(args.get("n", 8)))
     if name == "by_theme":

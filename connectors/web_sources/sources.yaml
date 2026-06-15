@@ -1,9 +1,14 @@
-# Фиды Тир-2 для Скаута (проверены WebFetch). Тиры и обоснование — в memory/sources.md.
-# Это РЕФЕРЕНС-ЯДРО, не закрытый список: Скаут калибруется на нём и ищет глубже сам.
-feeds:
+# RSS-фиды Тир-2 по трекам (проверены WebFetch). Референс-ядро, не закрытый список:
+# Скаут калибруется на нём и ищет глубже сам. Подробности/тиры — в memory/sources.md.
+crypto:
   - name: Lyn Alden
     url: https://www.lynalden.com/feed/
   - name: Arthur Hayes
     url: https://cryptohayes.substack.com/feed
   - name: Glassnode Research
     url: https://research.glassnode.com/rss/
+ai:
+  - name: Stratechery (Ben Thompson)
+    url: https://stratechery.com/feed/
+  - name: Import AI (Jack Clark)
+    url: https://importai.substack.com/feed
