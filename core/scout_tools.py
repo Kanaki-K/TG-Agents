@@ -46,6 +46,18 @@ TOOLS = [
         },
     },
     {
+        "name": "fetch_url",
+        "description": "Открыть страницу по ссылке и прочитать её текст — чтобы вытащить ТОЧНЫЕ "
+                       "цифры/цитаты из источника (индекс страха, корреляции, ETF-потоки, даты), а не "
+                       "только сниппет из поиска. Открывай найденные ссылки ПЕРЕД тем, как ставить цифру "
+                       "в направление.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "ссылка на статью/источник"}},
+            "required": ["url"],
+        },
+    },
+    {
         "name": "find_posts",
         "description": "Искать посты канала по слову/теме — проверить, выходило ли уже похожее (дедуп).",
         "input_schema": {
@@ -147,6 +159,8 @@ def dispatch(name: str, args: dict) -> str:
     if name == "scan_telegram":
         return _render_tg(tg_read.recent(int(args.get("limit_per_channel", 5)),
                                          args.get("channel", ""), args.get("track", "")))
+    if name == "fetch_url":
+        return feeds.fetch_page(args["url"])
     if name == "find_posts":
         return analytics.find_posts(args["query"], int(args.get("n", 8)))
     if name == "by_theme":

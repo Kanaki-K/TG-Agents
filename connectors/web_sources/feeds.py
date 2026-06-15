@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import urllib.request
 from pathlib import Path
 
 import feedparser
@@ -24,6 +25,27 @@ def _clean(html_text: str, limit: int = 500) -> str:
     text = _TAG_RE.sub(" ", html_text or "")
     text = _WS_RE.sub(" ", text).strip()
     return text[:limit]
+
+
+def fetch_page(url: str, limit: int = 4000) -> str:
+    """Скачать страницу по ссылке и вернуть очищенный текст.
+
+    «Рука» для Скаута: прочитать источник и вытащить ТОЧНЫЕ цифры/цитаты, а не только
+    сниппет из поиска. Клиентская загрузка (urllib) — без серверных контейнеров.
+    """
+    if not url.lower().startswith(("http://", "https://")):
+        return "Некорректный URL (нужен http/https)."
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (KanakiScout)"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read(800_000)  # кап на размер тела
+            charset = resp.headers.get_content_charset() or "utf-8"
+            html = raw.decode(charset, errors="replace")
+    except Exception as e:  # таймаут/403/404/сеть — отдаём как текст, не роняем агента
+        return f"Не удалось открыть страницу: {e}"
+    html = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", html)  # вырезать код/стили
+    text = _WS_RE.sub(" ", _TAG_RE.sub(" ", html)).strip()
+    return text[:limit] or "(страница без читаемого текста — возможно, требует JS)"
 
 
 def load_sources() -> list[dict]:
