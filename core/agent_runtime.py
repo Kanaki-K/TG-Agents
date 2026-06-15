@@ -16,10 +16,11 @@ import logging
 from typing import Callable
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message
 
-from core import config, llm
+from core import config, llm, tg_format
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,6 +40,18 @@ def _trim_history(hist: list, keep: int = 12) -> list:
                         and isinstance(tail[0].get("content"), str)):
         tail = tail[1:]
     return tail
+
+
+async def _send(m: Message, text: str) -> None:
+    """Отправить ответ модели, отрендерив Markdown как Telegram-HTML.
+
+    Если разметка кривая и Telegram не смог её распарсить (400) — повторяем
+    отправку чистым текстом, чтобы ответ дошёл, а бот не упал.
+    """
+    try:
+        await m.answer(tg_format.to_telegram_html(text), parse_mode="HTML")
+    except TelegramBadRequest:
+        await m.answer(tg_format.strip_markdown(text))
 
 
 async def run(
@@ -72,7 +85,7 @@ async def run(
             user_text, tools_schema, dispatch, api_key,
         )
         history[uid] = _trim_history(hist)
-        await m.answer(text or "…")
+        await _send(m, text or "…")
 
     @dp.message(Command("start"))
     async def _start(m: Message) -> None:
