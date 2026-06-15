@@ -10,6 +10,7 @@ scout_bot отдельно: его выполняет Claude, здесь мы е
 """
 from __future__ import annotations
 
+from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
 from core import analytics, config
 
@@ -25,6 +26,19 @@ TOOLS = [
             "properties": {
                 "source": {"type": "string", "description": "фильтр по имени источника (необязательно)"},
                 "per_source": {"type": "integer", "description": "сколько записей с источника (по умолч. 4)"},
+            },
+        },
+    },
+    {
+        "name": "scan_telegram",
+        "description": "Свежие сообщения из ТГ-каналов Тир-3 — что разгоняется СЕЙЧАС (скорость/хайп). "
+                       "Источники НЕ авторитетные: всё отсюда обязательно проверяй на достоверность "
+                       "и прослеживание к Тир-1/2 (правило достоверности), не выдавай за факт.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "фильтр по имени канала (необязательно)"},
+                "limit_per_channel": {"type": "integer", "description": "сообщений с канала (по умолч. 5)"},
             },
         },
     },
@@ -94,6 +108,23 @@ def _render(items: list[dict]) -> str:
     return "\n\n".join(out)
 
 
+def _render_tg(items: list[dict]) -> str:
+    if not items:
+        return "Свежих сообщений в ТГ-каналах не найдено."
+    out = []
+    for it in items:
+        if it.get("error"):
+            out.append(f"⚠ {it.get('channel', 'TG')}: {it['error']}")
+            continue
+        line = f"[{it['channel']}]"
+        if it.get("date"):
+            line += f" {it['date']}"
+        if it.get("text"):
+            line += f"\n{it['text']}"
+        out.append(line)
+    return "\n\n".join(out)
+
+
 def _propose_source(args: dict) -> str:
     PENDING.parent.mkdir(exist_ok=True)
     header = "" if PENDING.exists() else "# Кандидаты в источники (ожидают одобрения владельца)\n\n"
@@ -109,6 +140,8 @@ def _propose_source(args: dict) -> str:
 def dispatch(name: str, args: dict) -> str:
     if name == "scan_sources":
         return _render(feeds.fetch_recent(int(args.get("per_source", 4)), args.get("source", "")))
+    if name == "scan_telegram":
+        return _render_tg(tg_read.recent(int(args.get("limit_per_channel", 5)), args.get("channel", "")))
     if name == "find_posts":
         return analytics.find_posts(args["query"], int(args.get("n", 8)))
     if name == "by_theme":
