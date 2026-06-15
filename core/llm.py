@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Callable
 
 from anthropic import Anthropic
@@ -27,7 +28,10 @@ def _client(api_key: str | None = None) -> Anthropic:
 
 
 def build_system(persona: str, memory_context: str) -> str:
-    return f"{persona}\n\n# Текущая память (контекст этой сессии)\n{memory_context}"
+    today = date.today().isoformat()
+    return (f"{persona}\n\nСегодня: {today} — используй эту дату для оценки свежести "
+            f"и актуальности; не считай свежим то, что старше нескольких дней без причины.\n\n"
+            f"# Текущая память (контекст этой сессии)\n{memory_context}")
 
 
 def reply(model: str, system: str, history: list[dict], user_text: str,
