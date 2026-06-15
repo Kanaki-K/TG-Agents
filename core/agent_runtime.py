@@ -42,16 +42,46 @@ def _trim_history(hist: list, keep: int = 12) -> list:
     return tail
 
 
-async def _send(m: Message, text: str) -> None:
-    """Отправить ответ модели, отрендерив Markdown как Telegram-HTML.
+TG_LIMIT = 4096          # жёсткий лимит Telegram на длину сообщения
+CHUNK = 3500             # режем с запасом: HTML-теги раздувают текст сверх исходного
 
-    Если разметка кривая и Telegram не смог её распарсить (400) — повторяем
-    отправку чистым текстом, чтобы ответ дошёл, а бот не упал.
+
+def _chunks(text: str, size: int = CHUNK) -> list[str]:
+    """Разбить длинный текст на куски ≤ size, по границам строк (не рвём слова/теги).
+
+    Очень длинную одиночную строку (напр. гигантский URL) режем жёстко.
     """
-    try:
-        await m.answer(tg_format.to_telegram_html(text), parse_mode="HTML")
-    except TelegramBadRequest:
-        await m.answer(tg_format.strip_markdown(text))
+    out: list[str] = []
+    cur = ""
+    for line in text.split("\n"):
+        while len(line) > size:                 # одиночная строка длиннее куска
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(line[:size])
+            line = line[size:]
+        if cur and len(cur) + 1 + len(line) > size:
+            out.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        out.append(cur)
+    return out or [text]
+
+
+async def _send(m: Message, text: str) -> None:
+    """Отправить ответ модели как Telegram-HTML, разбив длинный текст на части.
+
+    Telegram режет сообщения на 4096 символов — длинные ответы шлём кусками.
+    На каждый кусок: пробуем HTML; если разметка кривая (400) — шлём чистым
+    текстом, чтобы ответ дошёл, а бот не упал.
+    """
+    for chunk in _chunks(text):
+        try:
+            await m.answer(tg_format.to_telegram_html(chunk), parse_mode="HTML")
+        except TelegramBadRequest:
+            await m.answer(tg_format.strip_markdown(chunk)[:TG_LIMIT])
 
 
 async def run(
