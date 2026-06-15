@@ -59,6 +59,11 @@ async def run(
 
     async def _turn(m: Message, user_text: str) -> None:
         uid = m.from_user.id
+        # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
+        # user-content (400), да и отвечать не на что. Голос/фото — позже.
+        if not (user_text or "").strip():
+            await m.answer("Пока понимаю только текст — пришли, пожалуйста, сообщением.")
+            return
         await m.bot.send_chat_action(m.chat.id, "typing")
         # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
         prior = _trim_history(history.get(uid, []))

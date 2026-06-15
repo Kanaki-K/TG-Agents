@@ -61,9 +61,12 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
         results = []
         for tu in tool_uses:
             output = dispatch(tu.name, tu.input or {})
+            # tool_result не может быть пустым — иначе Anthropic отклонит запрос (400)
+            if not (output and str(output).strip()):
+                output = "(инструмент не вернул данных)"
             results.append({
                 "type": "tool_result",
                 "tool_use_id": tu.id,
-                "content": output,
+                "content": str(output),
             })
         messages.append({"role": "user", "content": results})
