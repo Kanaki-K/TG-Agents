@@ -49,6 +49,8 @@ def _system() -> str:
     ctx = (
         "## Канон бренда — фильтр релевантности (memory/brand.md)\n"
         f"{_read('memory/brand.md')}\n\n"
+        "## Стандарт поста — какой контент тут силён, под что искать темы (memory/post_standard.md)\n"
+        f"{_read('memory/post_standard.md')}\n\n"
         "## Реестр источников и тиры (memory/sources.md)\n"
         f"{_read('memory/sources.md')}\n\n"
         "## Сводка по каналу (для дедупа и оценки релевантности)\n"
