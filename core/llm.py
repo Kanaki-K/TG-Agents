@@ -12,7 +12,7 @@ from anthropic import Anthropic
 
 from core import config
 
-MAX_TOKENS = 2048
+MAX_TOKENS = 4096  # с запасом: Разработчик выдаёт целый SKILL.md как аргумент инструмента
 
 # Кэш клиентов по ключу — у каждого агента может быть свой API-ключ.
 _clients: dict[str, Anthropic] = {}
