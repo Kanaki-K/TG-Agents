@@ -114,6 +114,7 @@ def _trim_history(hist: list, keep: int = 12) -> list:
 
 TG_LIMIT = 4096          # жёсткий лимит Telegram на длину сообщения
 CHUNK = 3500             # режем с запасом: HTML-теги раздувают текст сверх исходного
+SPLIT_MARK = "[[SPLIT]]" # агент ставит этот маркер, чтобы разбить ответ на ОТДЕЛЬНЫЕ сообщения
 
 
 def _chunks(text: str, size: int = CHUNK) -> list[str]:
@@ -147,11 +148,15 @@ async def _send(m: Message, text: str) -> None:
     На каждый кусок: пробуем HTML; если разметка кривая (400) — шлём чистым
     текстом, чтобы ответ дошёл, а бот не упал.
     """
-    for chunk in _chunks(text):
-        try:
-            await m.answer(tg_format.to_telegram_html(chunk), parse_mode="HTML")
-        except TelegramBadRequest:
-            await m.answer(tg_format.strip_markdown(chunk)[:TG_LIMIT])
+    parts = [p.strip() for p in text.split(SPLIT_MARK)] if SPLIT_MARK in text else [text]
+    for part in parts:
+        if not part:
+            continue
+        for chunk in _chunks(part):
+            try:
+                await m.answer(tg_format.to_telegram_html(chunk), parse_mode="HTML")
+            except TelegramBadRequest:
+                await m.answer(tg_format.strip_markdown(chunk)[:TG_LIMIT])
 
 
 async def run(
