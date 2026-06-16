@@ -10,6 +10,9 @@ scout_bot отдельно: его выполняет Claude, здесь мы е
 """
 from __future__ import annotations
 
+import re
+from datetime import date
+
 from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
 from connectors.x_scan import read as x_read
@@ -17,6 +20,7 @@ from core import analytics, config
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
 PENDING_X = config.ROOT / "memory" / "x_leaders.pending.md"
+BRIEFS_DIR = config.ROOT / "memory" / "briefs"   # полные брифы разведки — рабочий материал Криейтора
 
 TOOLS = [
     {
@@ -124,6 +128,22 @@ TOOLS = [
                 "why": {"type": "string", "description": "почему подходит бренду и чем ценен (сигнал, не шум)"},
             },
             "required": ["handle", "why"],
+        },
+    },
+    {
+        "name": "save_brief",
+        "description": "Сохранить ПОЛНЫЙ бриф разведки в файл (memory/briefs/) — рабочий материал для "
+                       "Криейтора и архив. В чат потом выдаёшь только сухую выжимку. Вызывай ОДИН раз в "
+                       "конце /scan, передав весь развёрнутый бриф (5 направлений со всей глубиной + вердикт).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "полный бриф в markdown: 5 направлений "
+                            "(угол, нам заходит, опора 2-3 сильнейших источника + ссылки + тир, хук-цифры, "
+                            "свежесть, caveat) + вывод + вердикт по каналам"},
+                "slug": {"type": "string", "description": "короткий ярлык темы дня, напр. 'boj-btc' (необязательно)"},
+            },
+            "required": ["content"],
         },
     },
     {
@@ -255,6 +275,15 @@ def _render_x(items: list[dict]) -> str:
     return "\n\n".join(out)
 
 
+def _save_brief(args: dict) -> str:
+    BRIEFS_DIR.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9-]+", "-", str(args.get("slug", "") or "scan").lower()).strip("-") or "scan"
+    fname = f"{date.today().isoformat()}-{slug}.md"
+    (BRIEFS_DIR / fname).write_text(args.get("content", ""), encoding="utf-8", newline="\n")
+    return (f"Полный бриф сохранён: memory/briefs/{fname}. "
+            f"Теперь выдай в чат ТОЛЬКО сухую выжимку и укажи этот путь для Криейтора.")
+
+
 def _read_x_pending() -> str:
     if not PENDING_X.exists() or not PENDING_X.read_text(encoding="utf-8").strip():
         return "Очередь кандидатов в X-лидеры пуста — за период новых предложений не накопилось."
@@ -312,6 +341,8 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.themes_overview()
     if name == "channel_summary":
         return analytics.summary()
+    if name == "save_brief":
+        return _save_brief(args)
     if name == "read_x_account":
         return _render_x(x_read.account_tweets(args["handle"], int(args.get("limit", 8))))
     if name == "read_x_ledger":
