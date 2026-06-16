@@ -4,3 +4,4 @@ model: claude-sonnet-4-6           # тонкое суждение (релева
 token_env: SCOUT_BOT_TOKEN         # свой бот (см. .env)
 api_key_env: SCOUT_ANTHROPIC_KEY   # свой ключ Claude (если пуст — общий ANTHROPIC_API_KEY)
 web_search: true                   # встроенный веб-поиск Anthropic; поставь false, если SDK/доступ его не поддерживает
+auto_schedule: false               # АВТО-прогоны /digest и /curate раз в неделю. false = только по запросу (бережём токены). Поставь true, когда захочешь проактивность.

@@ -24,7 +24,7 @@ WELCOME = (
     "проверяю на достоверность и релевантность нише, сверяюсь с историей канала — "
     "и предлагаю НАПРАВЛЕНИЯ для контента (посты не пишу, это Криейтор).\n"
     "Команды: /scan — свежая разведка; /digest — недельный срез (концентрат важного); "
-    "/curate — вьеттинг авторов X. /digest и /curate раз в неделю делаю сам."
+    "/curate — вьеттинг авторов X. Работаю по запросу (авто-прогоны можно включить в конфиге)."
 )
 
 COMMANDS = {
@@ -115,6 +115,9 @@ async def main() -> None:
     tools = list(scout_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(WEB_SEARCH_TOOL)
+    # Автопрогоны (/digest + /curate раз в неделю) — только если включены в конфиге.
+    # По умолчанию off: бережём токены, всё по запросу. /scan, /digest, /curate работают как команды всегда.
+    periodic = [CURATE_PERIODIC, DIGEST_PERIODIC] if cfg.get("auto_schedule") else None
     await agent_runtime.run(
         AGENT_NAME,
         tools_schema=tools,
@@ -122,5 +125,5 @@ async def main() -> None:
         system_builder=_system,
         welcome=WELCOME,
         commands=COMMANDS,
-        periodic=[CURATE_PERIODIC, DIGEST_PERIODIC],
+        periodic=periodic,
     )
