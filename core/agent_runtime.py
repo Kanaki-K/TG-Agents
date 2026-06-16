@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import date
 from typing import Callable
 
 from aiogram import Bot, Dispatcher
@@ -23,6 +25,74 @@ from aiogram.types import Message
 from core import config, llm, tg_format
 
 logging.basicConfig(level=logging.INFO)
+
+
+# --- Простой планировщик: запускать пресет раз в N дней и слать владельцу в чат ---
+# Состояние (дата прошлого прогона) и chat_id владельца лежат в data/ (вне git).
+def _read_owner(path) -> int | None:
+    try:
+        return int(path.read_text(encoding="utf-8").strip()) if path.exists() else None
+    except Exception:
+        return None
+
+
+def _write_owner(path, chat_id: int) -> None:
+    try:
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(str(chat_id), encoding="utf-8")
+    except Exception:
+        logging.exception("Не смог сохранить chat владельца")
+
+
+def _read_run_date(path):
+    try:
+        if path.exists():
+            return date.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["last"])
+    except Exception:
+        pass
+    return None
+
+
+def _write_run_date(path, d: date) -> None:
+    try:
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({"last": d.isoformat()}), encoding="utf-8")
+    except Exception:
+        logging.exception("Не смог записать дату прогона")
+
+
+async def _periodic_loop(bot, agent_name, spec, model, system_builder,
+                         tools_schema, dispatch, api_key) -> None:
+    """Раз в spec['days'] дней гоняет spec['preset'] и шлёт результат владельцу.
+
+    Перезапуск-устойчиво: дату прошлого прогона храним в файле, проверяем раз в час.
+    Пока владелец ни разу не написал боту — не знаем chat_id, тихо ждём.
+    """
+    data_dir = config.ROOT / "data"
+    state_file = data_dir / f"{agent_name}_{spec['key']}.json"
+    owner_file = data_dir / f"{agent_name}_owner.txt"
+    while True:
+        await asyncio.sleep(spec.get("check_every", 3600))
+        try:
+            chat_id = _read_owner(owner_file)
+            if not chat_id:
+                continue
+            last = _read_run_date(state_file)
+            today = date.today()
+            if last and (today - last).days < spec["days"]:
+                continue
+            logging.info("Периодический прогон '%s' агента %s", spec["key"], agent_name)
+            text, _ = await asyncio.to_thread(
+                llm.reply, model, system_builder(), [], spec["preset"],
+                tools_schema, dispatch, api_key)
+            for chunk in _chunks((spec.get("header", "") + (text or "…")).strip()):
+                try:
+                    await bot.send_message(chat_id, tg_format.strip_markdown(chunk)[:TG_LIMIT])
+                except Exception:
+                    logging.exception("Не смог отправить периодический отчёт")
+            _write_run_date(state_file, today)
+        except Exception:
+            logging.exception("Периодический прогон не удался")
 
 
 def _trim_history(hist: list, keep: int = 12) -> list:
@@ -92,6 +162,7 @@ async def run(
     system_builder: Callable[[], str],
     welcome: str,
     commands: dict[str, str] | None = None,
+    periodic: dict | None = None,
 ) -> None:
     agent = config.load_agent(agent_name)
     model = agent["model"]
@@ -99,10 +170,12 @@ async def run(
     commands = commands or {}
     history: dict[int, list] = {}   # короткий хвост диалога по пользователю
     busy: set[int] = set()          # пользователи с уже идущим запросом (защита от параллельного дубля)
+    owner_file = config.ROOT / "data" / f"{agent_name}_owner.txt"  # куда слать проактивные отчёты
     dp = Dispatcher()
 
     async def _turn(m: Message, user_text: str) -> None:
         uid = m.from_user.id
+        _write_owner(owner_file, m.chat.id)  # запоминаем чат для проактивных (еженедельных) отчётов
         # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
         # user-content (400), да и отвечать не на что. Голос/фото — позже.
         if not (user_text or "").strip():
@@ -130,6 +203,7 @@ async def run(
 
     @dp.message(Command("start"))
     async def _start(m: Message) -> None:
+        _write_owner(owner_file, m.chat.id)
         await m.answer(welcome)
 
     # пресет-команды: /<cmd> → заранее заданный промпт модели
@@ -147,4 +221,9 @@ async def run(
 
     bot = Bot(config.get_secret(agent["token_env"]))
     logging.info("Запускаю агента '%s' (модель %s)", agent_name, model)
+    if periodic:
+        asyncio.create_task(_periodic_loop(
+            bot, agent_name, periodic, model, system_builder,
+            tools_schema, dispatch, api_key))
+        logging.info("Планировщик '%s' включён: раз в %s дн.", periodic.get("key"), periodic.get("days"))
     await dp.start_polling(bot)

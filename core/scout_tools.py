@@ -64,6 +64,8 @@ TOOLS = [
                 "max_accounts": {"type": "integer", "description": "сколько аккаунтов читать с верха "
                                  "списка (по умолч. 12 — самые сильные). Подними для глубокого захода "
                                  "по всей профессиональной скамейке; при заданном handle игнорируется."},
+                "tier": {"type": "string", "description": "какие тиры читать: пусто = только 'эталон' "
+                         "(по умолчанию); 'all' = эталон+тир2 (глубокий скан); либо конкретный тир."},
             },
         },
     },
@@ -123,6 +125,56 @@ TOOLS = [
             },
             "required": ["handle", "why"],
         },
+    },
+    {
+        "name": "read_x_account",
+        "description": "Прочитать свежие твиты ЛЮБОГО X-аккаунта по хэндлу (даже если его нет в "
+                       "leaders.yaml) — для ГЛУБОКОЙ проверки кандидата на бренд-фит перед добавлением.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "хэндл без @"},
+                "limit": {"type": "integer", "description": "сколько твитов (по умолч. 8)"},
+            },
+            "required": ["handle"],
+        },
+    },
+    {
+        "name": "read_x_pending",
+        "description": "Прочитать очередь накопленных кандидатов в X-лидеры (то, что Скаут предлагал "
+                       "через propose_x_leader за неделю). С этого начинай еженедельную курацию.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "read_x_ledger",
+        "description": "Леджер авторов X: у каждого тир (эталон/тир2/кандидат/отклонён), счётчик "
+                       "проверок и история вердиктов. С него начинай курацию — видно, кого пора "
+                       "перепроверить и у кого уже накопился чистый след для повышения.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "update_x_author",
+        "description": "Записать вердикт проверки автора: выставить/изменить ТИР и добавить датированную "
+                       "заметку (счётчик проверок растёт сам). Тиры: 'эталон' (чисто, читаем по умолчанию), "
+                       "'тир2' (иногда ок, не эталон — только глубокий скан), 'кандидат' (на испытании, не "
+                       "сканим), 'отклонён' (мусор). НЕ повышай до 'эталон' с одной проверки — нужен "
+                       "стабильно чистый след за несколько недель (~5). 'Запахло' — понижай в 'тир2'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "хэндл без @"},
+                "track": {"type": "string", "description": "трек: 'crypto' | 'ai' (если новый)"},
+                "tier": {"type": "string", "description": "эталон | тир2 | кандидат | отклонён"},
+                "note": {"type": "string", "description": "вердикт этой проверки одной фразой (что увидел)"},
+            },
+            "required": ["handle", "note"],
+        },
+    },
+    {
+        "name": "clear_x_pending",
+        "description": "Очистить очередь кандидатов — вызывай в КОНЦЕ еженедельной курации, после того "
+                       "как разобрал всех (добавил подходящих через add_x_leader, остальных отклонил).",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "propose_source",
@@ -203,6 +255,18 @@ def _render_x(items: list[dict]) -> str:
     return "\n\n".join(out)
 
 
+def _read_x_pending() -> str:
+    if not PENDING_X.exists() or not PENDING_X.read_text(encoding="utf-8").strip():
+        return "Очередь кандидатов в X-лидеры пуста — за период новых предложений не накопилось."
+    return PENDING_X.read_text(encoding="utf-8")
+
+
+def _clear_x_pending() -> str:
+    if PENDING_X.exists():
+        PENDING_X.unlink()
+    return "Очередь кандидатов очищена."
+
+
 def _propose_x_leader(args: dict) -> str:
     PENDING_X.parent.mkdir(exist_ok=True)
     header = "" if PENDING_X.exists() else "# Кандидаты в X-лидеры (ожидают одобрения владельца)\n\n"
@@ -237,7 +301,7 @@ def dispatch(name: str, args: dict) -> str:
     if name == "scan_x":
         return _render_x(x_read.recent(int(args.get("limit_per_account", 6)),
                                        args.get("handle", ""), args.get("track", ""),
-                                       int(args.get("max_accounts", 12))))
+                                       int(args.get("max_accounts", 12)), args.get("tier", "")))
     if name == "fetch_url":
         return feeds.fetch_page(args["url"])
     if name == "find_posts":
@@ -248,6 +312,17 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.themes_overview()
     if name == "channel_summary":
         return analytics.summary()
+    if name == "read_x_account":
+        return _render_x(x_read.account_tweets(args["handle"], int(args.get("limit", 8))))
+    if name == "read_x_ledger":
+        return x_read.read_ledger_text()
+    if name == "read_x_pending":
+        return _read_x_pending()
+    if name == "update_x_author":
+        return x_read.update_author(args["handle"], args.get("track", ""),
+                                    args.get("tier", ""), args.get("note", ""))
+    if name == "clear_x_pending":
+        return _clear_x_pending()
     if name == "propose_x_leader":
         return _propose_x_leader(args)
     if name == "propose_source":

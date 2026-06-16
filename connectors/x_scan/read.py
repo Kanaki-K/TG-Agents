@@ -16,6 +16,8 @@ telegram_scan) — её зовут из рабочего потока Скаут
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -23,15 +25,20 @@ import yaml
 from core import config  # импорт грузит .env (load_dotenv) и даёт доступ к секретам
 
 HERE = Path(__file__).resolve().parent
-LEADERS_FILE = HERE / "leaders.yaml"
+LEADERS_FILE = HERE / "leaders.yaml"               # семя: курируемый владельцем стартовый ростер
+LEDGER_FILE = HERE.parents[1] / "memory" / "x_authors.json"  # источник правды: тиры + история проверок
 COOKIES_FILE = HERE.parents[1] / "data" / "x_cookies.json"
 TRACKS = ("crypto", "ai")
+
+# Тиры качества автора. scan_x по умолчанию читает только «эталон».
+TIERS = ("эталон", "тир2", "кандидат", "отклонён")
+SCAN_DEFAULT_TIERS = ("эталон",)
 
 PAUSE_BETWEEN = 2.0  # сек между аккаунтами — вежливый темп, бережём бёрнер от рейт-лимита
 
 
-def load_leaders() -> list[dict]:
-    """Плоский список лидеров с треком: [{handle, track}, ...]."""
+def _seed_universe() -> list[dict]:
+    """Хэндлы-семена из leaders.yaml — ими инициализируем леджер при первом обращении."""
     if not LEADERS_FILE.exists():
         return []
     data = yaml.safe_load(LEADERS_FILE.read_text(encoding="utf-8")) or {}
@@ -40,6 +47,94 @@ def load_leaders() -> list[dict]:
         for handle in data.get(track, []) or []:
             out.append({"handle": str(handle).lstrip("@").strip(), "track": track})
     return out
+
+
+def _load_ledger() -> dict:
+    if LEDGER_FILE.exists():
+        try:
+            return json.loads(LEDGER_FILE.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_ledger(ledger: dict) -> None:
+    LEDGER_FILE.parent.mkdir(exist_ok=True)
+    LEDGER_FILE.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _ensure_seeded(ledger: dict) -> bool:
+    """Досеять авторов из leaders.yaml, которых ещё нет в леджере (стартовый тир «эталон»)."""
+    changed = False
+    have = {k.lower() for k in ledger}
+    for s in _seed_universe():
+        if s["handle"].lower() not in have:
+            ledger[s["handle"]] = {"track": s["track"], "tier": "эталон", "checks": 0,
+                                   "last_check": "", "notes": ["seed: стартовая курация владельца"]}
+            have.add(s["handle"].lower())
+            changed = True
+    return changed
+
+
+def load_leaders(scope: tuple = SCAN_DEFAULT_TIERS) -> list[dict]:
+    """Авторы из леджера в заданных тирах: [{handle, track}, ...]. Леджер сеется из leaders.yaml."""
+    ledger = _load_ledger()
+    if _ensure_seeded(ledger):
+        _save_ledger(ledger)
+    return [{"handle": h, "track": i.get("track", "crypto")}
+            for h, i in ledger.items() if i.get("tier", "эталон") in scope]
+
+
+def update_author(handle: str, track: str = "", tier: str = "", note: str = "") -> str:
+    """Записать вердикт проверки автора: ставит/меняет тир, добавляет датированную заметку,
+    увеличивает счётчик проверок. Единая точка для повышения/понижения/занесения кандидата."""
+    h = handle.lstrip("@").strip()
+    if not h:
+        return "Пустой хэндл."
+    if tier and tier not in TIERS:
+        return f"Неизвестный тир '{tier}'. Допустимо: {', '.join(TIERS)}."
+    ledger = _load_ledger()
+    _ensure_seeded(ledger)
+    key = next((k for k in ledger if k.lower() == h.lower()), h)
+    entry = ledger.get(key, {"track": "crypto", "tier": "кандидат", "checks": 0,
+                             "last_check": "", "notes": []})
+    if track and track.lower() in TRACKS:
+        entry["track"] = track.lower()
+    if tier:
+        entry["tier"] = tier
+    today = date.today().isoformat()
+    entry["checks"] = int(entry.get("checks", 0)) + 1
+    entry["last_check"] = today
+    if note:
+        entry.setdefault("notes", []).append(f"{today}: {note}")
+    ledger[key] = entry
+    _save_ledger(ledger)
+    return f"✓ @{key}: тир «{entry['tier']}», проверок {entry['checks']}, {today}. {note}".strip()
+
+
+def read_ledger_text() -> str:
+    """Леджер авторов в читабельном виде — для еженедельной курации (видно тир, счётчик, историю)."""
+    ledger = _load_ledger()
+    if _ensure_seeded(ledger):
+        _save_ledger(ledger)
+    if not ledger:
+        return "Леджер авторов X пуст."
+    order = {t: n for n, t in enumerate(TIERS)}
+    lines = []
+    for h, i in sorted(ledger.items(), key=lambda kv: (order.get(kv[1].get("tier", ""), 9), kv[0].lower())):
+        lines.append(f"@{h} [{i.get('track','?')}] тир={i.get('tier','?')} "
+                     f"проверок={i.get('checks',0)} посл.проверка={i.get('last_check') or '—'}")
+        for n in i.get("notes", [])[-3:]:
+            lines.append(f"    • {n}")
+    return "\n".join(lines)
+
+
+def account_tweets(handle: str, limit: int = 8) -> list[dict]:
+    """Свежие твиты ЛЮБОГО аккаунта (не только из списка) — для глубокой проверки кандидата."""
+    h = handle.lstrip("@").strip()
+    if not h:
+        return [{"error": "Пустой хэндл."}]
+    return asyncio.run(_collect([{"handle": h, "track": "?"}], max(1, min(limit, 20))))
 
 
 def _make_client():
@@ -152,14 +247,18 @@ def following(count: int = 100) -> list[dict]:
 
 
 def recent(limit_per_account: int = 6, handle: str = "", track: str = "",
-           max_accounts: int = 12) -> list[dict]:
-    """Свежие твиты лидеров мнений в X.
+           max_accounts: int = 12, tier: str = "") -> list[dict]:
+    """Свежие твиты авторов из леджера.
 
-    track — фильтр по треку ('crypto' | 'ai'), handle — по имени аккаунта (подстрока).
-    max_accounts — сколько аккаунтов читать (с начала leaders.yaml, где самые сильные);
-    бережёт бёрнер от лишних запросов. Точечный handle игнорирует этот лимит.
+    По умолчанию читает только тир «эталон». tier='all'/'все' добавит «тир2»; либо
+    конкретный тир. track — фильтр трека; handle — точечно (игнорирует max_accounts);
+    max_accounts — кап на широкий скан (бережём бёрнер).
     """
-    leaders = load_leaders()
+    scope = SCAN_DEFAULT_TIERS
+    if tier:
+        t = tier.lower()
+        scope = ("эталон", "тир2") if t in ("all", "все") else (tier,) if tier in TIERS else scope
+    leaders = load_leaders(scope)
     if track:
         leaders = [l for l in leaders if l["track"] == track.lower()]
     if handle:
@@ -168,5 +267,5 @@ def recent(limit_per_account: int = 6, handle: str = "", track: str = "",
     elif max_accounts and max_accounts > 0:  # ограничиваем только широкий скан, не точечный
         leaders = leaders[:max_accounts]
     if not leaders:
-        return [{"error": "Список лидеров X пуст (leaders.yaml) или ничего не подошло под фильтр."}]
+        return [{"error": "В выбранных тирах нет авторов (или не подошло под фильтр)."}]
     return asyncio.run(_collect(leaders, max(1, min(limit_per_account, 15))))

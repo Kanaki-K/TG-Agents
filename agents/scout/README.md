@@ -7,25 +7,58 @@
 ```
 python run_scout.py
 ```
-Команда в чате: `/scan` — глубокая разведка по обоим трекам.
+Команды в чате:
+- `/scan` — глубокая разведка по обоим трекам (включает живой X).
+- `/curate` — вьеттинг авторов X (Скаут делает его сам раз в неделю и пишет в чат).
 
 ## Конфиг
 - Модель: `claude-sonnet-4-6` (тонкое суждение + оркестрация инструментов).
 - Бот-токен: `SCOUT_BOT_TOKEN`. Ключ: `SCOUT_ANTHROPIC_KEY` (или общий).
 - `web_search: true` — встроенный веб-поиск Anthropic (можно выключить).
 
+## X (Twitter) — эдж над дип-ресёрчем
+X не индексируется веб-поиском, дип-ресёрч его не видит — а первичные голоса появляются тут
+раньше блога/RSS. Доступ **read-only через сессию РАСХОДНОГО (бёрнер) аккаунта** по cookies
+(twikit, не платный API). Настройка и проверка:
+```
+pip install twikit
+# cookies бёрнера из браузера (DevTools → Cookies → x.com): auth_token, ct0 → в .env
+python -m connectors.x_scan.login          # проверить сессию (читает твиты лидера)
+python -m connectors.x_scan.login follows  # (опц.) дамп подписок — у twikit сейчас 404, не критично
+```
+**Важно про хрупкость:** twikit (офиц.) периодически ломается под фронт X — фиксы лежат
+само-отключающимся патчем в `connectors/x_scan/_twikit_patch.py`. Куки протухают раз в недели —
+перевзять из браузера и обновить `.env`.
+
+## Курация авторов X — качество, подтверждённое временем
+Не растим список ради числа. У каждого автора в леджере (`memory/x_authors.json`) — **тир** и
+история проверок:
+- **эталон** — чисто, профессиональный сигнал; только их читает `scan_x` по умолчанию.
+- **тир2** — иногда ок, но не эталон (в скан только `tier='all'`).
+- **кандидат** — на испытании, не сканим, наблюдаем.
+- **отклонён** — мусор/оффтоп/красные линии.
+
+Раз в неделю Скаут сам: смотрит леджер, проверяет новых кандидатов (из очереди `propose_x_leader`)
+и по ротации перепроверяет уже принятых, фиксирует вердикт+тир (`update_x_author`). **Повышение до
+«эталон» — только при стабильно чистом следе за ~5 проверок**, не с одной; «запахло» — понижение в
+«тир2». Результат пишет владельцу в чат. Семя списка — `connectors/x_scan/leaders.yaml` (правится руками).
+
 ## Инструменты (руки) — `core/scout_tools.py`
 - `scan_sources` — RSS Тир-2 по трекам (`connectors/web_sources`).
 - `scan_telegram` — ТГ-каналы Тир-3 по трекам (`connectors/telegram_scan`, MTProto).
+- `scan_x` — твиты авторов X из леджера (по умолч. тир «эталон»; `tier='all'`, `handle`, `max_accounts`).
 - `fetch_url` — прочитать страницу и вытащить точные цифры/цитаты.
 - `web_search` — разведка за пределами ядра.
 - `themes_overview`/`channel_summary`/`find_posts`/`by_theme` — заземление и дедуп (через `analytics`).
 - `propose_source` — предложить новый источник (через одобрение владельца).
+- Курация X: `read_x_ledger`, `read_x_account`, `update_x_author`, `propose_x_leader`,
+  `read_x_pending`, `clear_x_pending`.
 
 ## Источники (по трекам crypto/ai)
 - RSS: `connectors/web_sources/sources.yaml` (Lyn Alden, Arthur Hayes, Glassnode; Stratechery, Import AI).
 - ТГ: `connectors/telegram_scan/channels.yaml` (по 10 каналов на трек).
-- Реестр и тиры — `memory/sources.md`.
+- X: семя `connectors/x_scan/leaders.yaml`; рабочий список — леджер `memory/x_authors.json`.
+- Реестр и тиры источников — `memory/sources.md`.
 
 ## Правила (из SKILL + канона)
 Достоверность (ярлык тира требует ссылки; иначе «не подтверждено»), свежесть, дедуп, гем-проверка
@@ -34,8 +67,5 @@ python run_scout.py
 
 ## Файлы
 - Данные: `agents/scout/{config.yaml, SKILL.md}`
-- Код: `core/scout_bot.py`, `core/scout_tools.py`; коннекторы `connectors/{web_sources,telegram_scan}`
-
-## Будущее
-Настоящий эдж — крипто-твиттер через сессию дешёвого аккаунта (см. PLAN, бэклог). Иначе для ручного
-контента сильнее связка дип-ресёрч + аналитик → Криейтор.
+- Код: `core/scout_bot.py`, `core/scout_tools.py`; коннекторы `connectors/{web_sources,telegram_scan,x_scan}`
+- Планировщик: `core/agent_runtime.py` (параметр `periodic`); состояние — в `data/` (вне git).
