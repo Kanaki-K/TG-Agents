@@ -11,6 +11,7 @@ scout_bot отдельно: его выполняет Claude, здесь мы е
 from __future__ import annotations
 
 import re
+import time
 from datetime import date
 
 from connectors.telegram_scan import read as tg_read
@@ -144,6 +145,16 @@ TOOLS = [
                 "slug": {"type": "string", "description": "короткий ярлык темы дня, напр. 'boj-btc' (необязательно)"},
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "read_recent_briefs",
+        "description": "Прочитать брифы разведки за последние N дней (memory/briefs/, без недельных "
+                       "срезов) — для НЕДЕЛЬНОГО среза: собрать всё найденное за неделю и сжать в "
+                       "концентрат без дублей.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"days": {"type": "integer", "description": "за сколько дней (по умолч. 7)"}},
         },
     },
     {
@@ -284,6 +295,27 @@ def _save_brief(args: dict) -> str:
             f"Теперь выдай в чат ТОЛЬКО сухую выжимку и укажи этот путь для Криейтора.")
 
 
+def _read_recent_briefs(days: int = 7) -> str:
+    if not BRIEFS_DIR.exists():
+        return "Папки брифов ещё нет — за период ничего не накоплено."
+    cutoff = time.time() - max(1, days) * 86400
+    files = sorted(
+        [p for p in BRIEFS_DIR.glob("*.md") if p.stat().st_mtime >= cutoff and "weekly" not in p.stem],
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not files:
+        return f"За последние {days} дн. брифов разведки не найдено."
+    parts, total = [], 0
+    for p in files:
+        chunk = f"=== {p.name} ===\n{p.read_text(encoding='utf-8')[:6000]}"
+        if total + len(chunk) > 40000:  # кап на контекст
+            parts.append("… (более старые брифы обрезаны)")
+            break
+        parts.append(chunk)
+        total += len(chunk)
+    return "\n\n".join(parts)
+
+
 def _read_x_pending() -> str:
     if not PENDING_X.exists() or not PENDING_X.read_text(encoding="utf-8").strip():
         return "Очередь кандидатов в X-лидеры пуста — за период новых предложений не накопилось."
@@ -343,6 +375,8 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.summary()
     if name == "save_brief":
         return _save_brief(args)
+    if name == "read_recent_briefs":
+        return _read_recent_briefs(int(args.get("days", 7)))
     if name == "read_x_account":
         return _render_x(x_read.account_tweets(args["handle"], int(args.get("limit", 8))))
     if name == "read_x_ledger":

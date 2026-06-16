@@ -167,7 +167,7 @@ async def run(
     system_builder: Callable[[], str],
     welcome: str,
     commands: dict[str, str] | None = None,
-    periodic: dict | None = None,
+    periodic: dict | list | None = None,  # один спец или список (несколько плановых задач)
 ) -> None:
     agent = config.load_agent(agent_name)
     model = agent["model"]
@@ -226,9 +226,10 @@ async def run(
 
     bot = Bot(config.get_secret(agent["token_env"]))
     logging.info("Запускаю агента '%s' (модель %s)", agent_name, model)
-    if periodic:
+    specs = periodic if isinstance(periodic, list) else [periodic] if periodic else []
+    for spec in specs:
         asyncio.create_task(_periodic_loop(
-            bot, agent_name, periodic, model, system_builder,
+            bot, agent_name, spec, model, system_builder,
             tools_schema, dispatch, api_key))
-        logging.info("Планировщик '%s' включён: раз в %s дн.", periodic.get("key"), periodic.get("days"))
+        logging.info("Планировщик '%s' включён: раз в %s дн.", spec.get("key"), spec.get("days"))
     await dp.start_polling(bot)

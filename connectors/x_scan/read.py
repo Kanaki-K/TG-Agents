@@ -129,12 +129,30 @@ def read_ledger_text() -> str:
     return "\n".join(lines)
 
 
+def _is_transient(err: str) -> bool:
+    """Сбой доступа (повторить), а не «аккаунта нет»: плавающая подпись X / сеть / рейт-лимит."""
+    e = (err or "").lower()
+    return any(s in e for s in ("key_byte", "transaction", "timed out", "timeout",
+                                "connection", "temporarily", "too many requests"))
+
+
+def _collect_retry(leaders: list[dict], limit: int, attempts: int = 3) -> list[dict]:
+    """Гоняет _collect с ретраем, ЕСЛИ весь скан упал транзиентным сбоем (свежий клиент каждый раз)."""
+    res = asyncio.run(_collect(leaders, limit))
+    for _ in range(attempts - 1):
+        errs = [it for it in res if it.get("error")]
+        if not (errs and len(errs) == len(res) and all(_is_transient(it.get("error", "")) for it in errs)):
+            break  # есть успешные ИЛИ ошибка не транзиентная (напр. «не найден») — не ретраим
+        res = asyncio.run(_collect(leaders, limit))
+    return res
+
+
 def account_tweets(handle: str, limit: int = 8) -> list[dict]:
     """Свежие твиты ЛЮБОГО аккаунта (не только из списка) — для глубокой проверки кандидата."""
     h = handle.lstrip("@").strip()
     if not h:
         return [{"error": "Пустой хэндл."}]
-    return asyncio.run(_collect([{"handle": h, "track": "?"}], max(1, min(limit, 20))))
+    return _collect_retry([{"handle": h, "track": "?"}], max(1, min(limit, 20)))
 
 
 def _make_client():
@@ -268,4 +286,4 @@ def recent(limit_per_account: int = 6, handle: str = "", track: str = "",
         leaders = leaders[:max_accounts]
     if not leaders:
         return [{"error": "В выбранных тирах нет авторов (или не подошло под фильтр)."}]
-    return asyncio.run(_collect(leaders, max(1, min(limit_per_account, 15))))
+    return _collect_retry(leaders, max(1, min(limit_per_account, 15)))
