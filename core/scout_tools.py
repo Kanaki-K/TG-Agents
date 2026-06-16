@@ -16,6 +16,7 @@ from connectors.x_scan import read as x_read
 from core import analytics, config
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
+PENDING_X = config.ROOT / "memory" / "x_leaders.pending.md"
 
 TOOLS = [
     {
@@ -60,6 +61,9 @@ TOOLS = [
                 "track": {"type": "string", "description": "трек: 'crypto' | 'ai' (пусто = оба)"},
                 "handle": {"type": "string", "description": "фильтр по имени аккаунта (необязательно)"},
                 "limit_per_account": {"type": "integer", "description": "твитов с аккаунта (по умолч. 6)"},
+                "max_accounts": {"type": "integer", "description": "сколько аккаунтов читать с верха "
+                                 "списка (по умолч. 12 — самые сильные). Подними для глубокого захода "
+                                 "по всей профессиональной скамейке; при заданном handle игнорируется."},
             },
         },
     },
@@ -103,6 +107,22 @@ TOOLS = [
         "name": "channel_summary",
         "description": "Общая сводка канала (период, средние метрики) — контекст для оценки релевантности.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "propose_x_leader",
+        "description": "Предложить НОВЫЙ X-аккаунт в leaders.yaml (заметил сильный, подходящий бренду — "
+                       "в цитатах/упоминаниях лент или в поиске). НЕ добавляет сам — кладёт кандидата в "
+                       "очередь на одобрение владельца. Предлагай только профессиональный сигнал по нише "
+                       "(крипта/макро; AI с крипто-мостом), без инфлюенсеров/шиткоин-шума; обоснуй бренд-фит.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "handle": {"type": "string", "description": "хэндл без @ (как в x.com/<handle>)"},
+                "track": {"type": "string", "description": "трек: 'crypto' | 'ai'"},
+                "why": {"type": "string", "description": "почему подходит бренду и чем ценен (сигнал, не шум)"},
+            },
+            "required": ["handle", "why"],
+        },
     },
     {
         "name": "propose_source",
@@ -183,6 +203,18 @@ def _render_x(items: list[dict]) -> str:
     return "\n\n".join(out)
 
 
+def _propose_x_leader(args: dict) -> str:
+    PENDING_X.parent.mkdir(exist_ok=True)
+    header = "" if PENDING_X.exists() else "# Кандидаты в X-лидеры (ожидают одобрения владельца)\n\n"
+    handle = str(args.get("handle", "?")).lstrip("@")
+    entry = (f"- **@{handle}** ({args.get('track', '?')}) — {args.get('why', '')} "
+             f"— https://x.com/{handle}")
+    with open(PENDING_X, "a", encoding="utf-8", newline="\n") as f:
+        f.write(header + entry + "\n")
+    return ("Кандидат записан в memory/x_leaders.pending.md — в leaders.yaml НЕ добавлен. "
+            "Покажи владельцу; одобрит — впишем в leaders.yaml.")
+
+
 def _propose_source(args: dict) -> str:
     PENDING.parent.mkdir(exist_ok=True)
     header = "" if PENDING.exists() else "# Кандидаты в источники (ожидают одобрения владельца)\n\n"
@@ -204,7 +236,8 @@ def dispatch(name: str, args: dict) -> str:
                                          args.get("channel", ""), args.get("track", "")))
     if name == "scan_x":
         return _render_x(x_read.recent(int(args.get("limit_per_account", 6)),
-                                       args.get("handle", ""), args.get("track", "")))
+                                       args.get("handle", ""), args.get("track", ""),
+                                       int(args.get("max_accounts", 12))))
     if name == "fetch_url":
         return feeds.fetch_page(args["url"])
     if name == "find_posts":
@@ -215,6 +248,8 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.themes_overview()
     if name == "channel_summary":
         return analytics.summary()
+    if name == "propose_x_leader":
+        return _propose_x_leader(args)
     if name == "propose_source":
         return _propose_source(args)
     return f"Неизвестный инструмент: {name}"

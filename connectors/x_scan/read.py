@@ -151,10 +151,13 @@ def following(count: int = 100) -> list[dict]:
     return asyncio.run(_collect_following(max(1, min(count, 200))))
 
 
-def recent(limit_per_account: int = 6, handle: str = "", track: str = "") -> list[dict]:
+def recent(limit_per_account: int = 6, handle: str = "", track: str = "",
+           max_accounts: int = 12) -> list[dict]:
     """Свежие твиты лидеров мнений в X.
 
     track — фильтр по треку ('crypto' | 'ai'), handle — по имени аккаунта (подстрока).
+    max_accounts — сколько аккаунтов читать (с начала leaders.yaml, где самые сильные);
+    бережёт бёрнер от лишних запросов. Точечный handle игнорирует этот лимит.
     """
     leaders = load_leaders()
     if track:
@@ -162,6 +165,8 @@ def recent(limit_per_account: int = 6, handle: str = "", track: str = "") -> lis
     if handle:
         h = handle.lstrip("@").lower()
         leaders = [l for l in leaders if h in l["handle"].lower()]
+    elif max_accounts and max_accounts > 0:  # ограничиваем только широкий скан, не точечный
+        leaders = leaders[:max_accounts]
     if not leaders:
         return [{"error": "Список лидеров X пуст (leaders.yaml) или ничего не подошло под фильтр."}]
     return asyncio.run(_collect(leaders, max(1, min(limit_per_account, 15))))
