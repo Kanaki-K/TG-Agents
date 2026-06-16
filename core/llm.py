@@ -36,11 +36,12 @@ def build_system(persona: str, memory_context: str) -> str:
 
 def reply(model: str, system: str, history: list[dict], user_text: str,
           tools_schema: list[dict], dispatch: Callable[[str, dict], str],
-          api_key: str | None = None) -> tuple[str, list[dict]]:
+          api_key: str | None = None, thinking: dict | None = None) -> tuple[str, list[dict]]:
     """Один проход диалога с агентным циклом инструментов.
 
     tools_schema/dispatch — набор «рук» конкретного агента (память, аналитика, ...).
     api_key — свой ключ агента (если None, берётся общий ANTHROPIC_API_KEY).
+    thinking — конфиг мышления (напр. {"type": "adaptive"}); None = выключено.
     Возвращает (текст ответа, обновлённую history).
     """
     client = _client(api_key)
@@ -49,13 +50,16 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
     steps = 0
     while True:
         steps += 1
-        resp = client.messages.create(
+        params = dict(
             model=model,
             max_tokens=MAX_TOKENS,
             system=system,
             tools=tools_schema,
             messages=messages,
         )
+        if thinking:
+            params["thinking"] = thinking
+        resp = client.messages.create(**params)
         # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю
         messages.append({"role": "assistant", "content": resp.content})
 

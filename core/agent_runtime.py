@@ -62,7 +62,7 @@ def _write_run_date(path, d: date) -> None:
 
 
 async def _periodic_loop(bot, agent_name, spec, model, system_builder,
-                         tools_schema, dispatch, api_key) -> None:
+                         tools_schema, dispatch, api_key, thinking=None) -> None:
     """Раз в spec['days'] дней гоняет spec['preset'] и шлёт результат владельцу.
 
     Перезапуск-устойчиво: дату прошлого прогона храним в файле, проверяем раз в час.
@@ -84,7 +84,7 @@ async def _periodic_loop(bot, agent_name, spec, model, system_builder,
             logging.info("Периодический прогон '%s' агента %s", spec["key"], agent_name)
             text, _ = await asyncio.to_thread(
                 llm.reply, model, system_builder(), [], spec["preset"],
-                tools_schema, dispatch, api_key)
+                tools_schema, dispatch, api_key, thinking)
             for chunk in _chunks((spec.get("header", "") + (text or "…")).strip()):
                 try:
                     await bot.send_message(chat_id, tg_format.strip_markdown(chunk)[:TG_LIMIT])
@@ -168,6 +168,7 @@ async def run(
     welcome: str,
     commands: dict[str, str] | None = None,
     periodic: dict | list | None = None,  # один спец или список (несколько плановых задач)
+    thinking: dict | None = None,         # конфиг мышления модели (напр. {"type": "adaptive"})
 ) -> None:
     agent = config.load_agent(agent_name)
     model = agent["model"]
@@ -199,7 +200,7 @@ async def run(
             prior = _trim_history(history.get(uid, []))
             text, hist = await asyncio.to_thread(
                 llm.reply, model, system_builder(), prior,
-                user_text, tools_schema, dispatch, api_key,
+                user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
             await _send(m, text or "…")
@@ -230,6 +231,6 @@ async def run(
     for spec in specs:
         asyncio.create_task(_periodic_loop(
             bot, agent_name, spec, model, system_builder,
-            tools_schema, dispatch, api_key))
+            tools_schema, dispatch, api_key, thinking))
         logging.info("Планировщик '%s' включён: раз в %s дн.", spec.get("key"), spec.get("days"))
     await dp.start_polling(bot)

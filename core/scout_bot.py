@@ -118,6 +118,8 @@ async def main() -> None:
     # Автопрогоны (/digest + /curate раз в неделю) — только если включены в конфиге.
     # По умолчанию off: бережём токены, всё по запросу. /scan, /digest, /curate работают как команды всегда.
     periodic = [CURATE_PERIODIC, DIGEST_PERIODIC] if cfg.get("auto_schedule") else None
+    # адаптивное мышление — острее суждение (гем-детект, бренд-фит); включается в config.yaml
+    thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
     await agent_runtime.run(
         AGENT_NAME,
         tools_schema=tools,
@@ -126,4 +128,5 @@ async def main() -> None:
         welcome=WELCOME,
         commands=COMMANDS,
         periodic=periodic,
+        thinking=thinking,
     )
