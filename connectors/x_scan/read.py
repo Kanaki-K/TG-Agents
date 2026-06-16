@@ -16,10 +16,11 @@ telegram_scan) — её зовут из рабочего потока Скаут
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 import yaml
+
+from core import config  # импорт грузит .env (load_dotenv) и даёт доступ к секретам
 
 HERE = Path(__file__).resolve().parent
 LEADERS_FILE = HERE / "leaders.yaml"
@@ -51,9 +52,11 @@ def _make_client():
         from twikit import Client
     except ImportError:
         return None, "twikit не установлен — добавь в окружение: pip install twikit"
+    from connectors.x_scan import _twikit_patch
+    _twikit_patch.apply()  # чиним сломанный апстримом get_indices (см. _twikit_patch.py)
     client = Client("en-US")
-    auth_token = (os.getenv("X_AUTH_TOKEN") or "").strip()
-    ct0 = (os.getenv("X_CT0") or "").strip()
+    auth_token = config.get_optional("X_AUTH_TOKEN")
+    ct0 = config.get_optional("X_CT0")
     if auth_token and ct0:
         client.set_cookies({"auth_token": auth_token, "ct0": ct0})
         return client, None

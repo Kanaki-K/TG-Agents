@@ -27,17 +27,36 @@ from connectors.x_scan import read as x_read
 
 
 async def _check() -> None:
-    client, err = x_read._make_client()
-    if err:
-        print("✗", err)
-        return
-    try:
-        me = await client.user()
-        print(f"✓ X-сессия рабочая: @{me.screen_name} ({me.name}). Скаут готов читать X.")
-        print("  Напоминание: это должен быть РАСХОДНЫЙ аккаунт, не личный.")
-    except Exception as e:
-        print(f"✗ Сессия не подтвердилась: {e}")
-        print("  Проверь X_AUTH_TOKEN и X_CT0 в .env — могли протухнуть, тогда пере-логинься бёрнером и обнови cookies.")
+    """Проверяем то, что реально делает Скаут — ЧТЕНИЕ твитов лидера.
+
+    Не используем client.user() для теста: на свежем бёрнере с пустым профилем
+    twikit спотыкается о парсинг профиля ('urls') — но к чтению чужих твитов это
+    не относится. KEY_BYTE у X плавает (вариативная выдача), поэтому пара ретраев.
+    """
+    leaders = x_read.load_leaders()
+    handle = leaders[0]["handle"] if leaders else "Twitter"
+    last_err = None
+    for attempt in range(1, 4):
+        client, err = x_read._make_client()
+        if err:
+            print("✗", err)
+            return
+        try:
+            user = await client.get_user_by_screen_name(handle)
+            tweets = await user.get_tweets("Tweets", count=1)
+            n = len(list(tweets))
+            print(f"✓ X-сессия рабочая: чтение X работает (прочитал твиты @{handle}, получено {n}).")
+            print("  Скаут готов читать X. Напоминание: это должен быть РАСХОДНЫЙ аккаунт, не личный.")
+            return
+        except Exception as e:
+            last_err = e
+            if "KEY_BYTE" in str(e):  # плавающий разлад фронта X — пробуем ещё раз
+                print(f"  …попытка {attempt}: X отдал неподходящую страницу (KEY_BYTE), повторяю…")
+                continue
+            break
+    print(f"✗ Чтение не удалось: {last_err}")
+    print("  Если ошибка про KEY_BYTE повторяется стабильно — X снова сменил фронт; скажи мне, обновлю патч.")
+    print("  Если про cookies/авторизацию — пере-логинься бёрнером в браузере и обнови X_AUTH_TOKEN/X_CT0 в .env.")
 
 
 def _dump_following() -> None:
