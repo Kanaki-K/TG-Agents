@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
+from connectors.x_scan import read as x_read
 from core import analytics, config
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
@@ -42,6 +43,23 @@ TOOLS = [
                 "track": {"type": "string", "description": "трек: 'crypto' | 'ai' (пусто = оба)"},
                 "channel": {"type": "string", "description": "фильтр по имени канала (необязательно)"},
                 "limit_per_channel": {"type": "integer", "description": "сообщений с канала (по умолч. 5)"},
+            },
+        },
+    },
+    {
+        "name": "scan_x",
+        "description": "Свежие твиты КУРИРУЕМЫХ лидеров мнений в X/Twitter (Arthur Hayes, Lyn Alden, "
+                       "Glassnode, Raoul Pal, Saylor, Balaji ...) по трекам crypto/ai. ЭДЖ Скаута: "
+                       "X не индексируется веб-поиском, дип-ресёрч его НЕ видит — а первичные голоса "
+                       "появляются тут РАНЬШЕ блога/RSS (Тир-1/2 по скорости). Доступ read-only через "
+                       "бёрнер-сессию, объём малый. Цифры из твита без первоисточника → «не подтверждено». "
+                       "Фильтры: track ('crypto'|'ai'), handle (имя аккаунта), limit_per_account.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track": {"type": "string", "description": "трек: 'crypto' | 'ai' (пусто = оба)"},
+                "handle": {"type": "string", "description": "фильтр по имени аккаунта (необязательно)"},
+                "limit_per_account": {"type": "integer", "description": "твитов с аккаунта (по умолч. 6)"},
             },
         },
     },
@@ -140,6 +158,31 @@ def _render_tg(items: list[dict]) -> str:
     return "\n\n".join(out)
 
 
+def _render_x(items: list[dict]) -> str:
+    if not items:
+        return "Свежих твитов у лидеров X не найдено."
+    out = []
+    for it in items:
+        if it.get("error"):
+            out.append(f"⚠ @{it.get('handle', 'X')}: {it['error']}")
+            continue
+        line = f"[{it.get('track', '?')} | @{it['handle']}]"
+        if it.get("date"):
+            line += f" {it['date']}"
+        metrics = []
+        for label, key in (("♥", "likes"), ("RT", "retweets"), ("👁", "views")):
+            if it.get(key) is not None:
+                metrics.append(f"{label}{it[key]}")
+        if metrics:
+            line += f"  ({' '.join(metrics)})"
+        if it.get("text"):
+            line += f"\n{it['text']}"
+        if it.get("url"):
+            line += f"\n{it['url']}"
+        out.append(line)
+    return "\n\n".join(out)
+
+
 def _propose_source(args: dict) -> str:
     PENDING.parent.mkdir(exist_ok=True)
     header = "" if PENDING.exists() else "# Кандидаты в источники (ожидают одобрения владельца)\n\n"
@@ -159,6 +202,9 @@ def dispatch(name: str, args: dict) -> str:
     if name == "scan_telegram":
         return _render_tg(tg_read.recent(int(args.get("limit_per_channel", 5)),
                                          args.get("channel", ""), args.get("track", "")))
+    if name == "scan_x":
+        return _render_x(x_read.recent(int(args.get("limit_per_account", 6)),
+                                       args.get("handle", ""), args.get("track", "")))
     if name == "fetch_url":
         return feeds.fetch_page(args["url"])
     if name == "find_posts":
