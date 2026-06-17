@@ -14,8 +14,14 @@ python run_analyst.py
 
 ## Инструменты (руки) — `core/analyst_tools.py` → `core/analytics.py`
 `channel_summary`, `themes_overview`, `top_posts`/`bottom_posts`, `by_theme`, `by_dimension`,
-`find_posts`, `post_details`, `audience`, `update_metrics`.
-Команды: `/report`, `/themes`, `/best`, `/timing`, `/update`.
+`find_posts`, `post_details`, `audience`, `update_metrics`, `save_playbook`.
+Команды: `/report`, `/themes`, `/best`, `/timing`, `/playbook`, `/update`.
+
+## Плейбук форматов (`/playbook`) — консультация для Криейтора
+Аналитик ведёт `memory/format_playbook.md`: меню форматов поста с эффективностью (ER/репосты) и
+рекомендациями, что усиливать и что попробовать **помимо длинного флагмана**. Криейтор читает этот
+файл при выборе формата — так Аналитик «консультирует» через общий слой памяти (живого диалога
+ботов пока нет, PLAN §11). Деление: «что заходит» — Аналитик; «как написать» — Криейтор.
 
 ## Данные
 Читает `data/` (собрано коннектором `telegram_export`): `channel_posts.json`, `post_topics.json`,

@@ -8,6 +8,10 @@
 - save_draft — положить готовый драфт в архив (memory/drafts/) для правки и недельного отчёта.
 - list_drafts / read_draft — поднять СВОЙ прошлый драфт, чтобы сравнить с финалом владельца.
 - record_lesson — петля обучения: усвоить урок из правки владельца в memory/post_lessons.md.
+- top_posts / by_dimension / themes_overview — СВЕРКА с данными Аналитика (что реально заходит:
+  ER по формату/времени/теме). Прямое чтение общего слоя (PLAN §11 «данные, не суждение»).
+- propose_standard / apply_standard — вывод/обновление стандарта постов через ГЕЙТ: предлагаешь в
+  .proposed-файл, применяет владелец (с бэкапом). Живой стандарт молча не мутируешь.
 
 Публикации тут нет намеренно: драфт — автомат, публикует владелец (см. PLAN §6, чек-лист безопасности).
 
@@ -19,13 +23,18 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime
 
 from core import analytics, config
 
-BRIEFS_DIR = config.ROOT / "memory" / "briefs"   # продукт Скаута — вход Криейтора
-DRAFTS_DIR = config.ROOT / "memory" / "drafts"   # архив драфтов — выход Криейтора
-LESSONS = config.ROOT / "memory" / "post_lessons.md"  # уроки из правок владельца (живое состояние)
+MEM = config.ROOT / "memory"
+BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
+DRAFTS_DIR = MEM / "drafts"            # архив драфтов — выход Криейтора
+LESSONS = MEM / "post_lessons.md"      # уроки из правок владельца (живое состояние)
+PLAYBOOK = MEM / "format_playbook.md"  # плейбук форматов — ведёт Аналитик, читает Криейтор
+STANDARD = MEM / "post_standard.md"    # живой стандарт постов (Telegram)
+STANDARD_PROPOSED = MEM / "post_standard.proposed.md"  # предложение стандарта (gate: на одобрение)
+HISTORY = MEM / ".history"             # бэкапы стандарта перед применением (откат)
 
 TOOLS = [
     {
@@ -121,6 +130,45 @@ TOOLS = [
             "required": ["lesson"],
         },
     },
+    {
+        "name": "top_posts",
+        "description": "Лучшие посты канала по метрике (данные Аналитика) — СВЕРКА с тем, что реально "
+                       "заходит, и материал для вывода стандарта из практики. metric: er|forwards|"
+                       "views|reactions|comments; content_type: 'Текст'|'Медиа' (необязательно).",
+        "input_schema": {"type": "object", "properties": {
+            "metric": {"type": "string"}, "n": {"type": "integer"},
+            "content_type": {"type": "string"}}},
+    },
+    {
+        "name": "by_dimension",
+        "description": "Средние метрики в разрезе weekday|hour|type (текст/медиа) — данные Аналитика "
+                       "о времени и формате. Для выбора формата под тему и для вывода стандарта.",
+        "input_schema": {"type": "object", "properties": {
+            "dim": {"type": "string", "description": "weekday | hour | type"}}, "required": ["dim"]},
+    },
+    {
+        "name": "themes_overview",
+        "description": "Темы канала со средними метриками — что исторически заходит (данные Аналитика). "
+                       "Для выбора формата/угла и сверки.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "propose_standard",
+        "description": "ПРЕДЛОЖИТЬ обновлённый стандарт постов платформы (gate: живой файл НЕ трогает). "
+                       "Пишет в memory/post_standard.proposed.md на проверку владельцу. Сюда кладёшь "
+                       "выведенный из топ-постов + плейбука редакторский стандарт (архетипы, структура, "
+                       "ритм, ✅/❌). Применит владелец командой /apply_standard. platform по умолч. telegram.",
+        "input_schema": {"type": "object", "properties": {
+            "content": {"type": "string", "description": "полный предлагаемый стандарт (markdown)"},
+            "platform": {"type": "string", "description": "telegram (по умолч.)"}}, "required": ["content"]},
+    },
+    {
+        "name": "apply_standard",
+        "description": "Применить предложенный стандарт: копирует post_standard.proposed.md в живой "
+                       "post_standard.md с бэкапом старого в memory/.history/. Вызывай ТОЛЬКО по команде "
+                       "владельца /apply_standard (его явное «ок»). Сам по себе, в /derive, не вызывай.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -199,6 +247,31 @@ def _record_lesson(args: dict) -> str:
             "Отчитайся владельцу одной строкой, что усвоил.")
 
 
+def _propose_standard(args: dict) -> str:
+    content = str(args.get("content", "") or "").strip()
+    if not content:
+        return "Пустой стандарт — нечего предлагать."
+    STANDARD_PROPOSED.parent.mkdir(parents=True, exist_ok=True)
+    STANDARD_PROPOSED.write_text(content, encoding="utf-8", newline="\n")
+    return ("Предложение записано: memory/post_standard.proposed.md (живой стандарт НЕ тронут). "
+            "Покажи владельцу суть изменений; одобрит — применит командой /apply_standard.")
+
+
+def _apply_standard() -> str:
+    # Гейт в коде: применяем ТОЛЬКО ранее предложенный .proposed-файл (не произвольный текст).
+    if not STANDARD_PROPOSED.exists():
+        return "Нет предложенного стандарта (post_standard.proposed.md). Сначала /derive."
+    HISTORY.mkdir(parents=True, exist_ok=True)
+    if STANDARD.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        (HISTORY / f"post_standard-{stamp}.md").write_text(
+            STANDARD.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    STANDARD.write_text(STANDARD_PROPOSED.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    STANDARD_PROPOSED.unlink()
+    return ("Стандарт обновлён: memory/post_standard.md (старый — в memory/.history/ для отката). "
+            "Предложение очищено.")
+
+
 def dispatch(name: str, args: dict) -> str:
     if name == "list_briefs":
         return _list_md(BRIEFS_DIR, "Брифы Скаута (свежие сверху):",
@@ -224,4 +297,15 @@ def dispatch(name: str, args: dict) -> str:
         return _save_draft(args)
     if name == "record_lesson":
         return _record_lesson(args)
+    if name == "top_posts":
+        return analytics.top_posts(args.get("metric", "er"),
+                                   int(args.get("n", 10)), args.get("content_type", ""))
+    if name == "by_dimension":
+        return analytics.by_dimension(args.get("dim", "weekday"))
+    if name == "themes_overview":
+        return analytics.themes_overview()
+    if name == "propose_standard":
+        return _propose_standard(args)
+    if name == "apply_standard":
+        return _apply_standard()
     return f"Неизвестный инструмент: {name}"
