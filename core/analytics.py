@@ -17,12 +17,19 @@ DATA = ROOT / "data"
 POSTS_JSON = DATA / "channel_posts.json"
 STATS_JSON = DATA / "channel_stats.json"
 TOPICS_JSON = DATA / "post_topics.json"
+FORMATS_JSON = DATA / "post_formats.json"   # формат/тип поста (флагман/обучающий/…), размечает Аналитик
 
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 METRICS = {
     "views": "Просмотры", "reactions": "Реакции", "comments": "Комментарии",
     "forwards": "Репосты", "er": "ER% (реакции/просмотры)",
 }
+
+# Автоклассификация формата (первый проход; спорные средние — на ручную доразметку set_format).
+# Формат — это НЕ тема (о чём), а КАК сделан пост (тех-карта в memory/post_standard.md).
+# Флагман = глубокая завершённая экспертная мысль (репосты ИЛИ объём), а не просто длина — см. _classify.
+FLAGMAN_MIN_WORDS = 550     # объём как ОДИН из сигналов флагмана (не единственный)
+FLAGMAN_MIN_FORWARDS = 15   # вирусность — главный сигнал «глубокого шарящегося» поста
 
 
 def _load_topics() -> dict:
@@ -31,11 +38,78 @@ def _load_topics() -> dict:
     return {}
 
 
+def _load_formats() -> dict:
+    if FORMATS_JSON.exists():
+        return json.loads(FORMATS_JSON.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_formats(formats: dict) -> None:
+    FORMATS_JSON.write_text(json.dumps(formats, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _classify(p: dict) -> str:
+    """Эвристика формата по содержанию+метрикам (НЕ только по длине — учитываем смысл флагмана)."""
+    text = p.get("text") or ""
+    low = text.lower()
+    words = p.get("words", 0)
+    theme = (p.get("theme") or "").strip().lower()
+    if words == 0:
+        return "медиа"                       # пост без текста (только картинка/видео)
+    if (any(k in low for k in ("розыгрыш", "конкурс", "giveaway", "разыгрыва", "буст"))
+            or ("премиум" in low and ("подпис" in low or "розыгр" in low or "конкурс" in low))):
+        return "служебное"                   # анонс/розыгрыш/служебное, не контент
+    if p.get("forwards", 0) >= FLAGMAN_MIN_FORWARDS or words >= FLAGMAN_MIN_WORDS:
+        return "флагман"                     # глубокая завершённая мысль: вирусность ИЛИ объём
+    if theme == "психология":
+        return "психология"
+    if theme == "обучение":
+        return "обучающий"
+    if theme == "личное":
+        return "личный"
+    return "короткий"                        # свежее со своим углом / прочий короткий
+
+
+def auto_classify_formats(force: bool = False) -> str:
+    """Разметить формат всех постов (первый проход / дозаполнить новые).
+
+    force=False — не трогает уже размеченные (бережёт ручные правки), заполняет только новые.
+    force=True — переразметить весь канал заново.
+    """
+    posts = _load_posts()
+    if not posts:
+        return "Данных по постам нет."
+    formats = {} if force else _load_formats()
+    new = 0
+    for p in posts:
+        sid = str(p["id"])
+        if not force and formats.get(sid):
+            continue
+        formats[sid] = _classify(p)
+        new += 1
+    _save_formats(formats)
+    counts: dict = {}
+    for v in formats.values():
+        counts[v] = counts.get(v, 0) + 1
+    dist = ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda x: -x[1]))
+    return (f"Разметка форматов обновлена (новых: {new}, всего: {len(formats)}).\n"
+            f"Распределение: {dist}\nСпорные — поправь set_format(id, формат).")
+
+
+def set_format(post_id: int, fmt: str) -> str:
+    """Ручная правка формата одного поста (перекрывает авторазметку)."""
+    formats = _load_formats()
+    formats[str(int(post_id))] = (fmt or "").strip().lower()
+    _save_formats(formats)
+    return f"Пост #{post_id} помечен форматом «{fmt}»."
+
+
 def _load_posts() -> list[dict]:
     if not POSTS_JSON.exists():
         return []
     raw = json.loads(POSTS_JSON.read_text(encoding="utf-8"))
     topics = _load_topics()
+    formats = _load_formats()
     posts = []
     for p in raw:
         if p.get("views") is None:        # служебные сообщения пропускаем
@@ -51,6 +125,8 @@ def _load_posts() -> list[dict]:
             "weekday": WEEKDAYS[dt.weekday()] if dt else "",
             "hour": dt.hour if dt else None,
             "type": "Медиа" if p.get("has_media") else "Текст",
+            "format": formats.get(str(p["id"]), ""),
+            "words": len((p.get("text") or "").split()),
             "title": t.get("title", ""),
             "theme": t.get("theme", ""),
             "summary": t.get("summary", ""),
@@ -101,6 +177,40 @@ def by_theme(theme: str) -> str:
     return "\n".join(out)
 
 
+def formats_overview() -> str:
+    """Форматы канала со средними метриками — что заходит по ФОРМАТУ (а не теме). Основа плейбука."""
+    posts = [p for p in _load_posts() if p["format"]]
+    if not posts:
+        return "Форматы ещё не размечены. Запусти классификацию: /classify (auto_classify_formats)."
+    groups: dict = {}
+    for p in posts:
+        groups.setdefault(p["format"], []).append(p)
+
+    def avg(items, key):
+        return sum(i[key] for i in items) / len(items)
+    rows = sorted(groups.items(), key=lambda kv: -avg(kv[1], "forwards"))
+    out = ["Форматы канала (сорт. по репостам; средние на пост):"]
+    for fmt, g in rows:
+        out.append(f"  {fmt}: постов {len(g)} | 👀{avg(g,'views'):.0f} ❤{avg(g,'reactions'):.1f} "
+                   f"💬{avg(g,'comments'):.1f} 🔁{avg(g,'forwards'):.1f} ER={avg(g,'er'):.2f}% "
+                   f"| слов~{avg(g,'words'):.0f}")
+    return "\n".join(out)
+
+
+def by_format(fmt: str) -> str:
+    """Все посты заданного формата (напр. 'флагман') — вытащить примеры/историю формата."""
+    q = (fmt or "").lower().strip()
+    posts = [p for p in _load_posts() if q and q in p["format"]]
+    if not posts:
+        return f"Постов формата «{fmt}» не найдено. Доступные форматы — в formats_overview."
+    posts.sort(key=lambda p: p["forwards"], reverse=True)
+    out = [f"Посты формата «{fmt}» ({len(posts)} шт.), сильные сверху:"]
+    for p in posts[:25]:
+        out.append(f"  #{p['id']} [{p['date'][:10]}] 🔁{p['forwards']} ER={p['er']}% слов~{p['words']} | "
+                   f"{p['title'] or p['preview']}")
+    return "\n".join(out)
+
+
 def _metric_key(metric: str) -> str:
     metric = (metric or "views").lower().strip()
     aliases = {"просмотры": "views", "реакции": "reactions", "лайки": "reactions",
@@ -111,7 +221,8 @@ def _metric_key(metric: str) -> str:
 
 
 def _fmt_row(p: dict, metric: str) -> str:
-    return (f"#{p['id']} [{p['date']} {p['weekday']}] {p['type']} | "
+    fmt = f"·{p['format']}" if p.get("format") else ""
+    return (f"#{p['id']} [{p['date']} {p['weekday']}] {p['type']}{fmt} | "
             f"👀{p['views']} ❤{p['reactions']} 💬{p['comments']} 🔁{p['forwards']} "
             f"ER={p['er']}% | {p['preview']}")
 
@@ -151,7 +262,8 @@ def summary() -> str:
     return "\n".join(out)
 
 
-def top_posts(metric: str = "views", n: int = 10, content_type: str = "") -> str:
+def top_posts(metric: str = "views", n: int = 10, content_type: str = "",
+              post_format: str = "") -> str:
     posts = _load_posts()
     if not posts:
         return "Данных нет."
@@ -159,8 +271,13 @@ def top_posts(metric: str = "views", n: int = 10, content_type: str = "") -> str
     if content_type:
         ct = content_type.strip().lower()
         posts = [p for p in posts if p["type"].lower() == ct]
+    if post_format:
+        pf = post_format.strip().lower()
+        posts = [p for p in posts if pf in p["format"]]
     posts = sorted(posts, key=lambda p: p[key], reverse=True)[:max(1, min(n, 30))]
-    head = f"ТОП-{len(posts)} по «{METRICS[key]}»" + (f" среди «{content_type}»" if content_type else "")
+    head = (f"ТОП-{len(posts)} по «{METRICS[key]}»"
+            + (f" среди «{content_type}»" if content_type else "")
+            + (f" формата «{post_format}»" if post_format else ""))
     return head + "\n" + "\n".join(_fmt_row(p, key) for p in posts)
 
 
@@ -174,18 +291,19 @@ def bottom_posts(metric: str = "views", n: int = 10) -> str:
 
 
 def by_dimension(dim: str = "weekday") -> str:
-    """Срез средних метрик по: weekday | hour | type."""
+    """Срез средних метрик по: weekday | hour | type | format."""
     posts = _load_posts()
     if not posts:
         return "Данных нет."
     dim = (dim or "weekday").lower().strip()
     aliases = {"день": "weekday", "дни": "weekday", "часы": "hour", "час": "hour",
-               "тип": "type", "weekday": "weekday", "hour": "hour", "type": "type"}
+               "тип": "type", "формат": "format", "weekday": "weekday", "hour": "hour",
+               "type": "type", "format": "format"}
     dim = aliases.get(dim, "weekday")
     groups: dict = {}
     for p in posts:
         k = p[dim]
-        if k is None:
+        if k is None or k == "":      # формат без разметки не считаем
             continue
         groups.setdefault(k, []).append(p)
 
@@ -196,6 +314,8 @@ def by_dimension(dim: str = "weekday") -> str:
         order = WEEKDAYS
     elif dim == "hour":
         order = sorted(groups, key=lambda x: x)
+    elif dim == "format":
+        order = sorted(groups, key=lambda k: -avg(groups[k], "forwards"))
     else:
         order = sorted(groups, key=lambda k: -avg(groups[k], "views"))
     rows = [f"Срез по «{dim}» (средние на пост):"]
@@ -214,7 +334,8 @@ def post_details(post_id: int) -> str:
     p = next((x for x in posts if x["id"] == int(post_id)), None)
     if not p:
         return f"Пост #{post_id} не найден."
-    return (f"Пост #{p['id']} [{p['date']} {p['weekday']}] тип: {p['type']}\n"
+    return (f"Пост #{p['id']} [{p['date']} {p['weekday']}] тип: {p['type']} | "
+            f"формат: {p['format'] or '—'} | слов: {p['words']}\n"
             f"👀 просмотры: {p['views']} | ❤ реакции: {p['reactions']} ({p['reactions_detail']})\n"
             f"💬 комментарии: {p['comments']} | 🔁 репосты: {p['forwards']} | ER: {p['er']}%\n"
             f"Текст:\n{p['text'][:1500]}")

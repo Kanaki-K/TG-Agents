@@ -22,7 +22,8 @@ TOOLS = [
     },
     {
         "name": "top_posts",
-        "description": "Лучшие посты по метрике. Используй, когда спрашивают «что зашло».",
+        "description": "Лучшие посты по метрике. Используй, когда спрашивают «что зашло». "
+                       "Можно отфильтровать по формату (напр. вытащить топ флагманов).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -31,6 +32,9 @@ TOOLS = [
                 "n": {"type": "integer", "description": "сколько постов (по умолч. 10)"},
                 "content_type": {"type": "string",
                                  "description": "фильтр: 'Текст' или 'Медиа' (необязательно)"},
+                "post_format": {"type": "string",
+                                "description": "фильтр по формату: флагман|обучающий|психология|"
+                                               "личный|короткий|медиа|служебное (необязательно)"},
             },
         },
     },
@@ -47,11 +51,12 @@ TOOLS = [
     },
     {
         "name": "by_dimension",
-        "description": "Средние метрики в разрезе: weekday (дни недели), hour (часы суток) "
-                       "или type (текст/медиа). Для выводов о лучшем времени/формате.",
+        "description": "Средние метрики в разрезе: weekday (дни недели), hour (часы суток), "
+                       "type (текст/медиа) или format (флагман/обучающий/…). Для выводов о времени "
+                       "и о том, какой ФОРМАТ заходит.",
         "input_schema": {
             "type": "object",
-            "properties": {"dim": {"type": "string", "description": "weekday | hour | type"}},
+            "properties": {"dim": {"type": "string", "description": "weekday | hour | type | format"}},
             "required": ["dim"],
         },
     },
@@ -116,6 +121,48 @@ TOOLS = [
             "required": ["content"],
         },
     },
+    {
+        "name": "formats_overview",
+        "description": "Средние метрики по ФОРМАТАМ постов (флагман/обучающий/психология/личный/"
+                       "короткий/медиа/служебное) — что заходит по формату. Главное для плейбука и "
+                       "вопросов «какой формат сильнее». Требует размеченных форматов (classify_formats).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "by_format",
+        "description": "Все посты заданного формата (напр. 'флагман'), сильные сверху — вытащить "
+                       "примеры/историю формата. Удобно достать все флагманы канала.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"format": {"type": "string", "description": "флагман|обучающий|психология|личный|короткий|медиа|служебное"}},
+            "required": ["format"],
+        },
+    },
+    {
+        "name": "classify_formats",
+        "description": "Разметить ФОРМАТ всех постов (колонка формата). Эвристика: медиа без текста, "
+                       "служебные (розыгрыши), флагман (вирусность/объём), иначе по теме (психология/"
+                       "обучающий/личный) либо короткий. По умолчанию дозаполняет только НОВЫЕ посты и "
+                       "бережёт ручные правки; force=true — переразметить весь канал заново. После — "
+                       "покажи распределение и предупреди, что спорные средние посты стоит доразметить set_format.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"force": {"type": "boolean", "description": "переразметить весь канал заново (по умолч. false)"}},
+        },
+    },
+    {
+        "name": "set_format",
+        "description": "Поправить формат ОДНОГО поста вручную (перекрывает авторазметку) — для спорных "
+                       "случаев. Формат: флагман|обучающий|психология|личный|короткий|медиа|служебное.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "post_id": {"type": "integer"},
+                "format": {"type": "string"},
+            },
+            "required": ["post_id", "format"],
+        },
+    },
 ]
 
 
@@ -124,7 +171,16 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.summary()
     if name == "top_posts":
         return analytics.top_posts(args.get("metric", "views"),
-                                   int(args.get("n", 10)), args.get("content_type", ""))
+                                   int(args.get("n", 10)), args.get("content_type", ""),
+                                   args.get("post_format", ""))
+    if name == "formats_overview":
+        return analytics.formats_overview()
+    if name == "by_format":
+        return analytics.by_format(args["format"])
+    if name == "classify_formats":
+        return analytics.auto_classify_formats(bool(args.get("force", False)))
+    if name == "set_format":
+        return analytics.set_format(int(args["post_id"]), args.get("format", ""))
     if name == "bottom_posts":
         return analytics.bottom_posts(args.get("metric", "views"), int(args.get("n", 10)))
     if name == "by_dimension":
