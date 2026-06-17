@@ -71,6 +71,19 @@ TOOLS = [
         },
     },
     {
+        "name": "read_post",
+        "description": "Прочитать ПОЛНЫЙ текст утверждённого поста канала по id — ЭТАЛОН для калибровки. "
+                       "Перед флагманом прочти 1–2 эталона (мануал §4: #434 «Смена рук», #432 «17 лет», "
+                       "#426 «Минус 90%», #422 «Недвижка/Биток») и СВЕРЬ свой драфт: плотность фактов на "
+                       "знак, лаконичность без эссе-воды, голос, и что весь пост влезает в ОДНО сообщение "
+                       "(≤4096). Текст НЕ обрезается (в отличие от recent_posts).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer", "description": "номер поста, напр. 434"}},
+            "required": ["id"],
+        },
+    },
+    {
         "name": "by_theme",
         "description": "Все посты канала по теме — какие углы уже освещались (анти-повтор и отсылки).",
         "input_schema": {
@@ -251,13 +264,42 @@ def _lint(content: str, kind: str = "") -> tuple:
     yav = len(re.findall(r"явля[ею]", clean, re.IGNORECASE))
     if yav:
         warns.append(f"«является/являются» — {yav} шт (убрать, §7)")
+    # Англицизмы-маркеры «писала ИИшка» — авто-warn (высокий сигнал, мало ложных; §7)
+    angl = {"фрейм": "каркас/рамка", "юзер": "пользователь", "сетап": "расклад",
+            "кейс": "пример/случай", "b2b": "между компаниями"}  # «хайп» — фирменное, не трогаем
+    found_angl = [f"«{w}»→{repl}" for w, repl in angl.items()
+                  if re.search(rf"\b{re.escape(w)}", clean, re.IGNORECASE)]
+    if found_angl:
+        warns.append("англицизмы (§7): " + ", ".join(found_angl))
+    # Стаккато-триады (manufactured staccato drama, §11.5): 3+ УТВЕРДИТЕЛЬНЫХ обрубка ≤3 слов подряд =
+    # след ИИ-редактора. Считаем только фрагменты НА ТОЧКЕ (вопросы-списки «Монополия LINK?» — приём, не
+    # сюда) и делим по пунктуация+пробел, чтобы НЕ резать десятичные «0.31$».
+    run = mx = 0
+    for s in re.split(r"(?<=[.!?])\s+", clean):
+        s = s.strip()
+        if s.endswith(".") and len(re.sub(r"[^\w\s]", " ", s).split()) <= 3:
+            run += 1
+            mx = max(mx, run)
+        else:
+            run = 0
+    if mx >= 3:
+        warns.append(f"стаккато-ритм: {mx} обрубка-утверждения ≤3 слов подряд (ИИ-подача, §11.5) — "
+                     f"слей в живую фразу")
+    # «Это не X. Это Y» — ИИ-пул-квота (§11.5, владелец требует убирать насовсем). Ловим парную форму.
+    eto = re.findall(r"Это не [^.!?\n]{1,60}[.!?]+\s+Это\b", clean)
+    if eto:
+        warns.append(f"«Это не X. Это Y» — {len(eto)} шт (ИИ-пул-квота §11.5, скажи Y прямо с фактом)")
     k = (kind or "").lower()
     if "флагман" in k or "flagman" in k:
-        n = len(clean)
+        n = len(clean.encode("utf-16-le")) // 2  # точный счёт Telegram (UTF-16 units = лимит 4096), не байты
         if n < 2800:
-            warns.append(f"флагман КОРОТКИЙ: {n} знаков (норма 2800–4000+) — добери глубины")
-        elif n > 4500:
-            warns.append(f"флагман ДЛИННЫЙ: {n} знаков (норма 2800–4000+) — поджми")
+            warns.append(f"флагман КОРОТКИЙ: {n} знаков (норма 2800–4096) — добери плотности фактов")
+        elif n > 4096:
+            warns.append(f"⛔ флагман НЕ ВЛЕЗАЕТ в одно сообщение Telegram: {n} знаков > 4096 — "
+                         f"режь до ≤4096 (Telegram порвёт на 2 сообщения, хвост читается как «дописала ИИ»)")
+        elif n > 3900:
+            warns.append(f"флагман у СТЕНЫ: {n} знаков (лимит 4096, идеал 3000–3800) — подожми, "
+                         f"оставь запас под футер")
         if "notion" not in clean.lower() and "🖥" not in clean:
             warns.append("нет футера (🖥 Медиа | 🥸 Мемы | 📱 Notion)")
     return clean, warns
@@ -346,6 +388,8 @@ def dispatch(name: str, args: dict) -> str:
                         f"Драфт по запросу «{args.get('which', '')}» не найден. Доступны:")
     if name == "find_posts":
         return analytics.find_posts(args["query"], int(args.get("n", 8)))
+    if name == "read_post":
+        return analytics.read_post(int(args["id"]))
     if name == "by_theme":
         return analytics.by_theme(args["theme"])
     if name == "save_draft":

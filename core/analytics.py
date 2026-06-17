@@ -341,6 +341,20 @@ def post_details(post_id: int) -> str:
             f"Текст:\n{p['text'][:1500]}")
 
 
+def read_post(post_id: int) -> str:
+    """ПОЛНЫЙ текст утверждённого поста по id — эталон для калибровки (плотность фактов,
+    лаконичность, голос, длина). В отличие от post_details/recent_posts текст НЕ обрезается."""
+    posts = _load_posts()
+    p = next((x for x in posts if x["id"] == int(post_id)), None)
+    if not p:
+        return f"Пост #{post_id} не найден."
+    text = p.get("text") or ""
+    return (f"Эталон #{p['id']} [{p['date'][:10]}] формат: {p['format'] or '—'} | "
+            f"длина: {len(text)} знаков | 🔁{p['forwards']} 👀{p['views']} ER {p['er']}%\n"
+            f"--- учись: плотность фактов на знак, лаконичность, голос, что влезает в ОДНО сообщение ---\n"
+            f"{text}")
+
+
 def find_posts(query: str, n: int = 8) -> str:
     posts = _load_posts()
     q = (query or "").lower().strip()
