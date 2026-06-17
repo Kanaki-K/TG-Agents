@@ -1,4 +1,4 @@
-"""Инструменты Криейтора — забрать материал Скаута, свериться с каналом, сохранить драфт.
+"""Инструменты Криейтора — забрать материал Скаута, свериться с каналом, сохранить драфт, учиться.
 
 Криейтор ПИШЕТ; «руки» у него минимальны и служат письму (навыки — по мере боли, не впрок):
 - list_briefs / read_brief — забирают рабочий материал Скаута (memory/briefs/) НАПРЯМУЮ;
@@ -6,8 +6,15 @@
 - find_posts / by_theme — сверка с историей канала (core/analytics): не повторить угол,
   сослаться на прошлый пост, опереться на личный опыт автора.
 - save_draft — положить готовый драфт в архив (memory/drafts/) для правки и недельного отчёта.
+- list_drafts / read_draft — поднять СВОЙ прошлый драфт, чтобы сравнить с финалом владельца.
+- record_lesson — петля обучения: усвоить урок из правки владельца в memory/post_lessons.md.
 
 Публикации тут нет намеренно: драфт — автомат, публикует владелец (см. PLAN §6, чек-лист безопасности).
+
+ГРАНИЦА самообучения: уроки идут в СЛОЙ ПАМЯТИ (post_lessons.md), который грузится в контекст —
+это безопасное «обучение из фидбэка». Личность (SKILL.md) Криейтор НЕ трогает: это определение
+агента под гейтом Девелопера (PLAN §5.1 «не мутируем живого»). Устоявшийся урок Девелопер позже
+поднимет в SKILL.md через propose→ок→apply.
 """
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ from core import analytics, config
 
 BRIEFS_DIR = config.ROOT / "memory" / "briefs"   # продукт Скаута — вход Криейтора
 DRAFTS_DIR = config.ROOT / "memory" / "drafts"   # архив драфтов — выход Криейтора
+LESSONS = config.ROOT / "memory" / "post_lessons.md"  # уроки из правок владельца (живое состояние)
 
 TOOLS = [
     {
@@ -77,13 +85,49 @@ TOOLS = [
             "required": ["content"],
         },
     },
+    {
+        "name": "list_drafts",
+        "description": "Список ТВОИХ прошлых драфтов (memory/drafts/), свежие сверху. Нужен, чтобы найти "
+                       "свой драфт под финал, который прислал владелец (для обучения на правке).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"n": {"type": "integer", "description": "сколько последних показать (по умолч. 8)"}},
+        },
+    },
+    {
+        "name": "read_draft",
+        "description": "Прочитать ТВОЙ прошлый драфт — чтобы СРАВНИТЬ его с финальной версией, которую "
+                       "владелец доредактировал и публикует. Из разницы извлекаешь уроки (record_lesson). "
+                       "which: 'latest' (по умолч.) либо часть имени/даты/слага.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"which": {"type": "string", "description": "'latest' | часть имени/даты/слага"}},
+        },
+    },
+    {
+        "name": "record_lesson",
+        "description": "Усвоить УРОК из правки владельца (петля обучения) — добавить в memory/post_lessons.md, "
+                       "который грузится тебе в контекст к каждому посту. Записывай ТОЛЬКО устойчивые, "
+                       "переносимые правила («владелец режет вступление до ~40 слов», «убирает слово X», "
+                       "«добавляет личный кейс перед выводом»), не разовую косметику. Один вызов — один урок. "
+                       "После записи отчитайся владельцу, что усвоил. Личность (SKILL.md) НЕ трогаешь — уроки "
+                       "живут в памяти.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lesson": {"type": "string", "description": "устойчивое правило на будущее, одной фразой"},
+                "evidence": {"type": "string", "description": "что в правке навело (коротко, необязательно)"},
+            },
+            "required": ["lesson"],
+        },
+    },
 ]
 
 
-def _brief_files() -> list:
-    if not BRIEFS_DIR.exists():
+def _md_files(d) -> list:
+    if not d.exists():
         return []
-    return sorted(BRIEFS_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def _first_heading(text: str) -> str:
@@ -94,23 +138,20 @@ def _first_heading(text: str) -> str:
     return "(пусто)"
 
 
-def _list_briefs(n: int = 8) -> str:
-    files = _brief_files()
+def _list_md(d, label: str, empty: str, n: int = 8) -> str:
+    files = _md_files(d)
     if not files:
-        return ("Брифов Скаута пока нет (memory/briefs/ пуст). Напиши пост из присланного "
-                "владельцем направления или попроси Скаута сделать /scan.")
-    out = ["Брифы Скаута (свежие сверху):"]
+        return empty
+    out = [label]
     for p in files[:max(1, n)]:
-        head = _first_heading(p.read_text(encoding="utf-8"))
-        out.append(f"- {p.name} — {head}")
+        out.append(f"- {p.name} — {_first_heading(p.read_text(encoding='utf-8'))}")
     return "\n".join(out)
 
 
-def _read_brief(which: str = "latest") -> str:
-    files = _brief_files()
+def _read_md(d, which: str, empty: str, not_found: str) -> str:
+    files = _md_files(d)
     if not files:
-        return ("Брифов Скаута нет (memory/briefs/ пуст). Пиши из присланного направления "
-                "или попроси Скаута /scan.")
+        return empty
     q = (which or "latest").strip().lower()
     if q in ("", "latest", "последний", "свежий"):
         target = files[0]
@@ -118,11 +159,11 @@ def _read_brief(which: str = "latest") -> str:
         matches = [p for p in files if q in p.name.lower()]
         if not matches:
             avail = "\n".join(f"- {p.name}" for p in files[:8])
-            return f"Бриф по запросу «{which}» не найден. Доступны:\n{avail}"
+            return f"{not_found}\n{avail}"
         target = matches[0]  # самый свежий из совпавших (files уже отсортирован)
     text = target.read_text(encoding="utf-8")
-    cap = 40000  # кап на контекст: бриф большой, но всё в одну сессию не тащим
-    body = text[:cap] + ("\n\n… (бриф обрезан)" if len(text) > cap else "")
+    cap = 40000  # кап на контекст: файл большой, всё в одну сессию не тащим
+    body = text[:cap] + ("\n\n… (обрезано)" if len(text) > cap else "")
     return f"=== {target.name} ===\n{body}"
 
 
@@ -137,15 +178,50 @@ def _save_draft(args: dict) -> str:
             f"это драфт на правку, публикует он.")
 
 
+def _record_lesson(args: dict) -> str:
+    lesson = str(args.get("lesson", "") or "").strip()
+    if not lesson:
+        return "Пустой урок — нечего записывать."
+    LESSONS.parent.mkdir(parents=True, exist_ok=True)
+    if not LESSONS.exists():
+        LESSONS.write_text(
+            "# Уроки Криейтора из правок владельца\n\n"
+            "> Живое состояние: устойчивые правила письма, извлечённые из того, как владелец\n"
+            "> доредактирует посты перед публикацией. Грузится в контекст Криейтора к каждому посту.\n"
+            "> Новое перекрывает старое; неудачный урок владелец удаляет руками. Личность (SKILL.md)\n"
+            "> правит только Девелопер через гейт — устоявшийся урок поднимают туда отдельно.\n\n",
+            encoding="utf-8", newline="\n")
+    ev = str(args.get("evidence", "") or "").strip()
+    line = f"- ({date.today().isoformat()}) {lesson}" + (f" — _из правки: {ev}_" if ev else "") + "\n"
+    with open(LESSONS, "a", encoding="utf-8", newline="\n") as f:
+        f.write(line)
+    return ("Урок записан в memory/post_lessons.md — учту в следующих постах. "
+            "Отчитайся владельцу одной строкой, что усвоил.")
+
+
 def dispatch(name: str, args: dict) -> str:
     if name == "list_briefs":
-        return _list_briefs(int(args.get("n", 8)))
+        return _list_md(BRIEFS_DIR, "Брифы Скаута (свежие сверху):",
+                        "Брифов Скаута пока нет (memory/briefs/ пуст). Напиши из присланного "
+                        "направления или попроси Скаута /scan.", int(args.get("n", 8)))
     if name == "read_brief":
-        return _read_brief(args.get("which", "latest"))
+        return _read_md(BRIEFS_DIR, args.get("which", "latest"),
+                        "Брифов Скаута нет (memory/briefs/ пуст). Пиши из присланного направления "
+                        "или попроси Скаута /scan.",
+                        f"Бриф по запросу «{args.get('which', '')}» не найден. Доступны:")
+    if name == "list_drafts":
+        return _list_md(DRAFTS_DIR, "Твои драфты (свежие сверху):",
+                        "Драфтов пока нет (memory/drafts/ пуст).", int(args.get("n", 8)))
+    if name == "read_draft":
+        return _read_md(DRAFTS_DIR, args.get("which", "latest"),
+                        "Драфтов пока нет (memory/drafts/ пуст).",
+                        f"Драфт по запросу «{args.get('which', '')}» не найден. Доступны:")
     if name == "find_posts":
         return analytics.find_posts(args["query"], int(args.get("n", 8)))
     if name == "by_theme":
         return analytics.by_theme(args["theme"])
     if name == "save_draft":
         return _save_draft(args)
+    if name == "record_lesson":
+        return _record_lesson(args)
     return f"Неизвестный инструмент: {name}"
