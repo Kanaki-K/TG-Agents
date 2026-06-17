@@ -81,15 +81,18 @@ TOOLS = [
     },
     {
         "name": "save_draft",
-        "description": "Сохранить готовый драфт поста в архив (memory/drafts/). Вызывай ОДИН раз в конце, "
-                       "передав ПОЛНЫЙ текст поста (как пойдёт в чат, без служебных пометок). После — "
-                       "выдай пост в чат владельцу. Это драфт на правку: публикует владелец, не ты.",
+        "description": "Сохранить готовый драфт поста (memory/drafts/) + ПРОГНАТЬ КОД-ЛИНТЕР. Вызывай ОДИН "
+                       "раз в конце, передав ПОЛНЫЙ текст и kind=формат (флагман/…). Линтер сам чинит "
+                       "типографику (тире/кавычки) и возвращает: (1) предупреждения, что исправить вручную "
+                       "(валюта перед числом, размер флагмана, футер, «является»); (2) ВЫЧИЩЕННУЮ версию "
+                       "поста. Исправь предупреждения и выдай в чат ИМЕННО возвращённую версию (с правками). "
+                       "Это драфт на правку: публикует владелец, не ты.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "content": {"type": "string", "description": "полный текст драфта поста (markdown)"},
                 "slug": {"type": "string", "description": "короткий ярлык темы, напр. 'ai-stablecoins' (необязательно)"},
-                "kind": {"type": "string", "description": "'flagman' | 'light' (необязательно, для имени файла)"},
+                "kind": {"type": "string", "description": "формат для линтера/имени: флагман|обучающий|психология|личный|короткий|light"},
             },
             "required": ["content"],
         },
@@ -230,15 +233,52 @@ def _read_md(d, which: str, empty: str, not_found: str) -> str:
     return f"=== {target.name} ===\n{body}"
 
 
+def _lint(content: str, kind: str = "") -> tuple:
+    """Код-гейт типографики/размера (детерминированно, не на доверии к модели).
+
+    Авто-чинит механику (тире/кавычки к канону мануала §5). Возвращает (чистый_текст, список
+    предупреждений) для того, что нельзя править вслепую (валюта, размер, футер, «является»).
+    """
+    clean = content or ""
+    for d in ("—", "–", "―"):          # длинные тире → обычный дефис
+        clean = clean.replace(d, "-")
+    for q in ("«", "»", "“", "”", "„", "‟"):  # ёлочки/фигурные кавычки → прямые
+        clean = clean.replace(q, '"')
+    warns = []
+    cur = len(re.findall(r"\$\s?\d", clean))
+    if cur:
+        warns.append(f"валюта ПЕРЕД числом — {cur} шт (нужно ПОСЛЕ: 73 млн$, не $73 млн)")
+    yav = len(re.findall(r"явля[ею]", clean, re.IGNORECASE))
+    if yav:
+        warns.append(f"«является/являются» — {yav} шт (убрать, §7)")
+    k = (kind or "").lower()
+    if "флагман" in k or "flagman" in k:
+        n = len(clean)
+        if n < 2800:
+            warns.append(f"флагман КОРОТКИЙ: {n} знаков (норма 2800–4000+) — добери глубины")
+        elif n > 4500:
+            warns.append(f"флагман ДЛИННЫЙ: {n} знаков (норма 2800–4000+) — поджми")
+        if "notion" not in clean.lower() and "🖥" not in clean:
+            warns.append("нет футера (🖥 Медиа | 🥸 Мемы | 📱 Notion)")
+    return clean, warns
+
+
 def _save_draft(args: dict) -> str:
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     kind = str(args.get("kind", "") or "").strip().lower()
+    clean, warns = _lint(args.get("content", ""), kind)
     base = "-".join(x for x in (args.get("slug", "") or "post", kind) if x)
     slug = re.sub(r"[^a-z0-9-]+", "-", base.lower()).strip("-") or "post"
     fname = f"{date.today().isoformat()}-{slug}.md"
-    (DRAFTS_DIR / fname).write_text(args.get("content", ""), encoding="utf-8", newline="\n")
-    return (f"Драфт сохранён: memory/drafts/{fname}. Теперь выдай пост в чат владельцу — "
-            f"это драфт на правку, публикует он.")
+    (DRAFTS_DIR / fname).write_text(clean, encoding="utf-8", newline="\n")
+    msg = f"Драфт сохранён: memory/drafts/{fname}. Типографику привёл к канону (тире/кавычки)."
+    if warns:
+        msg += " ⚠ ИСПРАВЬ перед выдачей: " + "; ".join(warns) + "."
+    else:
+        msg += " Линтер чистый."
+    msg += ("\n\n--- ВЫДАЙ В ЧАТ ИМЕННО ЭТУ ВЕРСИЮ (с учётом правок выше; это драфт, публикует владелец) ---\n"
+            + clean)
+    return msg
 
 
 def _record_lesson(args: dict) -> str:
