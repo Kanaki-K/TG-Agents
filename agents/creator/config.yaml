@@ -4,3 +4,4 @@ model: claude-opus-4-8            # письмо флагманов — каче
 token_env: CREATOR_BOT_TOKEN     # свой бот (см. .env)
 api_key_env: CREATOR_ANTHROPIC_KEY  # свой ключ Claude (если пуст — общий ANTHROPIC_API_KEY)
 thinking: adaptive               # адаптивное мышление: острее композиция и точнее соблюдение красных линий. Поддерживает Opus/Sonnet 4.6. Убери строку, чтобы выключить.
+web_search: true                 # фактчек: проверять цифры/даты/цены ПЕРЕД выдачей (самая дорогая ошибка — непроверенная цифра). false, если SDK/доступ не поддерживает.
