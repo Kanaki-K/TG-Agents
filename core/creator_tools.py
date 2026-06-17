@@ -153,6 +153,21 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "recent_posts",
+        "description": "Последние N постов (что читатели видели недавно) — заголовок + начало/конец текста. "
+                       "СВЕРКА СВЕЖЕСТИ ПРИЁМОВ (анти-самоповтор): перед сдачей проверь, что твой заголовок, "
+                       "тип хука, главная мысль-антитеза и закрывающий вопрос НЕ повторяют последние ~5 "
+                       "постов по смыслу. Окно скользящее (~5), не весь канал. post_format — сверять внутри "
+                       "формата (напр. последние флагманы).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "description": "сколько последних (по умолч. 5)"},
+                "post_format": {"type": "string", "description": "сверять внутри формата (необязательно)"},
+            },
+        },
+    },
+    {
         "name": "propose_standard",
         "description": "ПРЕДЛОЖИТЬ обновлённый стандарт постов платформы (gate: живой файл НЕ трогает). "
                        "Пишет в memory/post_standard.proposed.md на проверку владельцу. Сюда кладёшь "
@@ -304,6 +319,8 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.by_dimension(args.get("dim", "weekday"))
     if name == "themes_overview":
         return analytics.themes_overview()
+    if name == "recent_posts":
+        return analytics.recent_posts(int(args.get("n", 5)), args.get("post_format", ""))
     if name == "propose_standard":
         return _propose_standard(args)
     if name == "apply_standard":

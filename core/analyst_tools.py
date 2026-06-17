@@ -139,6 +139,19 @@ TOOLS = [
         },
     },
     {
+        "name": "recent_posts",
+        "description": "Последние N постов по дате (заголовок + начало/конец текста) — что аудитория "
+                       "видела недавно. Для проверки СВЕЖЕСТИ ПРИЁМОВ (не повторять подряд хук/антитезу/"
+                       "вопрос/заголовок). post_format — внутри формата (напр. последние флагманы).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "n": {"type": "integer", "description": "сколько последних (по умолч. 5)"},
+                "post_format": {"type": "string", "description": "фильтр по формату (необязательно)"},
+            },
+        },
+    },
+    {
         "name": "classify_formats",
         "description": "Разметить ФОРМАТ всех постов (колонка формата). Эвристика: медиа без текста → "
                        "медиа; розыгрыши → служебное; МЕДИА + длинный текст (>=450 слов) → флагман; иначе "
@@ -178,6 +191,8 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.formats_overview()
     if name == "by_format":
         return analytics.by_format(args["format"])
+    if name == "recent_posts":
+        return analytics.recent_posts(int(args.get("n", 5)), args.get("post_format", ""))
     if name == "classify_formats":
         return analytics.auto_classify_formats(bool(args.get("force", False)))
     if name == "set_format":

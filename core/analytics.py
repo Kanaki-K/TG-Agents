@@ -352,6 +352,36 @@ def find_posts(query: str, n: int = 8) -> str:
     return f"Найдено {len(hits)} (по «{query}»):\n" + "\n".join(_fmt_row(p, "views") for p in hits)
 
 
+def _headtail(t: str, head: int = 600, tail: int = 400) -> str:
+    t = (t or "").strip()
+    if len(t) <= head + tail:
+        return t
+    return t[:head] + "\n   […]\n" + t[-tail:]
+
+
+def recent_posts(n: int = 5, post_format: str = "") -> str:
+    """Последние N постов по дате (что читатели видели недавно) — заголовок + начало и конец текста.
+
+    Для проверки СВЕЖЕСТИ ПРИЁМОВ (анти-самоповтор): не повторять подряд тип хука, каркас
+    главной антитезы, угол закрывающего вопроса и формулировку заголовка. Окно ~5, не весь канал.
+    """
+    posts = [p for p in _load_posts() if p.get("dt")]
+    if not posts:
+        return "Данных нет."
+    if post_format:
+        pf = post_format.strip().lower()
+        posts = [p for p in posts if pf in p["format"]]
+    posts.sort(key=lambda p: p["dt"], reverse=True)
+    posts = posts[:max(1, min(n, 15))]
+    head = (f"Последние {len(posts)} постов" + (f" формата «{post_format}»" if post_format else "")
+            + " — НЕ повторяй их приёмы (хук, антитезу, вопрос, заголовок) в новом посте:")
+    out = [head]
+    for p in posts:
+        out.append(f"\n#{p['id']} [{p['date'][:10]}] {p['format'] or '—'} | {p['title'] or p['preview']}\n"
+                   f"{_headtail(p['text'])}")
+    return "\n".join(out)
+
+
 def refresh_metrics(full: bool = True) -> str:
     """«Обновить»: пересобрать свежие метрики и таблицу (запуск refresh.py).
 
