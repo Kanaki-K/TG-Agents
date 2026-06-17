@@ -289,6 +289,13 @@ def _lint(content: str, kind: str = "") -> tuple:
     eto = re.findall(r"Это не [^.!?\n]{1,60}[.!?]+\s+Это\b", clean)
     if eto:
         warns.append(f"«Это не X. Это Y» — {len(eto)} шт (ИИ-пул-квота §11.5, скажи Y прямо с фактом)")
+    # Якорный жирный (§5): плотность 10–15%. >18% (с учётом заголовков) = «выделил слишком много»,
+    # жирное обесценивается. Считаем долю символов внутри **…** от видимого текста.
+    bold_chars = sum(len(b) for b in re.findall(r"\*\*(.+?)\*\*", clean, re.DOTALL))
+    vis = len(clean.replace("**", "")) or 1
+    if bold_chars / vis > 0.18:
+        warns.append(f"жирного слишком много: ~{round(100 * bold_chars / vis)}% текста (норма 10–15%, §5) — "
+                     f"сними лишнее (skim-тест: только несущие слова), иначе жирное перестаёт работать")
     k = (kind or "").lower()
     if "флагман" in k or "flagman" in k:
         n = len(clean.encode("utf-16-le")) // 2  # точный счёт Telegram (UTF-16 units = лимит 4096), не байты
