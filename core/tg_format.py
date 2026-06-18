@@ -12,11 +12,34 @@ HTML — переводим в него самые частые конструк
 from __future__ import annotations
 
 import html
+import json
 import re
+from pathlib import Path
+
+# Карта «обычный эмодзи-дублёр → custom_emoji_id» (собирается
+# connectors/telegram_emoji/collect_ids.py). Если файла нет — кастом не подставляем,
+# рендерим обычные эмодзи как есть (ничего не ломается).
+_EMOJI_MAP_PATH = Path(__file__).resolve().parents[1] / "data" / "custom_emoji.json"
+_emoji_map_cache: dict | None = None
 
 
-def to_telegram_html(text: str) -> str:
-    """Перевести Markdown-ответ модели в безопасный для Telegram HTML."""
+def _custom_emoji_map() -> dict:
+    """Лениво грузим карту кастом-эмодзи (один раз за процесс)."""
+    global _emoji_map_cache
+    if _emoji_map_cache is None:
+        try:
+            _emoji_map_cache = json.loads(_EMOJI_MAP_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            _emoji_map_cache = {}
+    return _emoji_map_cache
+
+
+def to_telegram_html(text: str, *, custom_emoji: bool = False) -> str:
+    """Перевести Markdown-ответ модели в безопасный для Telegram HTML.
+
+    custom_emoji=True — подставлять кастомные эмодзи из карты (только агенты,
+    которым это включено, напр. Криейтор). По умолчанию выключено.
+    """
     stash: list[str] = []
 
     def keep(fragment: str) -> str:
@@ -45,6 +68,15 @@ def to_telegram_html(text: str) -> str:
 
     # 6. Маркеры списков «- » / «* » в начале строки → «• »
     text = re.sub(r"(?m)^(\s*)[-*]\s+", r"\1• ", text)
+
+    # 6.5 Кастомные эмодзи: известные дублёры оборачиваем в <tg-emoji emoji-id=…>.
+    # Делаем ДО восстановления кода из stash — эмодзи внутри <pre>/<code> (сейчас они
+    # плейсхолдеры \x00i\x00) не тронем. Только если агенту включено (custom_emoji=True)
+    # и карта непуста — иначе шаг пропускается.
+    if custom_emoji:
+        for emoji, eid in _custom_emoji_map().items():
+            if emoji and emoji in text:
+                text = text.replace(emoji, f'<tg-emoji emoji-id="{eid}">{emoji}</tg-emoji>')
 
     # 7. Возвращаем спрятанный код
     for i, fragment in enumerate(stash):

@@ -143,12 +143,13 @@ def _chunks(text: str, size: int = CHUNK) -> list[str]:
     return out or [text]
 
 
-async def _send(m: Message, text: str) -> None:
+async def _send(m: Message, text: str, *, custom_emoji: bool = False) -> None:
     """Отправить ответ модели как Telegram-HTML, разбив длинный текст на части.
 
     Telegram режет сообщения на 4096 символов — длинные ответы шлём кусками.
     На каждый кусок: пробуем HTML; если разметка кривая (400) — шлём чистым
     текстом, чтобы ответ дошёл, а бот не упал.
+    custom_emoji — подставлять ли кастомные эмодзи (только агенты с флагом).
     """
     parts = [p.strip() for p in text.split(SPLIT_MARK)] if SPLIT_MARK in text else [text]
     for part in parts:
@@ -156,7 +157,8 @@ async def _send(m: Message, text: str) -> None:
             continue
         for chunk in _chunks(part):
             try:
-                await m.answer(tg_format.to_telegram_html(chunk), parse_mode="HTML")
+                await m.answer(tg_format.to_telegram_html(chunk, custom_emoji=custom_emoji),
+                               parse_mode="HTML")
             except TelegramBadRequest:
                 await m.answer(tg_format.strip_markdown(chunk)[:TG_LIMIT])
 
@@ -176,6 +178,7 @@ async def run(
     model = agent["model"]
     api_key = config.agent_api_key(agent)   # свой ключ агента или общий
     commands = commands or {}
+    render_emoji = bool(agent.get("custom_emoji"))  # кастом-эмодзи только у агентов с custom_emoji: true
     history: dict[int, list] = {}   # короткий хвост диалога по пользователю
     busy: set[int] = set()          # пользователи с уже идущим запросом (защита от параллельного дубля)
     owner_file = config.ROOT / "data" / f"{agent_name}_owner.txt"  # куда слать проактивные отчёты
@@ -205,7 +208,7 @@ async def run(
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
-            await _send(m, text or "…")
+            await _send(m, text or "…", custom_emoji=render_emoji)
         finally:
             busy.discard(uid)
 
