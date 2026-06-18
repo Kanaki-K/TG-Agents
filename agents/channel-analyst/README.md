@@ -32,5 +32,5 @@ python run_analyst.py
 - Код: `core/analyst_bot.py`, `core/analyst_tools.py`, `core/analytics.py`
 
 ## Заметки
-Метрики — из последнего сбора (`telegram_export`); live-данных/Metricool пока нет. Его «руки»
+Метрики — из последнего сбора (`telegram_export`); live-данных пока нет. Threads — через свой коннектор (офиц. API Meta) позже; Metricool выкинут (18.06). Его «руки»
 (`themes_overview`, `find_posts`, `by_theme`) переиспользует Скаут для дедупа и ранжирования.
