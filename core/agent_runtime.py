@@ -268,16 +268,21 @@ async def _send_with_cover(m: Message, text: str, img: str, *,
     над текстом (если длиннее). Картинка всегда СВЕРХУ. True — если ушло одним сообщением.
     """
     vis = len(tg_format.strip_markdown(text))   # длина ПОСЛЕ парсинга (без markdown-маркеров)
+    logging.info("[обложка] есть картинка; длина поста=%d (лимит подписи=%d)", vis, CAPTION_LIMIT)
     html = tg_format.to_telegram_html(text, custom_emoji=custom_emoji)
     if vis <= CAPTION_LIMIT:                      # короткий пост → фото + подпись (картинка сверху)
+        logging.info("[обложка] путь: фото+подпись, одним сообщением")
         await m.answer_photo(FSInputFile(img), caption=html, parse_mode="HTML")
         return True
     if vis <= TEXT_LIMIT:                          # длинный → обложка превью над текстом
         url = await _cover_public_url(m, img, cover_url)
+        logging.info("[обложка] путь: превью над текстом; URL обложки=%s", url)
         if url:
             await m.answer(html, parse_mode="HTML", link_preview_options=LinkPreviewOptions(
                 url=url, prefer_large_media=True, show_above_text=True))
+            logging.info("[обложка] отправлено одним сообщением (превью над текстом)")
             return True
+    logging.warning("[обложка] одним сообщением НЕ вышло (URL пуст или текст >4096) — будет откат")
     return False
 
 
