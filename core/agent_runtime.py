@@ -264,6 +264,10 @@ async def _cover_public_url(m: Message, img: str, cover_url: str | None) -> str 
     всегда (внешние хостинги у владельца режет сеть). Сгенерированную обложку заливаем на хостинг.
     None — доставка откатится на фото+текст раздельно.
     """
+    test_url = config.get_optional("GPT_IMAGE_TEST_URL").strip()
+    if test_url:  # ДИАГНОСТИКА: заведомо рабочий публичный URL — проверить, рисует ли Telegram превью
+        logging.info("[обложка] TEST URL (диагностика превью): %s", test_url)
+        return test_url
     if cover_url:
         logging.info("[обложка] беру URL присланного фото (Telegram): %s", cover_url)
         return cover_url
