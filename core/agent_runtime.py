@@ -224,31 +224,30 @@ async def _upload_image(path: Path) -> str | None:
     telegra.ph (инфраструктура самого Telegram: прямой линк, доступен везде, где работает Telegram,
     не режется как внешние сервисы); фолбэк — catbox. Не вышло нигде — None (откат на 2 сообщения).
     """
-    try:
-        import aiohttp
+    import aiohttp
 
+    ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TG-Agents/1.0"}  # хосты режут «пустой» UA
+    img_bytes = path.read_bytes()
+    timeout = aiohttp.ClientTimeout(total=60)
+    # 1) 0x0.st — простой и дружелюбный к скриптам, отдаёт прямой URL в теле ответа
+    try:
         data = aiohttp.FormData()
-        data.add_field("file", path.read_bytes(), filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession() as s:
-            async with s.post("https://telegra.ph/upload", data=data,
-                              timeout=aiohttp.ClientTimeout(total=60)) as r:
-                body = await r.text()
-                logging.info("[обложка] telegra.ph: HTTP %s, ответ=%.200s", r.status, body)
-                j = json.loads(body)
-                if isinstance(j, list) and j and j[0].get("src"):
-                    return "https://telegra.ph" + j[0]["src"]
+        data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
+        async with aiohttp.ClientSession(headers=ua) as s:
+            async with s.post("https://0x0.st", data=data, timeout=timeout) as r:
+                body = (await r.text()).strip()
+                logging.info("[обложка] 0x0.st: HTTP %s, ответ=%.200s", r.status, body)
+                if r.status == 200 and body.startswith("http"):
+                    return body
     except Exception:
-        logging.exception("[обложка] telegra.ph upload не вышел — пробую catbox")
+        logging.exception("[обложка] 0x0.st не вышел — пробую catbox")
+    # 2) catbox — фолбэк
     try:
-        import aiohttp
-
         data = aiohttp.FormData()
         data.add_field("reqtype", "fileupload")
-        data.add_field("fileToUpload", path.read_bytes(),
-                       filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession() as s:
-            async with s.post("https://catbox.moe/user/api.php", data=data,
-                              timeout=aiohttp.ClientTimeout(total=60)) as r:
+        data.add_field("fileToUpload", img_bytes, filename=path.name, content_type="image/png")
+        async with aiohttp.ClientSession(headers=ua) as s:
+            async with s.post("https://catbox.moe/user/api.php", data=data, timeout=timeout) as r:
                 url = (await r.text()).strip()
                 logging.info("[обложка] catbox: HTTP %s, ответ=%.200s", r.status, url)
                 return url if url.startswith("http") else None
