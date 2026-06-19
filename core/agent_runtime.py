@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, LinkPreviewOptions, Message
@@ -258,11 +258,22 @@ async def _send_with_cover(m: Message, text: str, img: str, *, custom_emoji: boo
     return False
 
 
-async def _deliver(m: Message, text: str, outbox: Path | None, *, custom_emoji: bool) -> None:
-    """Выдать ответ. Если за ход появилась обложка — слать её и пост ОДНИМ сообщением; иначе
-    обычный текст. При любом сбое «одного сообщения» — откат на фото+текст раздельно (не хуже старого).
+async def _save_incoming_photo(m: Message) -> str:
+    """Скачать самое крупное присланное владельцем фото в data/incoming/ и вернуть путь к файлу."""
+    photo = m.photo[-1]  # последний размер в списке = самый крупный
+    dest = config.ROOT / "data" / "incoming" / f"{photo.file_unique_id}.jpg"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    await m.bot.download(photo, destination=dest)
+    return str(dest)
+
+
+async def _deliver(m: Message, text: str, outbox: Path | None, *,
+                   custom_emoji: bool, cover: str | None = None) -> None:
+    """Выдать ответ. Обложка берётся из cover (присланной владельцем картинки) ИЛИ из аутбокса
+    (сгенерированной make_image); если есть — слать её и пост ОДНИМ сообщением, иначе обычный текст.
+    При любом сбое «одного сообщения» — откат на фото+текст раздельно (не хуже старого).
     """
-    img = _pop_outbox_image(outbox)
+    img = cover or _pop_outbox_image(outbox)
     if not img:
         await _send(m, text, custom_emoji=custom_emoji)
         return
@@ -300,7 +311,7 @@ async def run(
     owner_file = config.ROOT / "data" / f"{agent_name}_owner.txt"  # куда слать проактивные отчёты
     dp = Dispatcher()
 
-    async def _turn(m: Message, user_text: str) -> None:
+    async def _turn(m: Message, user_text: str, cover: str | None = None) -> None:
         uid = m.from_user.id
         _write_owner(owner_file, m.chat.id)  # запоминаем чат для проактивных (еженедельных) отчётов
         # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
@@ -325,7 +336,7 @@ async def run(
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
-            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji)
+            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji, cover=cover)
         finally:
             busy.discard(uid)
 
@@ -342,6 +353,26 @@ async def run(
 
     for cmd, preset in commands.items():
         dp.message(Command(cmd))(_make_preset(preset))
+
+    if media_outbox is not None:  # агенты с «руками»-картинками умеют принять фото от владельца
+        @dp.message(F.photo)
+        async def _photo(m: Message) -> None:
+            # присланное фото = готовая обложка; склеим её с постом одним сообщением (картинка сверху).
+            try:
+                cover = await _save_incoming_photo(m)
+            except Exception:
+                logging.exception("Не смог скачать присланное фото")
+                await m.answer("Не смог скачать картинку — пришли, пожалуйста, ещё раз.")
+                return
+            caption = (m.caption or "").strip()
+            base = caption or "(подписи к фото нет — текст поста возьми из последнего поста в нашем диалоге)"
+            instruction = (
+                f"{base}\n\n"
+                "[Система: к твоему ответу УЖЕ прикреплена присланная владельцем картинка — она уйдёт "
+                "обложкой СВЕРХУ одним сообщением с твоим текстом. Выведи ТОЛЬКО финальный пост, готовый "
+                "к публикации: без меты, без слов про картинку, без заметок и вопросов, не повторяй дважды.]"
+            )
+            await _turn(m, instruction, cover=cover)
 
     @dp.message()
     async def _chat(m: Message) -> None:
