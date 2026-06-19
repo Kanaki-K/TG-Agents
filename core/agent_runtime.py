@@ -217,12 +217,26 @@ def _pop_outbox_image(outbox: Path | None) -> str | None:
 
 
 async def _upload_image(path: Path) -> str | None:
-    """Залить картинку на публичный хостинг (catbox), вернуть URL — для «обложки над текстом».
+    """Залить картинку и вернуть ПРЯМОЙ публичный URL — для «обложки над текстом» у длинных постов.
 
-    Длинный пост (>1024) нельзя положить в подпись к фото, поэтому картинку показываем
-    крупным превью ссылки над текстом, а превью Telegram тянет только по ПУБЛИЧНОМУ URL.
-    Обложка канала не секрет, так что внешний хостинг ок. Не вышло — вернём None (откат).
+    Длинный пост (>1024) в подпись к фото не влезает, поэтому картинку показываем крупным превью
+    ссылки над текстом — а превью Telegram тянет только по публичному URL. Основной хост —
+    telegra.ph (инфраструктура самого Telegram: прямой линк, доступен везде, где работает Telegram,
+    не режется как внешние сервисы); фолбэк — catbox. Не вышло нигде — None (откат на 2 сообщения).
     """
+    try:
+        import aiohttp
+
+        data = aiohttp.FormData()
+        data.add_field("file", path.read_bytes(), filename=path.name, content_type="image/png")
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://telegra.ph/upload", data=data,
+                              timeout=aiohttp.ClientTimeout(total=60)) as r:
+                j = await r.json(content_type=None)
+                if isinstance(j, list) and j and j[0].get("src"):
+                    return "https://telegra.ph" + j[0]["src"]
+    except Exception:
+        logging.exception("telegra.ph upload не вышел — пробую catbox")
     try:
         import aiohttp
 
@@ -236,11 +250,20 @@ async def _upload_image(path: Path) -> str | None:
                 url = (await r.text()).strip()
                 return url if url.startswith("http") else None
     except Exception:
-        logging.exception("Не смог залить обложку на хостинг")
+        logging.exception("Не смог залить обложку (catbox тоже)")
         return None
 
 
-async def _send_with_cover(m: Message, text: str, img: str, *, custom_emoji: bool) -> bool:
+async def _cover_public_url(m: Message, img: str, cover_url: str | None) -> str | None:
+    """Публичный URL обложки для «превью над текстом». Сначала заливаем на telegra.ph/catbox
+    (прямой линк, надёжно рендерится превью), и лишь в крайнем случае — URL присланного фото
+    в самом Telegram. None — доставка откатится на фото+текст раздельно.
+    """
+    return await _upload_image(Path(img)) or cover_url
+
+
+async def _send_with_cover(m: Message, text: str, img: str, *,
+                           custom_emoji: bool, cover_url: str | None = None) -> bool:
     """Прислать ОДНИМ сообщением: фото+подпись (если текст ≤1024) либо обложка крупным превью
     над текстом (если длиннее). Картинка всегда СВЕРХУ. True — если ушло одним сообщением.
     """
@@ -250,7 +273,7 @@ async def _send_with_cover(m: Message, text: str, img: str, *, custom_emoji: boo
         await m.answer_photo(FSInputFile(img), caption=html, parse_mode="HTML")
         return True
     if vis <= TEXT_LIMIT:                          # длинный → обложка превью над текстом
-        url = await _upload_image(Path(img))
+        url = await _cover_public_url(m, img, cover_url)
         if url:
             await m.answer(html, parse_mode="HTML", link_preview_options=LinkPreviewOptions(
                 url=url, prefer_large_media=True, show_above_text=True))
@@ -267,10 +290,11 @@ async def _save_incoming_photo(m: Message) -> str:
     return str(dest)
 
 
-async def _deliver(m: Message, text: str, outbox: Path | None, *,
-                   custom_emoji: bool, cover: str | None = None) -> None:
+async def _deliver(m: Message, text: str, outbox: Path | None, *, custom_emoji: bool,
+                   cover: str | None = None, cover_url: str | None = None) -> None:
     """Выдать ответ. Обложка берётся из cover (присланной владельцем картинки) ИЛИ из аутбокса
     (сгенерированной make_image); если есть — слать её и пост ОДНИМ сообщением, иначе обычный текст.
+    cover_url — готовый публичный URL обложки (для присланного фото — URL самого Telegram).
     При любом сбое «одного сообщения» — откат на фото+текст раздельно (не хуже старого).
     """
     img = cover or _pop_outbox_image(outbox)
@@ -278,7 +302,7 @@ async def _deliver(m: Message, text: str, outbox: Path | None, *,
         await _send(m, text, custom_emoji=custom_emoji)
         return
     try:
-        if await _send_with_cover(m, text, img, custom_emoji=custom_emoji):
+        if await _send_with_cover(m, text, img, custom_emoji=custom_emoji, cover_url=cover_url):
             return
     except Exception:
         logging.exception("Одним сообщением не вышло — шлю фото и текст раздельно")
@@ -311,7 +335,8 @@ async def run(
     owner_file = config.ROOT / "data" / f"{agent_name}_owner.txt"  # куда слать проактивные отчёты
     dp = Dispatcher()
 
-    async def _turn(m: Message, user_text: str, cover: str | None = None) -> None:
+    async def _turn(m: Message, user_text: str, cover: str | None = None,
+                    cover_url: str | None = None) -> None:
         uid = m.from_user.id
         _write_owner(owner_file, m.chat.id)  # запоминаем чат для проактивных (еженедельных) отчётов
         # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
@@ -336,7 +361,8 @@ async def run(
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
-            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji, cover=cover)
+            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji,
+                           cover=cover, cover_url=cover_url)
         finally:
             busy.discard(uid)
 
@@ -364,6 +390,12 @@ async def run(
                 logging.exception("Не смог скачать присланное фото")
                 await m.answer("Не смог скачать картинку — пришли, пожалуйста, ещё раз.")
                 return
+            cover_url = None  # URL самого Telegram — для «превью над текстом» у длинных постов (надёжно)
+            try:
+                f = await m.bot.get_file(m.photo[-1].file_id)
+                cover_url = f"https://api.telegram.org/file/bot{m.bot.token}/{f.file_path}"
+            except Exception:
+                logging.exception("Не смог получить telegram-URL присланного фото")
             caption = (m.caption or "").strip()
             base = caption or "(подписи к фото нет — текст поста возьми из последнего поста в нашем диалоге)"
             instruction = (
