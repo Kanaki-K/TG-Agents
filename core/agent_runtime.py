@@ -189,10 +189,6 @@ def _clear_outbox(outbox: Path | None) -> None:
             logging.exception("Не смог очистить медиа-аутбокс")
 
 
-CAPTION_LIMIT = 1024   # лимит Telegram на подпись к фото (sendPhoto caption)
-TEXT_LIMIT = 4096      # лимит Telegram на текстовое сообщение (и превью-картинка над ним)
-
-
 def _pop_outbox_image(outbox: Path | None) -> str | None:
     """Достать путь к картинке, что инструмент сложил за этот ход, и очистить аутбокс.
 
@@ -216,89 +212,6 @@ def _pop_outbox_image(outbox: Path | None) -> str | None:
     return None
 
 
-async def _upload_image(path: Path) -> str | None:
-    """Залить картинку и вернуть ПРЯМОЙ публичный URL — для «обложки над текстом» у длинных постов.
-
-    Длинный пост (>1024) в подпись к фото не влезает, поэтому картинку показываем крупным превью
-    ссылки над текстом — а превью Telegram тянет только по публичному URL. Основной хост —
-    telegra.ph (инфраструктура самого Telegram: прямой линк, доступен везде, где работает Telegram,
-    не режется как внешние сервисы); фолбэк — catbox. Не вышло нигде — None (откат на 2 сообщения).
-    """
-    import aiohttp
-
-    ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TG-Agents/1.0"}  # хосты режут «пустой» UA
-    img_bytes = path.read_bytes()
-    timeout = aiohttp.ClientTimeout(total=60)
-    # 1) 0x0.st — простой и дружелюбный к скриптам, отдаёт прямой URL в теле ответа
-    try:
-        data = aiohttp.FormData()
-        data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession(headers=ua) as s:
-            async with s.post("https://0x0.st", data=data, timeout=timeout) as r:
-                body = (await r.text()).strip()
-                logging.info("[обложка] 0x0.st: HTTP %s, ответ=%.200s", r.status, body)
-                if r.status == 200 and body.startswith("http"):
-                    return body
-    except Exception:
-        logging.exception("[обложка] 0x0.st не вышел — пробую catbox")
-    # 2) catbox — фолбэк
-    try:
-        data = aiohttp.FormData()
-        data.add_field("reqtype", "fileupload")
-        data.add_field("fileToUpload", img_bytes, filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession(headers=ua) as s:
-            async with s.post("https://catbox.moe/user/api.php", data=data, timeout=timeout) as r:
-                url = (await r.text()).strip()
-                logging.info("[обложка] catbox: HTTP %s, ответ=%.200s", r.status, url)
-                return url if url.startswith("http") else None
-    except Exception:
-        logging.exception("[обложка] не смог залить обложку (catbox тоже)")
-        return None
-
-
-async def _cover_public_url(m: Message, img: str, cover_url: str | None) -> str | None:
-    """Публичный URL обложки для «превью над текстом».
-
-    Присланное фото (cover_url) уже на серверах Telegram — берём его URL ПЕРВЫМ: он достижим
-    всегда (внешние хостинги у владельца режет сеть). Сгенерированную обложку заливаем на хостинг.
-    None — доставка откатится на фото+текст раздельно.
-    """
-    test_url = config.get_optional("GPT_IMAGE_TEST_URL").strip()
-    if test_url:  # ДИАГНОСТИКА: заведомо рабочий публичный URL — проверить, рисует ли Telegram превью
-        logging.info("[обложка] TEST URL (диагностика превью): %s", test_url)
-        return test_url
-    if cover_url:
-        logging.info("[обложка] беру URL присланного фото (Telegram): %s", cover_url)
-        return cover_url
-    url = await _upload_image(Path(img))
-    logging.info("[обложка] загрузка сгенерированной обложки на хостинг → %s", url)
-    return url
-
-
-async def _send_with_cover(m: Message, text: str, img: str, *,
-                           custom_emoji: bool, cover_url: str | None = None) -> bool:
-    """Прислать ОДНИМ сообщением: фото+подпись (если текст ≤1024) либо обложка крупным превью
-    над текстом (если длиннее). Картинка всегда СВЕРХУ. True — если ушло одним сообщением.
-    """
-    vis = len(tg_format.strip_markdown(text))   # длина ПОСЛЕ парсинга (без markdown-маркеров)
-    logging.info("[обложка] есть картинка; длина поста=%d (лимит подписи=%d)", vis, CAPTION_LIMIT)
-    html = tg_format.to_telegram_html(text, custom_emoji=custom_emoji)
-    if vis <= CAPTION_LIMIT:                      # короткий пост → фото + подпись (картинка сверху)
-        logging.info("[обложка] путь: фото+подпись, одним сообщением")
-        await m.answer_photo(FSInputFile(img), caption=html, parse_mode="HTML")
-        return True
-    if vis <= TEXT_LIMIT:                          # длинный → обложка превью над текстом
-        url = await _cover_public_url(m, img, cover_url)
-        logging.info("[обложка] путь: превью над текстом; URL обложки=%s", url)
-        if url:
-            await m.answer(html, parse_mode="HTML", link_preview_options=LinkPreviewOptions(
-                url=url, prefer_large_media=True, show_above_text=True))
-            logging.info("[обложка] отправлено одним сообщением (превью над текстом)")
-            return True
-    logging.warning("[обложка] одним сообщением НЕ вышло (URL пуст или текст >4096) — будет откат")
-    return False
-
-
 async def _save_incoming_photo(m: Message) -> str:
     """Скачать самое крупное присланное владельцем фото в data/incoming/ и вернуть путь к файлу."""
     photo = m.photo[-1]  # последний размер в списке = самый крупный
@@ -308,27 +221,21 @@ async def _save_incoming_photo(m: Message) -> str:
     return str(dest)
 
 
-async def _deliver(m: Message, text: str, outbox: Path | None, *, custom_emoji: bool,
-                   cover: str | None = None, cover_url: str | None = None) -> None:
-    """Выдать ответ. Обложка берётся из cover (присланной владельцем картинки) ИЛИ из аутбокса
-    (сгенерированной make_image); если есть — слать её и пост ОДНИМ сообщением, иначе обычный текст.
-    cover_url — готовый публичный URL обложки (для присланного фото — URL самого Telegram).
-    При любом сбое «одного сообщения» — откат на фото+текст раздельно (не хуже старого).
+async def _deliver(m: Message, text: str, outbox: Path | None, *,
+                   custom_emoji: bool, cover: str | None = None) -> None:
+    """Выдать ответ. Если за ход появилась обложка (cover присланной владельцем картинки ИЛИ из
+    аутбокса от make_image) — сначала шлём её ОТДЕЛЬНЫМ фото, затем чистый текст поста.
+
+    Нативную склейку «фото+текст одним сообщением» делает не Криейтор-бот (Bot API это не может
+    для длинных постов), а отдельный Публикатор на MTProto. Здесь — обложка + чистый текст.
     """
     img = cover or _pop_outbox_image(outbox)
-    if not img:
-        await _send(m, text, custom_emoji=custom_emoji)
-        return
-    try:
-        if await _send_with_cover(m, text, img, custom_emoji=custom_emoji, cover_url=cover_url):
-            return
-    except Exception:
-        logging.exception("Одним сообщением не вышло — шлю фото и текст раздельно")
-    try:
-        await m.answer_photo(FSInputFile(img))    # запасной путь: фото…
-    except Exception:
-        logging.exception("Не смог отправить картинку %s", img)
-    await _send(m, text, custom_emoji=custom_emoji)  # …и текст отдельно
+    if img:
+        try:
+            await m.answer_photo(FSInputFile(img))
+        except Exception:
+            logging.exception("Не смог отправить картинку %s", img)
+    await _send(m, text, custom_emoji=custom_emoji)
 
 
 async def run(
@@ -353,8 +260,7 @@ async def run(
     owner_file = config.ROOT / "data" / f"{agent_name}_owner.txt"  # куда слать проактивные отчёты
     dp = Dispatcher()
 
-    async def _turn(m: Message, user_text: str, cover: str | None = None,
-                    cover_url: str | None = None) -> None:
+    async def _turn(m: Message, user_text: str, cover: str | None = None) -> None:
         uid = m.from_user.id
         _write_owner(owner_file, m.chat.id)  # запоминаем чат для проактивных (еженедельных) отчётов
         # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
@@ -379,8 +285,7 @@ async def run(
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
-            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji,
-                           cover=cover, cover_url=cover_url)
+            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji, cover=cover)
         finally:
             busy.discard(uid)
 
@@ -401,26 +306,21 @@ async def run(
     if media_outbox is not None:  # агенты с «руками»-картинками умеют принять фото от владельца
         @dp.message(F.photo)
         async def _photo(m: Message) -> None:
-            # присланное фото = готовая обложка; склеим её с постом одним сообщением (картинка сверху).
+            # присланное фото = готовая обложка; вернём её фото + чистый текст поста (нативную
+            # склейку одним сообщением делает Публикатор на MTProto, не этот бот).
             try:
                 cover = await _save_incoming_photo(m)
             except Exception:
                 logging.exception("Не смог скачать присланное фото")
                 await m.answer("Не смог скачать картинку — пришли, пожалуйста, ещё раз.")
                 return
-            cover_url = None  # URL самого Telegram — для «превью над текстом» у длинных постов (надёжно)
-            try:
-                f = await m.bot.get_file(m.photo[-1].file_id)
-                cover_url = f"https://api.telegram.org/file/bot{m.bot.token}/{f.file_path}"
-            except Exception:
-                logging.exception("Не смог получить telegram-URL присланного фото")
             caption = (m.caption or "").strip()
             base = caption or "(подписи к фото нет — текст поста возьми из последнего поста в нашем диалоге)"
             instruction = (
                 f"{base}\n\n"
-                "[Система: к твоему ответу УЖЕ прикреплена присланная владельцем картинка — она уйдёт "
-                "обложкой СВЕРХУ одним сообщением с твоим текстом. Выведи ТОЛЬКО финальный пост, готовый "
-                "к публикации: без меты, без слов про картинку, без заметок и вопросов, не повторяй дважды.]"
+                "[Система: к твоему ответу прикреплена присланная владельцем картинка — она уйдёт "
+                "отдельным фото перед твоим текстом. Выведи ТОЛЬКО финальный пост, готовый к "
+                "публикации: без меты, без слов про картинку, без заметок и вопросов, не повторяй дважды.]"
             )
             await _turn(m, instruction, cover=cover)
 
@@ -430,9 +330,9 @@ async def run(
 
     bot = Bot(config.get_secret(agent["token_env"]))
     logging.info("Запускаю агента '%s' (модель %s)", agent_name, model)
-    if media_outbox is not None:  # маркер версии: видно в логе ТОЛЬКО на новом коде доставки
+    if media_outbox is not None:  # маркер версии в логе — подтвердить, что бот на свежем коде
         stub = config.get_optional("GPT_IMAGE_STUB").strip()
-        logging.info("Доставка обложки: пост+картинка ОДНИМ сообщением [build:onemsg]%s",
+        logging.info("Доставка: обложка отдельным фото + чистый текст [build:photo+text]%s",
                      " | GPT_IMAGE_STUB ВКЛ (готовая картинка, без ChatGPT)" if stub else "")
     specs = periodic if isinstance(periodic, list) else [periodic] if periodic else []
     for spec in specs:
