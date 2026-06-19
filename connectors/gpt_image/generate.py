@@ -199,11 +199,36 @@ def _capture_image(page, ctx, out: Path, timeout_s: int) -> Path:
     )
 
 
+def _stub_image() -> Path | None:
+    """ТЕСТОВЫЙ режим (GPT_IMAGE_STUB): вернуть УЖЕ готовую картинку, не дёргая ChatGPT.
+
+    Бережёт дневной лимит бёрнера, когда тестируем доставку, а не генерацию. Значение флага:
+    путь к картинке (абсолютный или от корня репо), либо 1/true/yes = взять самую свежую PNG
+    из data/gpt_images/. Пусто — обычная генерация.
+    """
+    val = config.get_optional("GPT_IMAGE_STUB").strip()
+    if not val:
+        return None
+    if val.lower() not in ("1", "true", "yes"):
+        p = Path(val)
+        p = p if p.is_absolute() else ROOT / val
+        return p if p.exists() else None
+    if OUT_DIR.exists():  # самая свежая картинка (кроме debug_*)
+        pics = sorted((f for f in OUT_DIR.glob("*.png") if not f.name.startswith("debug")),
+                      key=lambda f: f.stat().st_mtime, reverse=True)
+        if pics:
+            return pics[0]
+    return None
+
+
 def generate(prompt: str, out_name: str = "flagship.png", timeout_s: int = 180) -> Path:
     """Сгенерировать картинку по промпту через веб-ChatGPT бёрнера. Вернёт путь к PNG.
 
     prompt — собирается Криейтором из присланного владельцем шаблона + темы поста.
     """
+    stub = _stub_image()
+    if stub is not None:  # тестовый режим: отдаём готовую картинку, ChatGPT не трогаем
+        return stub
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as e:
