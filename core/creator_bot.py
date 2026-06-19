@@ -172,4 +172,5 @@ async def main() -> None:
         welcome=WELCOME,
         commands=COMMANDS,
         thinking=thinking,
+        media_outbox=creator_tools.MEDIA_OUTBOX,  # make_image кладёт сюда PNG → рантайм шлёт фото
     )

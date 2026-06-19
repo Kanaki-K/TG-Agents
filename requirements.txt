@@ -8,3 +8,4 @@ openpyxl>=3.1          # выгрузка таблицы в Excel
 qrcode>=7.4            # QR-вход в Telegram без кода по номеру (login.py)
 feedparser>=6.0        # чтение RSS/Atom-фидов — источники Скаута (Тир-2)
 twikit>=2.1            # X (Twitter) через сессию бёрнера — read-only разведка лидеров мнений (эдж Скаута)
+playwright>=1.44       # рендер картинок флагмана через веб-ChatGPT бёрнера (после pip: playwright install chromium)

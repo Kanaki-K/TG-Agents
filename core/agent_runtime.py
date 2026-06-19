@@ -15,12 +15,13 @@ import asyncio
 import json
 import logging
 from datetime import date
+from pathlib import Path
 from typing import Callable
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import FSInputFile, Message
 
 from core import config, llm, tg_format
 
@@ -175,6 +176,43 @@ async def _send(m: Message, text: str, *, custom_emoji: bool = False) -> None:
                 await m.answer(tg_format.strip_markdown(chunk)[:TG_LIMIT])
 
 
+def _clear_outbox(outbox: Path | None) -> None:
+    """Сбросить аутбокс ПЕРЕД ходом — чтобы отправить только картинки этого хода, не старьё."""
+    if outbox and outbox.exists():
+        try:
+            outbox.unlink()
+        except Exception:
+            logging.exception("Не смог очистить медиа-аутбокс")
+
+
+async def _flush_media(m: Message, outbox: Path | None) -> None:
+    """Отправить картинки, которые инструмент сложил в аутбокс за этот ход (фото отдельным сообщением).
+
+    Инструменты умеют возвращать только текст; фото отправляет рантайм. Путь к готовому PNG
+    инструмент пишет в файл-аутбокс (по строке на картинку); шлём и чистим. Сбой отправки одной
+    картинки не валит ход — логируем и идём дальше (текст поста владелец всё равно получит).
+    """
+    if not outbox or not outbox.exists():
+        return
+    try:
+        paths = [ln.strip() for ln in outbox.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except Exception:
+        paths = []
+    for p in paths:
+        fp = Path(p)
+        if not fp.exists():
+            logging.warning("Картинки из аутбокса нет на диске: %s", fp)
+            continue
+        try:
+            await m.answer_photo(FSInputFile(str(fp)))
+        except Exception:
+            logging.exception("Не смог отправить картинку %s", fp)
+    try:
+        outbox.unlink()
+    except Exception:
+        logging.exception("Не смог очистить медиа-аутбокс после отправки")
+
+
 async def run(
     agent_name: str,
     *,
@@ -185,6 +223,7 @@ async def run(
     commands: dict[str, str] | None = None,
     periodic: dict | list | None = None,  # один спец или список (несколько плановых задач)
     thinking: dict | None = None,         # конфиг мышления модели (напр. {"type": "adaptive"})
+    media_outbox: Path | None = None,     # файл-аутбокс картинок (агенты с «руками»-рендером); None = нет
 ) -> None:
     agent = config.load_agent(agent_name)
     model = agent["model"]
@@ -213,6 +252,7 @@ async def run(
         busy.add(uid)
         try:
             await m.bot.send_chat_action(m.chat.id, "typing")
+            _clear_outbox(media_outbox)  # только картинки ЭТОГО хода, без старья от прошлого
             # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
             prior = _trim_history(history.get(uid, []))
             text, hist = await asyncio.to_thread(
@@ -220,6 +260,7 @@ async def run(
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
+            await _flush_media(m, media_outbox)  # картинку — вперёд, текст поста следом
             await _send(m, text or "…", custom_emoji=render_emoji)
         finally:
             busy.discard(uid)
