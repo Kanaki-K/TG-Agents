@@ -349,6 +349,10 @@ async def run(
 
     bot = Bot(config.get_secret(agent["token_env"]))
     logging.info("Запускаю агента '%s' (модель %s)", agent_name, model)
+    if media_outbox is not None:  # маркер версии: видно в логе ТОЛЬКО на новом коде доставки
+        stub = config.get_optional("GPT_IMAGE_STUB").strip()
+        logging.info("Доставка обложки: пост+картинка ОДНИМ сообщением [build:onemsg]%s",
+                     " | GPT_IMAGE_STUB ВКЛ (готовая картинка, без ChatGPT)" if stub else "")
     specs = periodic if isinstance(periodic, list) else [periodic] if periodic else []
     for spec in specs:
         asyncio.create_task(_periodic_loop(
