@@ -159,7 +159,19 @@ async def _send(m: Message, text: str, *, custom_emoji: bool = False) -> None:
             try:
                 await m.answer(tg_format.to_telegram_html(chunk, custom_emoji=custom_emoji),
                                parse_mode="HTML")
-            except TelegramBadRequest:
+            except TelegramBadRequest as e:
+                # Частая причина отказа — бот не вправе слать кастом-эмодзи (нет Telegram
+                # Premium у ВЛАДЕЛЬЦА бота либо нет Fragment-username): Telegram отвергает
+                # <tg-emoji>. Логируем реальную причину и пробуем без кастома — так
+                # сохраняем жирный/ссылки, а не рушим всё форматирование в plain-text.
+                logging.warning("Telegram отклонил HTML (%s) — повтор без кастом-эмодзи", e)
+                if custom_emoji:
+                    try:
+                        await m.answer(tg_format.to_telegram_html(chunk, custom_emoji=False),
+                                       parse_mode="HTML")
+                        continue
+                    except TelegramBadRequest as e2:
+                        logging.warning("HTML отклонён и без кастома (%s) — шлю чистым текстом", e2)
                 await m.answer(tg_format.strip_markdown(chunk)[:TG_LIMIT])
 
 
