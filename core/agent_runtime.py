@@ -189,32 +189,93 @@ def _clear_outbox(outbox: Path | None) -> None:
             logging.exception("Не смог очистить медиа-аутбокс")
 
 
-async def _flush_media(m: Message, outbox: Path | None) -> None:
-    """Отправить картинки, которые инструмент сложил в аутбокс за этот ход (фото отдельным сообщением).
+CAPTION_LIMIT = 1024   # лимит Telegram на подпись к фото (sendPhoto caption)
+TEXT_LIMIT = 4096      # лимит Telegram на текстовое сообщение (и превью-картинка над ним)
 
-    Инструменты умеют возвращать только текст; фото отправляет рантайм. Путь к готовому PNG
-    инструмент пишет в файл-аутбокс (по строке на картинку); шлём и чистим. Сбой отправки одной
-    картинки не валит ход — логируем и идём дальше (текст поста владелец всё равно получит).
+
+def _pop_outbox_image(outbox: Path | None) -> str | None:
+    """Достать путь к картинке, что инструмент сложил за этот ход, и очистить аутбокс.
+
+    Возвращает последнюю существующую картинку (или None). Инструменты умеют возвращать
+    только текст — путь к PNG пишется в файл-аутбокс, а отправляет картинку рантайм.
     """
     if not outbox or not outbox.exists():
-        return
+        return None
     try:
         paths = [ln.strip() for ln in outbox.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except Exception:
         paths = []
-    for p in paths:
-        fp = Path(p)
-        if not fp.exists():
-            logging.warning("Картинки из аутбокса нет на диске: %s", fp)
-            continue
-        try:
-            await m.answer_photo(FSInputFile(str(fp)))
-        except Exception:
-            logging.exception("Не смог отправить картинку %s", fp)
     try:
         outbox.unlink()
     except Exception:
-        logging.exception("Не смог очистить медиа-аутбокс после отправки")
+        logging.exception("Не смог очистить медиа-аутбокс")
+    for p in reversed(paths):           # последняя картинка хода
+        if Path(p).exists():
+            return p
+        logging.warning("Картинки из аутбокса нет на диске: %s", p)
+    return None
+
+
+async def _upload_image(path: Path) -> str | None:
+    """Залить картинку на публичный хостинг (catbox), вернуть URL — для «обложки над текстом».
+
+    Длинный пост (>1024) нельзя положить в подпись к фото, поэтому картинку показываем
+    крупным превью ссылки над текстом, а превью Telegram тянет только по ПУБЛИЧНОМУ URL.
+    Обложка канала не секрет, так что внешний хостинг ок. Не вышло — вернём None (откат).
+    """
+    try:
+        import aiohttp
+
+        data = aiohttp.FormData()
+        data.add_field("reqtype", "fileupload")
+        data.add_field("fileToUpload", path.read_bytes(),
+                       filename=path.name, content_type="image/png")
+        async with aiohttp.ClientSession() as s:
+            async with s.post("https://catbox.moe/user/api.php", data=data,
+                              timeout=aiohttp.ClientTimeout(total=60)) as r:
+                url = (await r.text()).strip()
+                return url if url.startswith("http") else None
+    except Exception:
+        logging.exception("Не смог залить обложку на хостинг")
+        return None
+
+
+async def _send_with_cover(m: Message, text: str, img: str, *, custom_emoji: bool) -> bool:
+    """Прислать ОДНИМ сообщением: фото+подпись (если текст ≤1024) либо обложка крупным превью
+    над текстом (если длиннее). Картинка всегда СВЕРХУ. True — если ушло одним сообщением.
+    """
+    vis = len(tg_format.strip_markdown(text))   # длина ПОСЛЕ парсинга (без markdown-маркеров)
+    html = tg_format.to_telegram_html(text, custom_emoji=custom_emoji)
+    if vis <= CAPTION_LIMIT:                      # короткий пост → фото + подпись (картинка сверху)
+        await m.answer_photo(FSInputFile(img), caption=html, parse_mode="HTML")
+        return True
+    if vis <= TEXT_LIMIT:                          # длинный → обложка превью над текстом
+        url = await _upload_image(Path(img))
+        if url:
+            await m.answer(html, parse_mode="HTML", link_preview_options=LinkPreviewOptions(
+                url=url, prefer_large_media=True, show_above_text=True))
+            return True
+    return False
+
+
+async def _deliver(m: Message, text: str, outbox: Path | None, *, custom_emoji: bool) -> None:
+    """Выдать ответ. Если за ход появилась обложка — слать её и пост ОДНИМ сообщением; иначе
+    обычный текст. При любом сбое «одного сообщения» — откат на фото+текст раздельно (не хуже старого).
+    """
+    img = _pop_outbox_image(outbox)
+    if not img:
+        await _send(m, text, custom_emoji=custom_emoji)
+        return
+    try:
+        if await _send_with_cover(m, text, img, custom_emoji=custom_emoji):
+            return
+    except Exception:
+        logging.exception("Одним сообщением не вышло — шлю фото и текст раздельно")
+    try:
+        await m.answer_photo(FSInputFile(img))    # запасной путь: фото…
+    except Exception:
+        logging.exception("Не смог отправить картинку %s", img)
+    await _send(m, text, custom_emoji=custom_emoji)  # …и текст отдельно
 
 
 async def run(
@@ -264,8 +325,7 @@ async def run(
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
-            await _flush_media(m, media_outbox)  # картинку — вперёд, текст поста следом
-            await _send(m, text or "…", custom_emoji=render_emoji)
+            await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji)
         finally:
             busy.discard(uid)
 
