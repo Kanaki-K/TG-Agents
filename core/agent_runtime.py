@@ -232,11 +232,13 @@ async def _upload_image(path: Path) -> str | None:
         async with aiohttp.ClientSession() as s:
             async with s.post("https://telegra.ph/upload", data=data,
                               timeout=aiohttp.ClientTimeout(total=60)) as r:
-                j = await r.json(content_type=None)
+                body = await r.text()
+                logging.info("[обложка] telegra.ph: HTTP %s, ответ=%.200s", r.status, body)
+                j = json.loads(body)
                 if isinstance(j, list) and j and j[0].get("src"):
                     return "https://telegra.ph" + j[0]["src"]
     except Exception:
-        logging.exception("telegra.ph upload не вышел — пробую catbox")
+        logging.exception("[обложка] telegra.ph upload не вышел — пробую catbox")
     try:
         import aiohttp
 
@@ -248,18 +250,26 @@ async def _upload_image(path: Path) -> str | None:
             async with s.post("https://catbox.moe/user/api.php", data=data,
                               timeout=aiohttp.ClientTimeout(total=60)) as r:
                 url = (await r.text()).strip()
+                logging.info("[обложка] catbox: HTTP %s, ответ=%.200s", r.status, url)
                 return url if url.startswith("http") else None
     except Exception:
-        logging.exception("Не смог залить обложку (catbox тоже)")
+        logging.exception("[обложка] не смог залить обложку (catbox тоже)")
         return None
 
 
 async def _cover_public_url(m: Message, img: str, cover_url: str | None) -> str | None:
-    """Публичный URL обложки для «превью над текстом». Сначала заливаем на telegra.ph/catbox
-    (прямой линк, надёжно рендерится превью), и лишь в крайнем случае — URL присланного фото
-    в самом Telegram. None — доставка откатится на фото+текст раздельно.
+    """Публичный URL обложки для «превью над текстом».
+
+    Присланное фото (cover_url) уже на серверах Telegram — берём его URL ПЕРВЫМ: он достижим
+    всегда (внешние хостинги у владельца режет сеть). Сгенерированную обложку заливаем на хостинг.
+    None — доставка откатится на фото+текст раздельно.
     """
-    return await _upload_image(Path(img)) or cover_url
+    if cover_url:
+        logging.info("[обложка] беру URL присланного фото (Telegram): %s", cover_url)
+        return cover_url
+    url = await _upload_image(Path(img))
+    logging.info("[обложка] загрузка сгенерированной обложки на хостинг → %s", url)
+    return url
 
 
 async def _send_with_cover(m: Message, text: str, img: str, *,
