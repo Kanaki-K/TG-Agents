@@ -50,8 +50,8 @@ def record(model, usage) -> None:
         logging.exception("[cost] не смог прочитать usage")
         return
     tok = u["in"] + u["out"] + u["cache_w"] + u["cache_r"]
-    logging.info("[cost] %s: %d ток (вход %d, кэш-чт %d, выход %d) → $%.4f",
-                 model, tok, u["in"], u["cache_r"], u["out"], _cost(model, u))
+    logging.info("[cost] %s: %d ток (вход %d, кэш-зап %d, кэш-чт %d, выход %d) → $%.4f",
+                 model, tok, u["in"], u["cache_w"], u["cache_r"], u["out"], _cost(model, u))
     if _tracking:
         _log.append((model, u))
 
@@ -75,6 +75,7 @@ def summary() -> str:
     for m, a in by.items():
         tok = a["in"] + a["out"] + a["cache_w"] + a["cache_r"]
         lines.append(f"  {m}: {a['calls']} выз · {tok} ток "
-                     f"(вход {a['in']}, кэш-чт {a['cache_r']}, выход {a['out']}) → ${a['cost']:.3f}")
+                     f"(вход {a['in']}, кэш-зап {a['cache_w']}, кэш-чт {a['cache_r']}, выход {a['out']}) "
+                     f"→ ${a['cost']:.3f}")
     lines.append(f"ИТОГО Скаут→пост: ${total():.3f}")
     return "\n".join(lines)
