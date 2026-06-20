@@ -24,23 +24,23 @@ Telethon в своём event loop — их зовут из потока бота
 from __future__ import annotations
 
 import asyncio
-import html as _html
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
 
-from telethon.tl import functions
+from telethon import helpers
+from telethon.extensions import html as _tl_html
+from telethon.tl import functions, types
 
 from connectors.telegram_export.collect import _client
-from core import config
+from core import config, tg_format
 
 logging.basicConfig(level=logging.INFO)
 
 CAPTION_LIMIT_FREE = 1024      # лимит подписи к фото у обычного аккаунта
 CAPTION_LIMIT_PREMIUM = 2048   # лимит подписи с Telegram Premium
 TEXT_LIMIT = 4096              # лимит текстового сообщения (и превью-картинки над ним)
-ZWSP = "​"               # нулевой пробел — невидимый носитель ссылки на обложку (путь №2)
 _TRUE = {"1", "true", "yes", "on", "да"}
 
 
@@ -168,31 +168,52 @@ async def _publish_async(channel: str, text: str, cover: str | None,
                 out["link"] = _post_link(entity, msg)
             return out
 
+        # Рендер как у Криейтора в чате: жирный (**…** → bold) + кастом-эмодзи из набора
+        # (<tg-emoji emoji-id=…>, читается из data/custom_emoji.json). Аккаунт с премиумом их шлёт.
+        html = tg_format.to_telegram_html(text, custom_emoji=True)
+
+        async def _msg(target):  # текст с рендером; при сбое разметки — чистым, чтобы пост не потерять
+            try:
+                return await client.send_message(target, html, parse_mode="html",
+                                                  link_preview=False, schedule=when)
+            except Exception:
+                logging.exception("[публикатор] HTML отклонён — шлю чистым текстом")
+                return await client.send_message(target, text, parse_mode=None,
+                                                 link_preview=False, schedule=when)
+
         if not cover:  # без обложки — просто текст
-            msg = await client.send_message(entity, text, parse_mode=None, link_preview=False, schedule=when)
-            return done("только текст", msg)
+            return done("только текст", await _msg(entity))
 
         vis, cap = len(text), _caption_limit()
-        if vis <= cap:  # путь №1: короткий → фото + подпись (картинка сверху, одно сообщение)
-            msg = await client.send_file(entity, cover, caption=text, parse_mode=None,
-                                         force_document=False, schedule=when)
+        if vis <= cap:  # короткий → фото + подпись ОДНИМ сообщением (картинка сверху)
+            try:
+                msg = await client.send_file(entity, cover, caption=html, parse_mode="html",
+                                             force_document=False, schedule=when)
+            except Exception:
+                logging.exception("[публикатор] HTML-подпись отклонена — чистым текстом")
+                msg = await client.send_file(entity, cover, caption=text, parse_mode=None,
+                                             force_document=False, schedule=when)
             return done("фото+подпись", msg)
-        if long_mode != "split":  # путь №2: длинный → обложка крупным превью НАД текстом
-            url = await _upload_image(Path(cover))
-            if url:
-                body = f'<a href="{url}">{ZWSP}</a>' + _html.escape(text)  # тело экранировано → текст дословно
-                try:
-                    msg = await client.send_message(entity, body, parse_mode="html",
-                                                    link_preview=True, schedule=when)
-                    return done("обложка-превью над текстом", msg)
-                except Exception:
-                    logging.exception("[публикатор] превью над текстом не вышло — фолбэк на 2 сообщения")
-            else:
+
+        if long_mode != "split":  # длинный → обложка КРУПНО НАД текстом, ОДНО сообщение (invert_media)
+            try:
+                url = await _upload_image(Path(cover))
+                if url:
+                    clean, entities = _tl_html.parse(html)  # текст + entities (жирный/эмодзи) для raw-запроса
+                    peer = await client.get_input_entity(entity)
+                    await client(functions.messages.SendMediaRequest(
+                        peer=peer,
+                        media=types.InputMediaWebPage(url=url, force_large_media=True, optional=True),
+                        message=clean, entities=entities, invert_media=True,
+                        random_id=helpers.generate_random_long(), schedule_date=when))
+                    return {"ok": True, "mode": "обложка над текстом (одно сообщение)"}
                 logging.warning("[публикатор] обложку не залить на хостинг — фолбэк на 2 сообщения")
-        # путь №3 (фолбэк): фото + полный текст раздельно — пост не теряем
+            except Exception:
+                logging.exception("[публикатор] фото-над-текстом не вышло — фолбэк на 2 сообщения")
+
+        # фолбэк / режим split: фото + полный текст двумя сообщениями (пост не теряем)
         await client.send_file(entity, cover, force_document=False, schedule=when)
-        msg = await client.send_message(entity, text, parse_mode=None, link_preview=False, schedule=when)
-        return done("фото и текст РАЗДЕЛЬНО (фолбэк)", msg)
+        return done("фото + полный текст (два сообщения)", await _msg(entity))
     finally:
         await client.disconnect()
 
