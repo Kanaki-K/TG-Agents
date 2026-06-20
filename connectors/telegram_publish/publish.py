@@ -26,8 +26,11 @@ from __future__ import annotations
 import asyncio
 import html as _html
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
+
+from telethon.tl import functions
 
 from connectors.telegram_export.collect import _client
 from core import config
@@ -57,15 +60,37 @@ def _post_link(entity, msg) -> str:
 
 
 async def _resolve_entity(client, channel: str):
-    """Найти канал. Сначала как @username / t.me-ссылку / числовой id; если не вышло (частый
-    случай ПРИВАТНОГО канала — у него нет публичного юзернейма) — ищем по НАЗВАНИЮ среди диалогов
-    аккаунта-публикатора (он в канале участник/админ, значит канал есть в его диалогах)."""
+    """Найти канал надёжно, в т.ч. ПРИВАТНЫЙ (без публичного @username).
+
+    Порядок: 1) приватная инвайт-ссылка t.me/+HASH (или joinchat/HASH) — достаём канал по хэшу,
+    аккаунт уже в нём; 2) числовой id; 3) @username / t.me/username; 4) по названию среди диалогов.
+    Приватный канал по «имени» (как @username) НЕЛЬЗЯ — оно резолвится в чужой публичный канал,
+    отсюда был ChatWriteForbidden; инвайт-ссылка/id однозначны."""
     channel = (channel or "").strip()
-    cand: object = int(channel) if channel.lstrip("-").isdigit() else channel
+
+    # 1) приватная инвайт-ссылка: t.me/+HASH или t.me/joinchat/HASH или голый +HASH
+    m = re.search(r"(?:t\.me/\+|t\.me/joinchat/|^\+)([\w-]+)", channel)
+    if m:
+        try:
+            inv = await client(functions.messages.CheckChatInviteRequest(m.group(1)))
+            chat = getattr(inv, "chat", None)  # ChatInviteAlready/Peek — если аккаунт уже участник
+            if chat is not None:
+                return chat
+            logging.warning("[публикатор] по инвайт-ссылке аккаунт НЕ участник канала — вступи им в канал")
+        except Exception:
+            logging.exception("[публикатор] инвайт-ссылку не разрешил")
+
+    # 2) числовой id (-100…)
+    if channel.lstrip("-").isdigit():
+        return await client.get_entity(int(channel))
+
+    # 3) @username / t.me/username
     try:
-        return await client.get_entity(cand)
+        return await client.get_entity(channel)
     except Exception:
         pass
+
+    # 4) по названию среди диалогов (аккаунт в канале участник/админ)
     target = channel.lower().lstrip("@")
     async for d in client.iter_dialogs():
         if not (getattr(d, "is_channel", False) or getattr(d, "is_group", False)):
