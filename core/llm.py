@@ -11,7 +11,7 @@ from typing import Callable
 
 from anthropic import Anthropic
 
-from core import config
+from core import config, cost
 
 MAX_TOKENS = 16384  # вывод одного ответа: полный «не урезанный» бриф Скаута (5 направлений + вердикт) не влезал ни в 4096, ни в 8192
 MAX_STEPS = 30     # предохранитель: максимум проходов цикла инструментов (глубокая разведка читает много источников)
@@ -53,13 +53,17 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
         params = dict(
             model=model,
             max_tokens=MAX_TOKENS,
-            system=system,
+            # PROMPT CACHING: системный промпт (мануал/бренд/стандарт/плейбук) огромный и СТАТИЧНЫЙ —
+            # кэшируем его, чтобы в агентном цикле (до 30 проходов на пост) он НЕ оплачивался заново
+            # каждый раз, а читался из кэша за ~0.1× цены. Главный рычаг против перерасхода токенов.
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             tools=tools_schema,
             messages=messages,
         )
         if thinking:
             params["thinking"] = thinking
         resp = client.messages.create(**params)
+        cost.record(model, resp.usage)  # учёт расхода: лог в консоль + копим для итога (run_pipeline)
         # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю
         messages.append({"role": "assistant", "content": resp.content})
 

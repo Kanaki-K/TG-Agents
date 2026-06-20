@@ -18,7 +18,7 @@ import concurrent.futures
 import logging
 import sys
 
-from core import config, creator_bot, creator_tools, llm, scout_bot, scout_tools
+from core import config, cost, creator_bot, creator_tools, llm, scout_bot, scout_tools
 
 logging.basicConfig(level=logging.INFO)
 
@@ -64,6 +64,7 @@ def _run_creator() -> None:
 
 def main() -> None:
     skip_scout = "--skip-scout" in sys.argv
+    cost.reset()  # начинаем замер стоимости всего прогона (Скаут→Криейтор→отложка)
     print("=== Контент-завод: полный прогон ===\n")
     if skip_scout:
         print("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
@@ -80,6 +81,7 @@ def main() -> None:
     print("🗓 [3/3] Ставлю в отложенные канала...")
     print(_threaded(creator_tools.dispatch, "publish_now", {}))
     print("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
+    print("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $
 
 
 if __name__ == "__main__":
