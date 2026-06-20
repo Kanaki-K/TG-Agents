@@ -106,9 +106,10 @@ async def _resolve_entity(client, channel: str):
 async def _upload_image(path: Path) -> str | None:
     """Залить обложку и вернуть ПРЯМОЙ публичный URL (для превью над длинным постом).
 
-    telegra.ph (инфраструктура Telegram, надёжна и не режется) → 0x0.st → catbox. Не вышло — None
-    (откат на 2 сообщения). Хосты режут «пустой» User-Agent — шлём нормальный.
+    imgbb (если задан IMGBB_API_KEY — НАДЁЖНО, рекомендуется) → telegra.ph → 0x0.st → catbox.
+    Не вышло — None (откат на 2 сообщения). Хосты режут «пустой» User-Agent — шлём нормальный.
     """
+    import base64
     import json as _json
 
     import aiohttp
@@ -116,7 +117,23 @@ async def _upload_image(path: Path) -> str | None:
     ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TG-Agents/1.0"}
     img_bytes = path.read_bytes()
     timeout = aiohttp.ClientTimeout(total=60)
-    try:  # 1) telegra.ph — основной (Telegram-нативный, отдаёт [{"src":"/file/xxx.jpg"}])
+    imgbb_key = config.get_optional("IMGBB_API_KEY")
+    if imgbb_key:  # 0) imgbb — стабильный, по бесплатному ключу (приоритет, если задан)
+        try:
+            data = aiohttp.FormData()
+            data.add_field("image", base64.b64encode(img_bytes).decode())
+            async with aiohttp.ClientSession(headers=ua) as s:
+                async with s.post(f"https://api.imgbb.com/1/upload?key={imgbb_key}",
+                                  data=data, timeout=timeout) as r:
+                    body = (await r.text()).strip()
+                    logging.info("[публикатор] imgbb: HTTP %s", r.status)
+                    if r.status == 200:
+                        url = (_json.loads(body).get("data") or {}).get("url", "")
+                        if url:
+                            return url
+        except Exception:
+            logging.exception("[публикатор] imgbb не вышел — пробую telegra.ph")
+    try:  # 1) telegra.ph (Telegram-нативный, отдаёт [{"src":"/file/xxx.jpg"}])
         data = aiohttp.FormData()
         data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
         async with aiohttp.ClientSession(headers=ua) as s:
