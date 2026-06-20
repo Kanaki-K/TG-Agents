@@ -139,7 +139,7 @@ async def main() -> None:
             return
         lines = [f"✅ Аккаунт-публикатор: {res['account']}",
                  f"Premium: {'да' if res['premium'] else 'нет'} (лимит подписи {res['caption_limit']})",
-                 f"Часовой пояс плана: UTC{config.get_optional('PUBLISH_UTC_OFFSET') or '+3'}"]
+                 f"Часовой пояс плана: {content_plan.tz_label()}"]
         if _channel():
             if res.get("channel"):
                 lines.append(f"Канал «{res['channel']}» виден ✅")

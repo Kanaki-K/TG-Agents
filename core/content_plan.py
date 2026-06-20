@@ -91,3 +91,18 @@ def next_slot(kind: str, *, now: datetime | None = None, busy_dates: set | None 
 def human(dt: datetime) -> str:
     """Человекочитаемый слот: «Чт 26.06 17:00»."""
     return f"{RU_DOW[dt.weekday()]} {dt:%d.%m %H:%M}"
+
+
+def tz_label() -> str:
+    """Пояс плана с РЕАЛЬНЫМ текущим смещением — чтобы видеть, подхватился ли PUBLISH_TZ.
+    Напр. «Europe/Berlin (сейчас UTC+02:00)» либо «UTC+03:00» (фолбэк на смещение)."""
+    name = config.get_optional("PUBLISH_TZ")
+    try:
+        off = datetime.now(tz()).utcoffset() or timedelta(0)
+        secs = off.total_seconds()
+        sign = "+" if secs >= 0 else "-"
+        h, m = divmod(int(abs(secs)) // 60, 60)
+        cur = f"UTC{sign}{h:02d}:{m:02d}"
+    except Exception:
+        cur = "UTC?"
+    return f"{name} (сейчас {cur})" if name else cur
