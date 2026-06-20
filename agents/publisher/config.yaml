@@ -1,8 +1,10 @@
 # Конфиг агента «Публикатор».
 # ВНИМАНИЕ: Публикатор ДЕТЕРМИНИРОВАННЫЙ (core/publisher_bot.py), без LLM в цепочке публикации —
 # поэтому model/api_key здесь НЕ используются (оставлены пустыми намеренно). Это «руки» с гейтом:
-# пост уходит в канал ровно как одобрил владелец, только по команде /publish (чек-лист PLAN §6).
+# пост попадает в отложенные канала ровно как одобрил владелец, на слот контент-плана,
+# только по команде /schedule (чек-лист PLAN §6).
 name: Публикатор
 token_env: PUBLISHER_BOT_TOKEN   # свой бот (см. .env)
-# Публикует аккаунтом-публикатором по MTProto: TELEGRAM_SESSION (тот же, что у аналитики).
-# Куда постить — PUBLISH_CHANNEL. Premium/режим длинных постов — PUBLISH_PREMIUM / PUBLISH_LONG_MODE.
+# Ставит отложенный пост по MTProto: TELEGRAM_SESSION (тот же, что у аналитики). Куда — PUBLISH_CHANNEL.
+# Слоты — core.content_plan (ритм недели); время/пояс — PUBLISH_*_TIME / PUBLISH_UTC_OFFSET.
+# Длинные посты — PUBLISH_LONG_MODE; лимит подписи — PUBLISH_PREMIUM.
