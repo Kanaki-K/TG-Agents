@@ -56,6 +56,28 @@ def _post_link(entity, msg) -> str:
     return f"https://t.me/c/{eid}/{mid}" if eid else f"(сообщение {mid})"
 
 
+async def _resolve_entity(client, channel: str):
+    """Найти канал. Сначала как @username / t.me-ссылку / числовой id; если не вышло (частый
+    случай ПРИВАТНОГО канала — у него нет публичного юзернейма) — ищем по НАЗВАНИЮ среди диалогов
+    аккаунта-публикатора (он в канале участник/админ, значит канал есть в его диалогах)."""
+    channel = (channel or "").strip()
+    cand: object = int(channel) if channel.lstrip("-").isdigit() else channel
+    try:
+        return await client.get_entity(cand)
+    except Exception:
+        pass
+    target = channel.lower().lstrip("@")
+    async for d in client.iter_dialogs():
+        if not (getattr(d, "is_channel", False) or getattr(d, "is_group", False)):
+            continue
+        title = (d.title or "").lower()
+        uname = (getattr(d.entity, "username", None) or "").lower()
+        if target and (target == uname or target == title or target in title):
+            return d.entity
+    raise ValueError(f"«{channel}» не найден ни как @username/id, ни по названию среди диалогов "
+                     "аккаунта-публикатора (он точно админ/участник этого канала?)")
+
+
 async def _upload_image(path: Path) -> str | None:
     """Залить обложку и вернуть ПРЯМОЙ публичный URL (для превью над длинным постом).
 
@@ -109,7 +131,7 @@ async def _publish_async(channel: str, text: str, cover: str | None,
             return {"ok": False, "error": "MTProto-сессия не авторизована (TELEGRAM_SESSION пуст/протух). "
                                           "Вход: connectors/telegram_export/login.py."}
         try:
-            entity = await client.get_entity(channel)
+            entity = await _resolve_entity(client, channel)
         except Exception as e:
             return {"ok": False, "error": f"Не нашёл канал «{channel}»: {e}. Проверь PUBLISH_CHANNEL и что "
                                           "аккаунт-публикатор добавлен в канал админом с правом постить."}
@@ -158,7 +180,7 @@ async def _scheduled_async(channel: str) -> list:
         if not await client.is_user_authorized():
             return []
         try:
-            entity = await client.get_entity(channel)
+            entity = await _resolve_entity(client, channel)
             msgs = await client.get_messages(entity, scheduled=True, limit=100)
         except Exception:
             logging.exception("[публикатор] не смог прочитать отложенные")
@@ -183,7 +205,7 @@ async def _check_async(channel: str) -> dict:
                "caption_limit": _caption_limit()}
         if channel:
             try:
-                ent = await client.get_entity(channel)
+                ent = await _resolve_entity(client, channel)
                 out["channel"] = getattr(ent, "title", None) or channel
             except Exception as e:
                 out["channel"] = None

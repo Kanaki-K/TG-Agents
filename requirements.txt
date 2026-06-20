@@ -9,3 +9,4 @@ qrcode>=7.4            # QR-вход в Telegram без кода по номер
 feedparser>=6.0        # чтение RSS/Atom-фидов — источники Скаута (Тир-2)
 twikit>=2.1            # X (Twitter) через сессию бёрнера — read-only разведка лидеров мнений (эдж Скаута)
 playwright>=1.44       # рендер картинок флагмана через веб-ChatGPT бёрнера (после pip: playwright install chromium)
+tzdata>=2024.1         # база часовых поясов для zoneinfo (Публикатор, PUBLISH_TZ) — на Windows своей нет
