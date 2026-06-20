@@ -252,6 +252,27 @@ def scheduled_times(channel: str) -> list:
     return asyncio.run(_scheduled_async((channel or "").strip()))
 
 
+async def _notify_async(user: str, text: str) -> dict:
+    """Отправить ЛС от аккаунта-публикатора пользователю (мейну владельца). user — @username/t.me/id."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return {"ok": False, "error": "сессия не авторизована"}
+        ent = await client.get_entity(user)  # для пользователя @username/ссылка/id это работает напрямую
+        await client.send_message(ent, text, parse_mode=None, link_preview=False)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        await client.disconnect()
+
+
 def check(channel: str = "") -> dict:
     """Синхронная предполётная проверка сессии и доступности канала."""
     return asyncio.run(_check_async((channel or "").strip()))
+
+
+def notify(user: str, text: str) -> dict:
+    """Синхронно отправить уведомление в ЛС (мейну владельца) аккаунтом-публикатором."""
+    return asyncio.run(_notify_async((user or "").strip(), text))

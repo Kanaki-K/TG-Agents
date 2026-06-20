@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from pathlib import Path
 
-from core import analytics, config
+from connectors.telegram_publish import publish
+from core import analytics, config, content_plan
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -39,6 +41,9 @@ IMAGE_PROMPT = MEM / "image_prompt.md"  # шаблон стиля обложки
 # Аутбокс картинок: make_image кладёт сюда путь к готовому PNG, рантайм после хода шлёт его
 # фото в чат (инструмент сам фото слать не умеет — только текст). data/ = вне git.
 MEDIA_OUTBOX = config.ROOT / "data" / "creator_pending_media.txt"
+# Последняя обложка от make_image (персистентно, в отличие от аутбокса, который рантайм чистит каждый
+# ход): её берёт publish_now, когда планирует пост в канал. data/ = вне git.
+LAST_COVER = config.ROOT / "data" / "creator_last_cover.txt"
 
 TOOLS = [
     {
@@ -136,6 +141,15 @@ TOOLS = [
             },
             "required": ["title", "post_text"],
         },
+    },
+    {
+        "name": "publish_now",
+        "description": "Поставить ПОСЛЕДНИЙ готовый пост в отложенные канала на слот контент-плана и "
+                       "уведомить владельца. Зови ТОЛЬКО по команде /schedule. Аргументов нет: движок берёт "
+                       "последний сохранённый драфт (текст ДОСЛОВНО) + обложку от make_image, сам считает слот "
+                       "(флагман→Вт/Чт, короткий→Пн/Ср/Пт) и ставит нативную отложку аккаунтом-публикатором. "
+                       "Текст НЕ переписывай и пост заново не пиши — публикуется ровно сохранённый драфт.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "list_drafts",
@@ -434,6 +448,7 @@ def _make_image(args: dict) -> str:
         MEDIA_OUTBOX.parent.mkdir(parents=True, exist_ok=True)
         with open(MEDIA_OUTBOX, "a", encoding="utf-8") as f:
             f.write(str(path) + "\n")
+        LAST_COVER.write_text(str(path), encoding="utf-8")  # персистентно — для publish_now (/schedule)
     except Exception:
         return (f"✅ Обложка готова ({path}), но не смог поставить её в очередь отправки. "
                 "Скажи владельцу — файл лежит в data/gpt_images/.")
@@ -495,7 +510,47 @@ def _apply_standard() -> str:
             "Предложение очищено.")
 
 
+def _publish_now() -> str:
+    """Поставить ПОСЛЕДНИЙ готовый пост (последний драфт + обложка от make_image) в отложенные канала
+    на слот контент-плана и уведомить мейн владельца. Детерминированно: текст берётся ДОСЛОВНО из
+    сохранённого драфта, не переписывается. Гейт А (обкатка): зовётся по команде владельца /schedule."""
+    channel = config.get_optional("PUBLISH_CHANNEL")
+    if not channel:
+        return "PUBLISH_CHANNEL не задан в .env — некуда планировать."
+    drafts = _md_files(DRAFTS_DIR)
+    if not drafts:
+        return "Нет сохранённого драфта (memory/drafts/ пуст) — сначала напиши пост (/post)."
+    text = drafts[0].read_text(encoding="utf-8").strip()
+    if not text:
+        return "Последний драфт пустой — нечего планировать."
+    cover = ""
+    if LAST_COVER.exists():
+        c = LAST_COVER.read_text(encoding="utf-8").strip()
+        cover = c if c and Path(c).exists() else ""
+    kind = content_plan.infer_kind(text)
+    try:
+        busy = {dt.astimezone(content_plan.tz()).date() for dt in publish.scheduled_times(channel)}
+    except Exception:
+        busy = set()
+    slot = content_plan.next_slot(kind, busy_dates=busy)
+    res = publish.publish(channel, text, cover or None, slot)
+    if not res.get("ok"):
+        return f"❌ Не поставил в отложенные: {res.get('error', '?')}. Драфт цел — поправь причину и снова /schedule."
+    when = content_plan.human(slot)
+    note = ""
+    target = config.get_optional("PUBLISH_NOTIFY")
+    if target:
+        n = publish.notify(target, f"✅ Пост запланирован в канал на {when} "
+                                   f"({content_plan.kind_label(kind)}). Проверь в «Отложенных» канала.")
+        note = " Уведомил мейн владельца." if n.get("ok") else f" (уведомление на мейн не ушло: {n.get('error', '?')})"
+    return (f"✅ Поставил в отложенные канала: {content_plan.kind_label(kind)} на {when} "
+            f"(режим: {res.get('mode', '?')}).{note}\n"
+            f"Сообщи владельцу слот; проверить/поправить/отменить — в нативных «Отложенных» канала.")
+
+
 def dispatch(name: str, args: dict) -> str:
+    if name == "publish_now":
+        return _publish_now()
     if name == "list_briefs":
         return _list_md(BRIEFS_DIR, "Брифы Скаута (свежие сверху):",
                         "Брифов Скаута пока нет (memory/briefs/ пуст). Напиши из присланного "
