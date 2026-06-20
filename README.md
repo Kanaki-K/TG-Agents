@@ -15,10 +15,13 @@
 | Аналитик канала | судит контент по метрикам (внутрь) | `python run_analyst.py` | Haiku 4.5 | [agents/channel-analyst](agents/channel-analyst/README.md) |
 | Разработчик | правит личности агентов через гейт | `python run_dev.py` | Opus 4.8 | [agents/developer](agents/developer/README.md) |
 | Скаут | разведка трендов/источников (наружу) | `python run_scout.py` | Sonnet 4.6 | [agents/scout](agents/scout/README.md) |
-| Криейтор | пишет посты по направлению | `python run_creator.py` | Opus 4.8 | [agents/creator](agents/creator/README.md) |
-| Публикация | вшита в Криейтора: `/schedule` ставит пост в отложенные канала (MTProto, без бота) | — | [connectors/telegram_publish](connectors/telegram_publish) |
+| Криейтор | пишет посты + рисует обложку; `/schedule` ставит в отложку | `python run_creator.py` | Opus 4.8 | [agents/creator](agents/creator/README.md) |
+| Публикация | вшита в Криейтора (`/schedule`): бёрнер постит ФАЙЛ фото+текст в отложку канала по MTProto | — | [agents/publisher](agents/publisher/SKILL.md) |
+| **Вся цепь сразу** | Скаут → Криейтор → отложка, одной командой | `python run_pipeline.py` | — | [run_pipeline.py](run_pipeline.py) |
 
-Рабочий контент-конвейер: **разведка (Скаут/дип-ресёрч) + метрики (Аналитик) → Криейтор пишет → владелец одобряет → Криейтор по `/schedule` ставит пост в отложенные канала на слот контент-плана и пишет владельцу.**
+Рабочий контент-конвейер (работает end-to-end): **Скаут разведка → бриф → Криейтор `/post` (текст + обложка от ГПТ) → `/schedule` ставит ФАЙЛ фото+текст в нативные «Отложенные» канала на слот контент-плана + уведомляет владельца → владелец проверяет/одобряет в «Отложенных».**
+
+Публикация — **файлом** (`send_file` фото+подпись), без хостинга/превью; одним сообщением, либо двумя, если текст не влез в подпись Telegram. Полную цепь запускает `python run_pipeline.py` (`--skip-scout` — взять последний бриф).
 
 ## Структура
 
