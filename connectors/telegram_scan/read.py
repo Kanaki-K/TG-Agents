@@ -1,7 +1,7 @@
 """Чтение свежих сообщений ТГ-каналов (Тир-3, по трекам crypto/ai) через MTProto.
 
 Переиспользует MTProto-сессию коннектора telegram_export (TELEGRAM_SESSION /
-data/kanaki.session). Список каналов — в channels.yaml (сгруппирован по трекам).
+data/evgeniyp.session). Список каналов — в channels.yaml (сгруппирован по трекам).
 
 Синхронная обёртка `recent()` гоняет Telethon в собственном event loop — её зовут
 из рабочего потока Скаута (asyncio.to_thread), где запущенного loop нет.

@@ -3,7 +3,7 @@
 Под аккаунтом владельца читает ВСЕ посты канала с полной статистикой:
 текст, дата, просмотры (views), репосты (forwards), реакции, число комментариев.
 
-Разовый вход (создаёт файл сессии data/kanaki.session — это доступ к аккаунту,
+Разовый вход (создаёт файл сессии data/evgeniyp.session — это доступ к аккаунту,
 держим строго локально, в git не попадает):
     python -m connectors.telegram_export.collect send-code     # Telegram пришлёт код
     python -m connectors.telegram_export.collect sign-in 12345 # код из Telegram
@@ -26,7 +26,7 @@ from core import config
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
-SESSION = str(DATA / "kanaki")            # → data/kanaki.session
+SESSION = str(DATA / "evgeniyp")          # → data/evgeniyp.session (аккаунт ЕвгенийП / @Amanbabai228)
 HASH_FILE = DATA / ".login_code_hash"
 OUT = DATA / "channel_posts.json"
 

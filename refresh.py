@@ -7,7 +7,7 @@
     python refresh.py --all    # «обновить»: свежий снимок по ВСЕМ постам
 
 Вешается на расписание (раз в 24 ч) — см. README/инструкцию.
-Нужен вход (data/kanaki.session уже создан) и ключи в .env.
+Нужен вход (data/evgeniyp.session уже создан) и ключи в .env.
 """
 from __future__ import annotations
 

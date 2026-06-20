@@ -21,7 +21,7 @@ from core import config
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
-SESSION = str(DATA / "kanaki")
+SESSION = str(DATA / "evgeniyp")
 OUT = DATA / "channel_stats.json"
 
 # Графики, которые забираем (имя в API → понятное имя)
