@@ -27,11 +27,9 @@ import asyncio
 import logging
 import re
 from datetime import datetime
-from pathlib import Path
 
-from telethon import helpers
-from telethon.extensions import html as _tl_html
-from telethon.tl import functions, types
+from telethon.errors import MediaCaptionTooLongError
+from telethon.tl import functions
 
 from connectors.telegram_export.collect import _client
 from core import config, tg_format
@@ -103,83 +101,15 @@ async def _resolve_entity(client, channel: str):
                      "аккаунта-публикатора (он точно админ/участник этого канала?)")
 
 
-async def _upload_image(path: Path) -> str | None:
-    """Залить обложку и вернуть ПРЯМОЙ публичный URL (для превью над длинным постом).
-
-    imgbb (если задан IMGBB_API_KEY — НАДЁЖНО, рекомендуется) → telegra.ph → 0x0.st → catbox.
-    Не вышло — None (откат на 2 сообщения). Хосты режут «пустой» User-Agent — шлём нормальный.
-    """
-    import base64
-    import json as _json
-
-    import aiohttp
-
-    ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TG-Agents/1.0"}
-    img_bytes = path.read_bytes()
-    timeout = aiohttp.ClientTimeout(total=60)
-    imgbb_key = config.get_optional("IMGBB_API_KEY")
-    if imgbb_key:  # 0) imgbb — стабильный, по бесплатному ключу (приоритет, если задан)
-        try:
-            data = aiohttp.FormData()
-            data.add_field("image", base64.b64encode(img_bytes).decode())
-            async with aiohttp.ClientSession(headers=ua) as s:
-                async with s.post(f"https://api.imgbb.com/1/upload?key={imgbb_key}",
-                                  data=data, timeout=timeout) as r:
-                    body = (await r.text()).strip()
-                    logging.info("[публикатор] imgbb: HTTP %s", r.status)
-                    if r.status == 200:
-                        url = (_json.loads(body).get("data") or {}).get("url", "")
-                        if url:
-                            return url
-        except Exception:
-            logging.exception("[публикатор] imgbb не вышел — пробую telegra.ph")
-    try:  # 1) telegra.ph (Telegram-нативный, отдаёт [{"src":"/file/xxx.jpg"}])
-        data = aiohttp.FormData()
-        data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession(headers=ua) as s:
-            async with s.post("https://telegra.ph/upload", data=data, timeout=timeout) as r:
-                body = (await r.text()).strip()
-                logging.info("[публикатор] telegra.ph: HTTP %s, ответ=%.120s", r.status, body)
-                if r.status == 200 and body.startswith("[{"):
-                    src = _json.loads(body)[0].get("src", "")
-                    if src:
-                        return "https://telegra.ph" + src
-    except Exception:
-        logging.exception("[публикатор] telegra.ph не вышел — пробую 0x0.st")
-    try:  # 2) 0x0.st
-        data = aiohttp.FormData()
-        data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession(headers=ua) as s:
-            async with s.post("https://0x0.st", data=data, timeout=timeout) as r:
-                body = (await r.text()).strip()
-                logging.info("[публикатор] 0x0.st: HTTP %s, ответ=%.120s", r.status, body)
-                if r.status == 200 and body.startswith("http"):
-                    return body
-    except Exception:
-        logging.exception("[публикатор] 0x0.st не вышел — пробую catbox")
-    try:  # 3) catbox — последний фолбэк
-        data = aiohttp.FormData()
-        data.add_field("reqtype", "fileupload")
-        data.add_field("fileToUpload", img_bytes, filename=path.name, content_type="image/png")
-        async with aiohttp.ClientSession(headers=ua) as s:
-            async with s.post("https://catbox.moe/user/api.php", data=data, timeout=timeout) as r:
-                url = (await r.text()).strip()
-                logging.info("[публикатор] catbox: HTTP %s, ответ=%.120s", r.status, url)
-                return url if url.startswith("http") else None
-    except Exception:
-        logging.exception("[публикатор] не смог залить обложку (catbox тоже)")
-    return None
-
-
-async def _publish_async(channel: str, text: str, cover: str | None,
-                         long_mode: str, when: datetime | None) -> dict:
-    """Поставить пост в канал (отложенно, если when задан). {ok, mode, link?} либо {ok: False, error}."""
+async def _publish_async(channel: str, text: str, cover: str | None, when: datetime | None) -> dict:
+    """Поставить пост в канал отложенно (when). ФАЙЛОМ, без URL/превью: фото-файл + текст-подпись
+    одним сообщением; если подпись длиннее лимита Telegram — фото + текст двумя сообщениями.
+    {ok, mode, link?} либо {ok: False, error}."""
     text = (text or "").strip()
     if not text:
         return {"ok": False, "error": "Пустой текст — публиковать нечего."}
     if len(text) > TEXT_LIMIT:
-        return {"ok": False, "error": f"Пост {len(text)} знаков > лимита Telegram {TEXT_LIMIT} — "
-                                      "одним сообщением не уйдёт. Сократи у Криейтора."}
+        return {"ok": False, "error": f"Пост {len(text)} знаков > лимита Telegram {TEXT_LIMIT}. Сократи."}
 
     client = _client()
     await client.connect()
@@ -194,58 +124,40 @@ async def _publish_async(channel: str, text: str, cover: str | None,
                                           "аккаунт-публикатор добавлен в канал админом с правом постить."}
 
         def done(mode: str, msg) -> dict:
-            # У отложенного поста публичной ссылки ещё нет — вернём только режим; ссылку для немедленного.
             out = {"ok": True, "mode": mode}
-            if when is None:
+            if when is None:  # у отложенного публичной ссылки ещё нет
                 out["link"] = _post_link(entity, msg)
             return out
 
-        # Рендер как у Криейтора в чате: жирный (**…** → bold) + кастом-эмодзи из набора
-        # (<tg-emoji emoji-id=…>, читается из data/custom_emoji.json). Аккаунт с премиумом их шлёт.
+        # Рендер как у Криейтора в чате: жирный (**…**→bold) + кастом-эмодзи (<tg-emoji emoji-id=…> из
+        # data/custom_emoji.json; премиум-аккаунт их шлёт). Сбой разметки → чистый текст (пост не теряем).
         html = tg_format.to_telegram_html(text, custom_emoji=True)
 
-        async def _msg(target):  # текст с рендером; при сбое разметки — чистым, чтобы пост не потерять
+        async def _msg(target):
             try:
                 return await client.send_message(target, html, parse_mode="html",
-                                                  link_preview=False, schedule=when)
+                                                 link_preview=False, schedule=when)
             except Exception:
-                logging.exception("[публикатор] HTML отклонён — шлю чистым текстом")
+                logging.exception("[публикатор] HTML отклонён — чистым текстом")
                 return await client.send_message(target, text, parse_mode=None,
                                                  link_preview=False, schedule=when)
 
         if not cover:  # без обложки — просто текст
             return done("только текст", await _msg(entity))
 
-        vis, cap = len(text), _caption_limit()
-        if vis <= cap:  # короткий → фото + подпись ОДНИМ сообщением (картинка сверху)
+        # С обложкой (файл от ГПТ/владельца): фото + текст-подпись ОДНИМ сообщением.
+        for pm, body in (("html", html), (None, text)):  # html, при сбое разметки — чистый
             try:
-                msg = await client.send_file(entity, cover, caption=html, parse_mode="html",
+                msg = await client.send_file(entity, cover, caption=body, parse_mode=pm,
                                              force_document=False, schedule=when)
+                return done("фото + текст (одним сообщением)", msg)
+            except MediaCaptionTooLongError:
+                break  # подпись длиннее лимита Telegram — уходим на два сообщения
             except Exception:
-                logging.exception("[публикатор] HTML-подпись отклонена — чистым текстом")
-                msg = await client.send_file(entity, cover, caption=text, parse_mode=None,
-                                             force_document=False, schedule=when)
-            return done("фото+подпись", msg)
-
-        if long_mode != "split":  # длинный → обложка КРУПНО НАД текстом, ОДНО сообщение (invert_media)
-            try:
-                url = await _upload_image(Path(cover))
-                if url:
-                    clean, entities = _tl_html.parse(html)  # текст + entities (жирный/эмодзи) для raw-запроса
-                    peer = await client.get_input_entity(entity)
-                    await client(functions.messages.SendMediaRequest(
-                        peer=peer,
-                        media=types.InputMediaWebPage(url=url, force_large_media=True, optional=True),
-                        message=clean, entities=entities, invert_media=True,
-                        random_id=helpers.generate_random_long(), schedule_date=when))
-                    return {"ok": True, "mode": "обложка над текстом (одно сообщение)"}
-                logging.warning("[публикатор] обложку не залить на хостинг — фолбэк на 2 сообщения")
-            except Exception:
-                logging.exception("[публикатор] фото-над-текстом не вышло — фолбэк на 2 сообщения")
-
-        # фолбэк / режим split: фото + полный текст двумя сообщениями (пост не теряем)
+                logging.exception("[публикатор] подпись (%s) отклонена — пробую дальше", pm)
+        # Подпись не вместила текст → фото + текст двумя сообщениями (Telegram-лимит подписи; пост не теряем)
         await client.send_file(entity, cover, force_document=False, schedule=when)
-        return done("фото + полный текст (два сообщения)", await _msg(entity))
+        return done("фото + текст (два сообщения — текст не влез в подпись)", await _msg(entity))
     finally:
         await client.disconnect()
 
@@ -295,9 +207,8 @@ async def _check_async(channel: str) -> dict:
 
 def publish(channel: str, text: str, cover: str | None = None, when: datetime | None = None) -> dict:
     """Синхронно поставить пост (зовётся из потока бота). when задан → нативный ОТЛОЖЕННЫЙ пост.
-    long_mode из PUBLISH_LONG_MODE ('preview' по умолч. — обложка над текстом; 'split' — фото+текст)."""
-    long_mode = (config.get_optional("PUBLISH_LONG_MODE") or "preview").lower()
-    return asyncio.run(_publish_async(channel, text, (cover or "").strip() or None, long_mode, when))
+    Файлом: фото+текст одним сообщением, либо двумя, если текст не влез в подпись."""
+    return asyncio.run(_publish_async(channel, text, (cover or "").strip() or None, when))
 
 
 def scheduled_times(channel: str) -> list:
