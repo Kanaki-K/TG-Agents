@@ -246,6 +246,7 @@ async def run(
     system_builder: Callable[[], str],
     welcome: str,
     commands: dict[str, str] | None = None,
+    command_actions: dict | None = None,  # команды-ДЕЙСТВИЯ (без LLM): {cmd: ()->str}; для детерминированных
     periodic: dict | list | None = None,  # один спец или список (несколько плановых задач)
     thinking: dict | None = None,         # конфиг мышления модели (напр. {"type": "adaptive"})
     media_outbox: Path | None = None,     # файл-аутбокс картинок (агенты с «руками»-рендером); None = нет
@@ -302,6 +303,23 @@ async def run(
 
     for cmd, preset in commands.items():
         dp.message(Command(cmd))(_make_preset(preset))
+
+    # команды-ДЕЙСТВИЯ: выполняют код напрямую, БЕЗ обращения к LLM (детерминированно, без трат/кредитов).
+    # Нужны для безопасных операций вроде публикации: модель в цепочке не участвует.
+    def _make_action(fn):
+        async def handler(m: Message) -> None:
+            _write_owner(owner_file, m.chat.id)
+            await m.bot.send_chat_action(m.chat.id, "typing")
+            try:
+                text = await asyncio.to_thread(fn)
+            except Exception:
+                logging.exception("Команда-действие упала")
+                text = "Не смог выполнить команду — см. лог."
+            await _send(m, text or "…", custom_emoji=render_emoji)
+        return handler
+
+    for cmd, fn in (command_actions or {}).items():
+        dp.message(Command(cmd))(_make_action(fn))
 
     if media_outbox is not None:  # агенты с «руками»-картинками умеют принять фото от владельца
         @dp.message(F.photo)
