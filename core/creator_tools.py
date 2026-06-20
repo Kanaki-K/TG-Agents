@@ -543,8 +543,14 @@ def _publish_now() -> str:
         n = publish.notify(target, f"✅ Пост запланирован в канал на {when} "
                                    f"({content_plan.kind_label(kind)}). Проверь в «Отложенных» канала.")
         note = " Уведомил мейн владельца." if n.get("ok") else f" (уведомление на мейн не ушло: {n.get('error', '?')})"
+    # ПРОВЕРКА: читаем отложенные обратно — подтвердить, что пост реально лёг (а не «ok» вхолостую).
+    try:
+        n_sched = len(publish.scheduled_times(channel))
+        check = f" Проверка: в «Отложенных» канала сейчас {n_sched} сообщ."
+    except Exception:
+        check = " (проверку отложенных сделать не вышло)"
     return (f"✅ Поставил в отложенные канала: {content_plan.kind_label(kind)} на {when} "
-            f"(режим: {res.get('mode', '?')}).{note}\n"
+            f"(режим: {res.get('mode', '?')}).{note}{check}\n"
             f"Сообщи владельцу слот; проверить/поправить/отменить — в нативных «Отложенных» канала.")
 
 

@@ -106,15 +106,30 @@ async def _resolve_entity(client, channel: str):
 async def _upload_image(path: Path) -> str | None:
     """Залить обложку и вернуть ПРЯМОЙ публичный URL (для превью над длинным постом).
 
-    0x0.st (отдаёт прямой URL в теле) → фолбэк catbox. Не вышло — None (откат на 2 сообщения).
-    Хосты режут «пустой» User-Agent — шлём нормальный.
+    telegra.ph (инфраструктура Telegram, надёжна и не режется) → 0x0.st → catbox. Не вышло — None
+    (откат на 2 сообщения). Хосты режут «пустой» User-Agent — шлём нормальный.
     """
+    import json as _json
+
     import aiohttp
 
     ua = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) TG-Agents/1.0"}
     img_bytes = path.read_bytes()
     timeout = aiohttp.ClientTimeout(total=60)
-    try:  # 1) 0x0.st
+    try:  # 1) telegra.ph — основной (Telegram-нативный, отдаёт [{"src":"/file/xxx.jpg"}])
+        data = aiohttp.FormData()
+        data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
+        async with aiohttp.ClientSession(headers=ua) as s:
+            async with s.post("https://telegra.ph/upload", data=data, timeout=timeout) as r:
+                body = (await r.text()).strip()
+                logging.info("[публикатор] telegra.ph: HTTP %s, ответ=%.120s", r.status, body)
+                if r.status == 200 and body.startswith("[{"):
+                    src = _json.loads(body)[0].get("src", "")
+                    if src:
+                        return "https://telegra.ph" + src
+    except Exception:
+        logging.exception("[публикатор] telegra.ph не вышел — пробую 0x0.st")
+    try:  # 2) 0x0.st
         data = aiohttp.FormData()
         data.add_field("file", img_bytes, filename=path.name, content_type="image/png")
         async with aiohttp.ClientSession(headers=ua) as s:
@@ -125,7 +140,7 @@ async def _upload_image(path: Path) -> str | None:
                     return body
     except Exception:
         logging.exception("[публикатор] 0x0.st не вышел — пробую catbox")
-    try:  # 2) catbox — фолбэк
+    try:  # 3) catbox — последний фолбэк
         data = aiohttp.FormData()
         data.add_field("reqtype", "fileupload")
         data.add_field("fileToUpload", img_bytes, filename=path.name, content_type="image/png")
