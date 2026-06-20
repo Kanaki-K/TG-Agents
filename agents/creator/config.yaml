@@ -1,6 +1,6 @@
 # Конфиг агента «Криейтор»
 name: Криейтор
-model: claude-opus-4-6            # Opus 4.6 — пишет флагманы сильно, заметно дешевле 4.8 (выбор владельца). Adaptive thinking поддерживает
+model: claude-sonnet-4-6          # Sonnet 4.6 — дешевле Opus ~на 40% ($3/$15 vs $5/$25). Adaptive thinking поддерживает. Качество письма проверить вживую на флагмане
 token_env: CREATOR_BOT_TOKEN     # свой бот (см. .env)
 api_key_env: CREATOR_ANTHROPIC_KEY  # свой ключ Claude (если пуст — общий ANTHROPIC_API_KEY)
 thinking: adaptive               # адаптивное мышление: острее композиция и точнее соблюдение красных линий. Поддерживает Opus/Sonnet 4.6. Убери строку, чтобы выключить.
