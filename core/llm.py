@@ -47,6 +47,20 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
     client = _client(api_key)
     messages = history + [{"role": "user", "content": user_text}]
 
+    # снять старые точки кэша из переданной истории (в ботах она переиспользуется между ходами —
+    # иначе метки накопятся и превысят лимит в 4 брейкпоинта → 400). Дальше расставим заново.
+    for _m in messages:
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            for _b in _c:
+                if isinstance(_b, dict):
+                    _b.pop("cache_control", None)
+
+    # PROMPT CACHING растущей истории: двигаем ОДНУ точку кэша на последний результат инструментов
+    # каждый проход. Тогда на следующем вызове весь прежний диалог (система+история+большие
+    # результаты веб-поиска) читается из кэша за ~0.1×, а полную цену платим только за НОВое.
+    prev_cache_block: dict | None = None
+
     steps = 0
     while True:
         steps += 1
@@ -94,4 +108,10 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
                 "tool_use_id": tu.id,
                 "content": str(output),
             })
+        # двигаем точку кэша: ставим на последний результат этого прохода, снимаем с прошлого
+        # (держим максимум одну такую точку + одну на system — под лимитом в 4 брейкпоинта)
+        if prev_cache_block is not None:
+            prev_cache_block.pop("cache_control", None)
+        results[-1]["cache_control"] = {"type": "ephemeral"}
+        prev_cache_block = results[-1]
         messages.append({"role": "user", "content": results})
