@@ -16,8 +16,9 @@
 | Разработчик | правит личности агентов через гейт | `python run_dev.py` | Opus 4.8 | [agents/developer](agents/developer/README.md) |
 | Скаут | разведка трендов/источников (наружу) | `python run_scout.py` | Sonnet 4.6 | [agents/scout](agents/scout/README.md) |
 | Криейтор | пишет посты по направлению | `python run_creator.py` | Opus 4.8 | [agents/creator](agents/creator/README.md) |
+| Публикатор | кладёт одобренный пост нативно в канал (MTProto) | `python run_publisher.py` | — (без LLM) | [agents/publisher](agents/publisher/SKILL.md) |
 
-Рабочий контент-конвейер: **разведка (Скаут/дип-ресёрч) + метрики (Аналитик) → Криейтор пишет → владелец правит и публикует.**
+Рабочий контент-конвейер: **разведка (Скаут/дип-ресёрч) + метрики (Аналитик) → Криейтор пишет → владелец правит и одобряет → Публикатор постит нативно в канал.**
 
 ## Структура
 
