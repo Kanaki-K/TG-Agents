@@ -14,6 +14,8 @@ login.py. Сессия лежит в постоянном профиле data/gp
 """
 from __future__ import annotations
 
+import asyncio
+import sys
 import time
 from pathlib import Path
 
@@ -241,6 +243,13 @@ def generate(prompt: str, out_name: str = "flagship.png", timeout_s: int = 180) 
             "Нет сессии ChatGPT. Войди бёрнером один раз: python -m connectors.gpt_image.login"
         )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # playwright запускает браузер ПОДПРОЦЕССОМ — на Windows это умеет только ProactorEventLoop.
+    # В этом потоке политика могла остаться Selector (в run_pipeline после Скаута/telethon в одном
+    # процессе) → sync_playwright падал с NotImplementedError, обложка не рисовалась, и в канал
+    # уходила СТАРАЯ картинка (инцидент 22.06). Ставим Proactor в самой точке использования —
+    # надёжно при любой причине; бот не ломаем (там политика и так Proactor).
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     with sync_playwright() as p:
         ctx = launch_context(p, headless=HEADLESS)
         try:
