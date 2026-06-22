@@ -41,6 +41,7 @@ def _run_scout() -> None:
     tools = list(scout_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(scout_bot.WEB_SEARCH_TOOL)
+    cost.set_context("scout")
     print("🔍 [1/3] Скаут: разведка трендов...")
     text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"],
                         tools, scout_tools.dispatch, key, thinking)
@@ -57,6 +58,7 @@ def _run_creator() -> str:
             creator_tools.MEDIA_OUTBOX.unlink()
     except Exception:
         pass
+    cost.set_context("creator")
     print("✍️ [2/3] Криейтор: пишет пост по свежему брифу + обложка...")
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], creator_bot.COMMANDS["post"],
                         tools, creator_tools.dispatch, key, thinking)
@@ -70,6 +72,7 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(creator_bot.WEB_SEARCH_TOOL)
+    cost.set_context("creator-fix")
     user = creator_bot.FIX_FACTS.format(post=post.split("[[SPLIT]]")[0], verdict=verdict)
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)

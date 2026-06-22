@@ -11,7 +11,7 @@ run_pipeline (авто, перед постановкой) и из бота ко
 """
 from __future__ import annotations
 
-from core import config, llm, runmode
+from core import config, cost, llm, runmode
 
 # Серверный веб-поиск Anthropic для сверки (его выполняет Claude). max_uses — кап стоимости проверки.
 VERIFY_WEB = {"type": "web_search_20250305", "name": "web_search", "max_uses": 10}
@@ -66,6 +66,7 @@ def verify_post(post: str, brief: str = "", api_key: str | None = None, model: s
     if not post:
         return "(нечего проверять — пустой пост)"
     mdl = model or runmode.resolve("claude-sonnet-4-6")
+    cost.set_context("verify")
     user = (f"ПОСТ ДЛЯ ПРОВЕРКИ:\n{post}\n\n"
             f"ИСХОДНЫЙ БРИФ СКАУТА (источники для сверки):\n{brief or '(бриф не найден)'}\n\n"
             "Проверь КАЖДОЕ проверяемое утверждение. Выдай вердикт-список и ИТОГ.")

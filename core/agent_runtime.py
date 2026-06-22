@@ -23,7 +23,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, LinkPreviewOptions, Message
 
-from core import config, llm, runmode, tg_format
+from core import config, cost, llm, runmode, tg_format
 
 logging.basicConfig(level=logging.INFO)
 
@@ -281,6 +281,7 @@ async def run(
             _clear_outbox(media_outbox)  # только картинки ЭТОГО хода, без старья от прошлого
             # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
             prior = _trim_history(history.get(uid, []))
+            cost.set_context(agent_name)
             text, hist = await asyncio.to_thread(
                 llm.reply, runmode.resolve(model), system_builder(), prior,
                 user_text, tools_schema, dispatch, api_key, thinking,
