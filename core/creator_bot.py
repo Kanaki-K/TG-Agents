@@ -134,6 +134,17 @@ COMMANDS = {
 }
 
 
+FIX_FACTS = (
+    "Независимый фактчек (2FA) нашёл замечания к твоему последнему посту. Исправь ТОЧЕЧНО, сохраняя "
+    "голос, структуру и заголовок:\n"
+    "— ⚠️ конфликт → поставь ВЕРНОЕ значение (сверься web_search/опорой из вердикта);\n"
+    "— ❓ не подтверждено → убери цифру/утверждение ИЛИ смягчи до общего, БЕЗ выдуманной точной цифры;\n"
+    "— ✅ не трогай.\n\n"
+    "ПОСТ:\n{post}\n\nВЕРДИКТ ФАКТЧЕКА:\n{verdict}\n\n"
+    "Внеси правки, вызови save_draft с ФИНАЛОМ, выведи ТОЛЬКО финальный пост (без меты/преамбулы)."
+)
+
+
 def _read(rel: str) -> str:
     p = config.ROOT / rel
     return p.read_text(encoding="utf-8") if p.exists() else ""
@@ -187,10 +198,23 @@ def _schedule() -> str:
 
 
 def _verify() -> str:
-    """2FA-фактчек последнего драфта: независимый Sonnet сверяет цифры/факты с web_search и брифом."""
+    """2FA по последнему драфту: независимый Sonnet сверяет факты; есть замечания → Криейтор САМ
+    исправляет (владелец ничего не сверяет). Возвращает короткий итог + финал."""
     from core import verify
-    return verify.verify_post(verify.latest_draft(), verify.latest_brief(),
-                              api_key=config.agent_api_key(config.load_agent(AGENT_NAME)))
+    cfg = config.load_agent(AGENT_NAME)
+    key = config.agent_api_key(cfg)
+    post, brief = verify.latest_draft(), verify.latest_brief()
+    verdict = verify.verify_post(post, brief, api_key=key)
+    if not verify.has_issues(verdict):
+        return "🔎 2FA: факты подтверждены, правок не нужно."
+    tools = list(creator_tools.TOOLS)
+    if cfg.get("web_search"):
+        tools.append(WEB_SEARCH_TOOL)
+    thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
+    user = FIX_FACTS.format(post=(post or "").split("[[SPLIT]]")[0], verdict=verdict)
+    fixed, _ = llm.reply(runmode.resolve(cfg["model"]), _system(), [], user, tools,
+                         creator_tools.dispatch, key, thinking)
+    return "🔎 2FA нашёл замечания — исправил сам, финал в драфте (ставь /schedule):\n\n" + (fixed or "").strip()
 
 
 async def main() -> None:

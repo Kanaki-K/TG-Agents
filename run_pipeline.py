@@ -64,6 +64,18 @@ def _run_creator() -> str:
     return text or ""
 
 
+def _run_creator_fix(post: str, verdict: str) -> str:
+    """Криейтор САМ правит факты по вердикту 2FA (конфликт→верное, неподтверждённое→убрать/смягчить)."""
+    cfg, model, key, thinking = _agent("creator")
+    tools = list(creator_tools.TOOLS)
+    if cfg.get("web_search"):
+        tools.append(creator_bot.WEB_SEARCH_TOOL)
+    user = creator_bot.FIX_FACTS.format(post=post.split("[[SPLIT]]")[0], verdict=verdict)
+    text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
+                        tools, creator_tools.dispatch, key, thinking)
+    return text or post
+
+
 def main() -> None:
     skip_scout = "--skip-scout" in sys.argv
     cost.reset()  # начинаем замер стоимости всего прогона (Скаут→Криейтор→отложка)
@@ -83,13 +95,20 @@ def main() -> None:
     except Exception as e:
         print(f"❌ Криейтор не сделал пост: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return
-    # 2FA: независимый фактчек флагмана (Sonnet) ПЕРЕД постановкой — цифры самый дорогой класс ошибок
+    # 2FA: независимый фактчек флагмана (Sonnet). Нашёл замечания → Криейтор САМ исправляет → перепроверка.
+    # Владелец ничего не сверяет (hands-off). Цифры — самый дорогой класс ошибок.
     if post:
+        ckey = config.agent_api_key(config.load_agent("creator"))
         print("🔎 [Фактчек 2FA] Независимая проверка цифр/фактов (Sonnet)...")
         try:
-            verdict = verify.verify_post(post, verify.latest_brief(),
-                                         api_key=config.agent_api_key(config.load_agent("creator")))
+            verdict = verify.verify_post(post, verify.latest_brief(), api_key=ckey)
             print(verdict, "\n")
+            if verify.has_issues(verdict):
+                print("🛠 Есть замечания — Криейтор исправляет САМ (без твоей проверки)...")
+                post = _run_creator_fix(post, verdict)
+                print((post or "").strip()[:600], "\n")
+                print("🔎 Повторный фактчек после правок:")
+                print(verify.verify_post(post, verify.latest_brief(), api_key=ckey), "\n")
         except Exception:
             logging.exception("Фактчек 2FA не удался — пост НЕ блокирую, ставлю как есть")
     print("🗓 [3/3] Ставлю в отложенные канала...")
