@@ -182,27 +182,22 @@ def _system() -> str:
     return llm.build_system(persona, ctx)
 
 
-def _schedule() -> str:
-    """Поставить последний пост в отложку. В ТЕСТ-режиме — громко предупредить, что пост
-    писала дешёвая модель (защита от «случайно опубликовал тестовое в прод»)."""
-    out = creator_tools.dispatch("publish_now", {})
-    if runmode.get()["mode"] == "test":
-        return ("⚠️ ВНИМАНИЕ: сейчас 🧪 ТЕСТ-режим — последний пост писала ДЕШЁВАЯ модель, "
-                "это НЕ боевое качество. Если канал прод — переключись /main и перегенерируй "
-                "/post, потом публикуй.\n\n" + out)
-    return out
-
-
-def _verify() -> str:
-    """2FA по последнему драфту: независимый Sonnet сверяет факты; есть замечания → Криейтор САМ
-    исправляет (владелец ничего не сверяет). Возвращает короткий итог + финал."""
+def _run_2fa() -> tuple[str, bool]:
+    """Независимый 2FA-фактчек последнего драфта. Возвращает (вердикт, есть_ли_замечания)."""
     from core import verify
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
     post, brief = verify.latest_draft(), verify.latest_brief()
     verdict = verify.verify_post(post, brief, api_key=key)
-    if not verify.has_issues(verdict):
-        return "🔎 2FA: факты подтверждены, правок не нужно."
+    return verdict, verify.has_issues(verdict)
+
+
+def _fix_facts(verdict: str) -> str:
+    """Криейтор САМ правит факты по вердикту 2FA (точечно, не переписывая пост). Возвращает финал."""
+    cfg = config.load_agent(AGENT_NAME)
+    key = config.agent_api_key(cfg)
+    from core import verify
+    post = verify.latest_draft()
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(WEB_SEARCH_TOOL)
@@ -210,7 +205,35 @@ def _verify() -> str:
     user = FIX_FACTS.format(post=(post or "").split("[[SPLIT]]")[0], verdict=verdict)
     fixed, _ = llm.reply(runmode.resolve(cfg["model"]), _system(), [], user, tools,
                          creator_tools.dispatch, key, thinking)
-    return "🔎 2FA нашёл замечания — исправил сам, финал в драфте (ставь /schedule):\n\n" + (fixed or "").strip()
+    return (fixed or "").strip()
+
+
+def _schedule() -> str:
+    """Поставить последний пост в отложку — но СНАЧАЛА авто-гейт 2FA (цифры = красная линия бренда):
+    независимый фактчек, и если есть замечания — пост в очередь НЕ уходит, Криейтор правит факты,
+    нужен повторный /schedule по чистому драфту. В ТЕСТ-режиме также громко предупреждаем про дешёвую модель."""
+    verdict, issues = _run_2fa()
+    if issues:
+        fixed = _fix_facts(verdict)
+        return ("⛔ НЕ поставил в отложку — 2FA нашёл замечания по фактам, Криейтор их исправил.\n\n"
+                + verdict + "\n\n--- ИСПРАВЛЕННЫЙ ФИНАЛ (проверь и снова /schedule) ---\n" + fixed)
+    out = creator_tools.dispatch("publish_now", {})
+    head = "🔎 2FA: факты чисто.\n\n"
+    if runmode.get()["mode"] == "test":
+        return ("⚠️ ВНИМАНИЕ: сейчас 🧪 ТЕСТ-режим — последний пост писала ДЕШЁВАЯ модель, "
+                "это НЕ боевое качество. Если канал прод — переключись /main и перегенерируй "
+                "/post, потом публикуй.\n\n" + head + out)
+    return head + out
+
+
+def _verify() -> str:
+    """2FA по последнему драфту вручную: независимый Sonnet сверяет факты; есть замечания → Криейтор
+    САМ исправляет (владелец ничего не сверяет). Возвращает короткий итог + финал."""
+    verdict, issues = _run_2fa()
+    if not issues:
+        return "🔎 2FA: факты подтверждены, правок не нужно."
+    fixed = _fix_facts(verdict)
+    return "🔎 2FA нашёл замечания — исправил сам, финал в драфте (ставь /schedule):\n\n" + fixed
 
 
 async def main() -> None:
