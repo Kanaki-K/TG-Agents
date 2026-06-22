@@ -247,6 +247,7 @@ async def run(
     welcome: str,
     commands: dict[str, str] | None = None,
     command_actions: dict | None = None,  # команды-ДЕЙСТВИЯ (без LLM): {cmd: ()->str}; для детерминированных
+    post_hooks: dict | None = None,       # {cmd: ()->str} — детерминир. ДОБАВКА после LLM-команды (напр. авто-2FA после /post)
     periodic: dict | list | None = None,  # один спец или список (несколько плановых задач)
     thinking: dict | None = None,         # конфиг мышления модели (напр. {"type": "adaptive"})
     media_outbox: Path | None = None,     # файл-аутбокс картинок (агенты с «руками»-рендером); None = нет
@@ -315,14 +316,24 @@ async def run(
             f"🚀 БОЕВОЙ режим для ВСЕХ агентов — модели из config.yaml "
             f"(этот: {model}). Можно публиковать в прод-канал.")
 
-    # пресет-команды: /<cmd> → заранее заданный промпт модели
-    def _make_preset(preset: str):
+    # пресет-команды: /<cmd> → заранее заданный промпт модели. Опц. post_hook — детерминированная
+    # добавка СРАЗУ после LLM-хода (напр. независимый 2FA-фактчек после /post): не на доверии к модели.
+    def _make_preset(preset: str, hook=None):
         async def handler(m: Message) -> None:
             await _turn(m, preset)
+            if hook is not None:
+                await m.bot.send_chat_action(m.chat.id, "typing")
+                try:
+                    text = await asyncio.to_thread(hook)
+                except Exception:
+                    logging.exception("post-hook команды упал")
+                    text = None
+                if text:
+                    await _send(m, text, custom_emoji=render_emoji)
         return handler
 
     for cmd, preset in commands.items():
-        dp.message(Command(cmd))(_make_preset(preset))
+        dp.message(Command(cmd))(_make_preset(preset, (post_hooks or {}).get(cmd)))
 
     # команды-ДЕЙСТВИЯ: выполняют код напрямую, БЕЗ обращения к LLM (детерминированно, без трат/кредитов).
     # Нужны для безопасных операций вроде публикации: модель в цепочке не участвует.
