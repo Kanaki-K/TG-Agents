@@ -18,7 +18,7 @@ import concurrent.futures
 import logging
 import sys
 
-from core import config, cost, creator_bot, creator_tools, llm, scout_bot, scout_tools
+from core import config, cost, creator_bot, creator_tools, llm, runmode, scout_bot, scout_tools
 
 logging.basicConfig(level=logging.INFO)
 
@@ -32,7 +32,8 @@ def _threaded(fn, *args):
 def _agent(name: str):
     cfg = config.load_agent(name)
     thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
-    return cfg, cfg["model"], config.agent_api_key(cfg), thinking
+    # модель резолвим через runmode: /test (или env MODEL_OVERRIDE) делает прогон дешёвым
+    return cfg, runmode.resolve(cfg["model"]), config.agent_api_key(cfg), thinking
 
 
 def _run_scout() -> None:
@@ -66,6 +67,9 @@ def main() -> None:
     skip_scout = "--skip-scout" in sys.argv
     cost.reset()  # начинаем замер стоимости всего прогона (Скаут→Криейтор→отложка)
     print("=== Контент-завод: полный прогон ===\n")
+    _mode = runmode.get()
+    if _mode["mode"] == "test":
+        print(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
     if skip_scout:
         print("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
     else:

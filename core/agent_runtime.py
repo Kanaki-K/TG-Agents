@@ -23,7 +23,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, LinkPreviewOptions, Message
 
-from core import config, llm, tg_format
+from core import config, llm, runmode, tg_format
 
 logging.basicConfig(level=logging.INFO)
 
@@ -84,7 +84,7 @@ async def _periodic_loop(bot, agent_name, spec, model, system_builder,
                 continue
             logging.info("Периодический прогон '%s' агента %s", spec["key"], agent_name)
             text, _ = await asyncio.to_thread(
-                llm.reply, model, system_builder(), [], spec["preset"],
+                llm.reply, runmode.resolve(model), system_builder(), [], spec["preset"],
                 tools_schema, dispatch, api_key, thinking)
             for chunk in _chunks((spec.get("header", "") + (text or "…")).strip()):
                 try:
@@ -282,7 +282,7 @@ async def run(
             # на входе чиним возможный «обрыв» tool_use/tool_result (лечит и старое состояние),
             prior = _trim_history(history.get(uid, []))
             text, hist = await asyncio.to_thread(
-                llm.reply, model, system_builder(), prior,
+                llm.reply, runmode.resolve(model), system_builder(), prior,
                 user_text, tools_schema, dispatch, api_key, thinking,
             )
             history[uid] = _trim_history(hist)
@@ -293,7 +293,26 @@ async def run(
     @dp.message(Command("start"))
     async def _start(m: Message) -> None:
         _write_owner(owner_file, m.chat.id)
-        await m.answer(welcome)
+        await m.answer(f"{welcome}\n\n⚙️ {runmode.banner(model)}")
+
+    # /test и /main — ГЛОБАЛЬНЫЙ переключатель режима (дёшево тестируй / дорого публикуй).
+    # Режим один на всех агентов (data/run_mode.txt), действует со следующего хода без перезапуска.
+    @dp.message(Command("test"))
+    async def _mode_test(m: Message) -> None:
+        _write_owner(owner_file, m.chat.id)
+        parts = (m.text or "").split(maxsplit=1)        # /test [haiku|sonnet|<id модели>]
+        chosen = runmode.set_test(parts[1] if len(parts) > 1 else "")
+        await m.answer(
+            f"🧪 ТЕСТ-режим включён для ВСЕХ агентов → модель {chosen} (дёшево).\n"
+            f"Это НЕ боевое качество — в прод-канал не публикуем. Вернуть боевой: /main")
+
+    @dp.message(Command("main"))
+    async def _mode_main(m: Message) -> None:
+        _write_owner(owner_file, m.chat.id)
+        runmode.set_main()
+        await m.answer(
+            f"🚀 БОЕВОЙ режим для ВСЕХ агентов — модели из config.yaml "
+            f"(этот: {model}). Можно публиковать в прод-канал.")
 
     # пресет-команды: /<cmd> → заранее заданный промпт модели
     def _make_preset(preset: str):
@@ -347,7 +366,7 @@ async def run(
         await _turn(m, m.text or "")
 
     bot = Bot(config.get_secret(agent["token_env"]))
-    logging.info("Запускаю агента '%s' (модель %s)", agent_name, model)
+    logging.info("Запускаю агента '%s' — %s", agent_name, runmode.banner(model))
     if media_outbox is not None:  # маркер версии в логе — подтвердить, что бот на свежем коде
         stub = config.get_optional("GPT_IMAGE_STUB").strip()
         logging.info("Доставка: обложка отдельным фото + чистый текст [build:photo+text]%s",

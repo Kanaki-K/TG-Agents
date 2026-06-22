@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from core import agent_runtime, analytics, config, creator_tools, llm
+from core import agent_runtime, analytics, config, creator_tools, llm, runmode
 
 AGENT_NAME = "creator"
 
@@ -175,6 +175,17 @@ def _system() -> str:
     return llm.build_system(persona, ctx)
 
 
+def _schedule() -> str:
+    """Поставить последний пост в отложку. В ТЕСТ-режиме — громко предупредить, что пост
+    писала дешёвая модель (защита от «случайно опубликовал тестовое в прод»)."""
+    out = creator_tools.dispatch("publish_now", {})
+    if runmode.get()["mode"] == "test":
+        return ("⚠️ ВНИМАНИЕ: сейчас 🧪 ТЕСТ-режим — последний пост писала ДЕШЁВАЯ модель, "
+                "это НЕ боевое качество. Если канал прод — переключись /main и перегенерируй "
+                "/post, потом публикуй.\n\n" + out)
+    return out
+
+
 async def main() -> None:
     cfg = config.load_agent(AGENT_NAME)
     # адаптивное мышление — острее композиция и точнее соблюдение красных линий; включается в config.yaml
@@ -189,8 +200,9 @@ async def main() -> None:
         system_builder=_system,
         welcome=WELCOME,
         commands=COMMANDS,
-        # /schedule — ДЕТЕРМИНИРОВАННО (без LLM/кредитов Claude): ставит последний пост в отложку.
-        command_actions={"schedule": lambda: creator_tools.dispatch("publish_now", {})},
+        # /schedule — ДЕТЕРМИНИРОВАННО (без LLM/кредитов Claude): ставит последний пост в отложку
+        # (+ предупреждение, если мы в тест-режиме — см. _schedule).
+        command_actions={"schedule": _schedule},
         thinking=thinking,
         media_outbox=creator_tools.MEDIA_OUTBOX,  # make_image кладёт сюда PNG → рантайм шлёт фото
     )
