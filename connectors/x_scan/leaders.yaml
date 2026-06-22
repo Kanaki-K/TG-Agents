@@ -34,5 +34,12 @@ crypto:
   - cz_binance         # Binance — двигает рынок, первичные сигналы
   - CaitlinLong_       # Caitlin Long (Custodia) — банки/институты × крипта
 ai:
+  # --- AI × крипта мост: реальное применение, платежи, ончейн-агенты (приоритетный гем) ---
+  - jessepollak        # Jesse Pollak (Base/Coinbase) — ончейн AI-агенты и платежи (agentic payments)
+  - cdixon             # Chris Dixon (a16z) — AI × крипта инфра, «read/write/own»
+  - packyM             # Packy McCormick (Not Boring) — синтез AI×крипта×тех, куда идёт индустрия
   - balajis            # Balaji — пересечение AI × крипта × макро
+  # --- Фронтир-AI: пульс «куда идёт AI» (контекст/направление тренда; мост к крипте искать) ---
+  - sama               # Sam Altman (OpenAI) — направление/капекс AI (макро-мост: энергия → ликвидность)
+  - karpathy           # Andrej Karpathy — фронтир AI, высокий сигнал (чистый AI = контекст, не пост)
   - naval              # тех/макро-рамки
