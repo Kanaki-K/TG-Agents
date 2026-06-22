@@ -104,8 +104,17 @@ def summary() -> str:
     lines = ["=== Расход Claude за прогон ==="]
     for m, a in by.items():
         tok = a["in"] + a["out"] + a["cache_w"] + a["cache_r"]
+        hit = (100 * a["cache_r"] / (a["cache_r"] + a["in"])) if (a["cache_r"] + a["in"]) else 0
         lines.append(f"  {m}: {a['calls']} выз · {tok} ток "
                      f"(вход {a['in']}, кэш-зап {a['cache_w']}, кэш-чт {a['cache_r']}, выход {a['out']}) "
-                     f"→ ${a['cost']:.3f}")
-    lines.append(f"ИТОГО Скаут→пост: ${total():.3f}")
+                     f"→ ${a['cost']:.3f} · кэш-хит {hit:.0f}%")
+    tot_in = sum(a["in"] for a in by.values())
+    tot_r = sum(a["cache_r"] for a in by.values())
+    calls = sum(a["calls"] for a in by.values())
+    hit = (100 * tot_r / (tot_r + tot_in)) if (tot_r + tot_in) else 0
+    lines.append(f"ИТОГО Скаут→пост: ${total():.3f} · кэш-хит {hit:.0f}%")
+    # АВТО-КОНТРОЛЬ КЭША: если на серии вызовов хит низкий — кэш молча не экономит, кричим сразу.
+    if calls >= 3 and hit < 40:
+        lines.append("⚠️ КЭШ-ХИТ НИЗКИЙ — кэш почти не экономит (протух TTL / сменился системный промпт / "
+                     "изолированный прогон). Норма на серии — ≥60%. Тренд: python run_cost_report.py")
     return "\n".join(lines)
