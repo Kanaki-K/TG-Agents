@@ -278,6 +278,31 @@ def _read_md(d, which: str, empty: str, not_found: str) -> str:
     return f"=== {target.name} ===\n{body}"
 
 
+# Набор кастом-эмодзи (data/custom_emoji.json): заголовки берут эмодзи ТОЛЬКО отсюда, иначе Telegram
+# рендерит обычный эмодзи вместо кастомного. Нормализуем (снимаем variation-selector/ZWJ/тон кожи).
+_EMOJI_VS = re.compile(r"[️‍\U0001F3FB-\U0001F3FF]")
+_EMOJI_LEAD = re.compile(
+    r"^([©®™ℹ←-⇿⌀-➿⬀-⯿"
+    r"️‍\U0001F000-\U0001FAFF\U0001F3FB-\U0001F3FF]+)")
+_allowed_emoji_cache: set | None = None
+
+
+def _emoji_norm(s: str) -> str:
+    return _EMOJI_VS.sub("", s)
+
+
+def _allowed_emoji() -> set:
+    global _allowed_emoji_cache
+    if _allowed_emoji_cache is None:
+        try:
+            import json
+            data = json.loads((config.ROOT / "data" / "custom_emoji.json").read_text(encoding="utf-8"))
+            _allowed_emoji_cache = {_emoji_norm(k) for k in data}
+        except Exception:
+            _allowed_emoji_cache = set()
+    return _allowed_emoji_cache
+
+
 def _lint(content: str, kind: str = "") -> tuple:
     """Код-гейт типографики/размера (детерминированно, не на доверии к модели).
 
@@ -371,6 +396,19 @@ def _lint(content: str, kind: str = "") -> tuple:
     if dom:
         warns.append(f"бренд-домен в теле — {dom[:3]}: Telegram авто-линкует в ссылку (в тело ссылок нельзя) — "
                      f"переформулируй (напр. «биржа Crypto…»)")
+    # Эмодзи ЗАГОЛОВКОВ — ТОЛЬКО из набора (data/custom_emoji.json): чужой (🤖) рендерится обычным, не кастом.
+    allowed = _allowed_emoji()
+    if allowed:
+        bad = []
+        for ln in clean.split("\n"):
+            mm = _EMOJI_LEAD.match(ln.replace("**", "").lstrip())
+            if mm:
+                lead = _emoji_norm(mm.group(1))
+                if lead and lead not in allowed and lead not in bad:
+                    bad.append(lead)
+        if bad:
+            warns.append("эмодзи-заголовок НЕ из набора (рендерится обычным, не кастом): "
+                         + " ".join(bad) + " — возьми из data/custom_emoji.json (93 шт)")
     # Якорный жирный (§5): плотность 10–15%. Считаем долю символов внутри **…** от видимого текста.
     # >18% = «выделил слишком много» (жирное обесценивается); <4% или <2 выделений = «жирного НЕТ»
     # (пост не сканируется — частый промах: модель забывает разметку, хотя §5 этого требует).
