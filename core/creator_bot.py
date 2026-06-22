@@ -186,6 +186,13 @@ def _schedule() -> str:
     return out
 
 
+def _verify() -> str:
+    """2FA-фактчек последнего драфта: независимый Sonnet сверяет цифры/факты с web_search и брифом."""
+    from core import verify
+    return verify.verify_post(verify.latest_draft(), verify.latest_brief(),
+                              api_key=config.agent_api_key(config.load_agent(AGENT_NAME)))
+
+
 async def main() -> None:
     cfg = config.load_agent(AGENT_NAME)
     # адаптивное мышление — острее композиция и точнее соблюдение красных линий; включается в config.yaml
@@ -200,9 +207,9 @@ async def main() -> None:
         system_builder=_system,
         welcome=WELCOME,
         commands=COMMANDS,
-        # /schedule — ДЕТЕРМИНИРОВАННО (без LLM/кредитов Claude): ставит последний пост в отложку
-        # (+ предупреждение, если мы в тест-режиме — см. _schedule).
-        command_actions={"schedule": _schedule},
+        # /schedule — ставит последний пост в отложку (+ предупреждение в тест-режиме, см. _schedule).
+        # /verify — независимый 2FA-фактчек последнего драфта (Sonnet, web_search) — см. _verify.
+        command_actions={"schedule": _schedule, "verify": _verify},
         thinking=thinking,
         media_outbox=creator_tools.MEDIA_OUTBOX,  # make_image кладёт сюда PNG → рантайм шлёт фото
     )

@@ -18,7 +18,7 @@ import concurrent.futures
 import logging
 import sys
 
-from core import config, cost, creator_bot, creator_tools, llm, runmode, scout_bot, scout_tools
+from core import config, cost, creator_bot, creator_tools, llm, runmode, scout_bot, scout_tools, verify
 
 logging.basicConfig(level=logging.INFO)
 
@@ -47,7 +47,7 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator() -> None:
+def _run_creator() -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -61,6 +61,7 @@ def _run_creator() -> None:
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], creator_bot.COMMANDS["post"],
                         tools, creator_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
+    return text or ""
 
 
 def main() -> None:
@@ -78,10 +79,19 @@ def main() -> None:
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
     try:
-        _run_creator()
+        post = _run_creator()
     except Exception as e:
         print(f"❌ Криейтор не сделал пост: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return
+    # 2FA: независимый фактчек флагмана (Sonnet) ПЕРЕД постановкой — цифры самый дорогой класс ошибок
+    if post:
+        print("🔎 [Фактчек 2FA] Независимая проверка цифр/фактов (Sonnet)...")
+        try:
+            verdict = verify.verify_post(post, verify.latest_brief(),
+                                         api_key=config.agent_api_key(config.load_agent("creator")))
+            print(verdict, "\n")
+        except Exception:
+            logging.exception("Фактчек 2FA не удался — пост НЕ блокирую, ставлю как есть")
     print("🗓 [3/3] Ставлю в отложенные канала...")
     print(_threaded(creator_tools.dispatch, "publish_now", {}))
     print("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
