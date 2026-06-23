@@ -138,9 +138,9 @@
 - ☑ **P2-10 [docs] Починить рассинхрон ARCHITECTURE.md с кодом.** ✅ СДЕЛАНО 23.06.2026 — ARCHITECTURE.md
   переписан под реальный код (Криейтор с ~17 инстр.; добавлены конвейер, карта файлов-шины, авторизация,
   точки хрупкости, как добавить агента/коннектор). Онбординг-документ.
-- ☐ **P2-11 [security] SSRF-фильтр в fetch_page.** `feeds.py:30` `urlopen` любого http/https после проверки
-  схемы — нет блока приватных/loopback/link-local (`169.254.169.254`, `127.0.0.1`). С P0-1 закрыто почти
-  полностью; добавить резолв хоста + блок приватных диапазонов.
+- ☑ **P2-11 [security] SSRF-фильтр в fetch_page.** ✅ СДЕЛАНО 23.06.2026 — `_url_blocked_reason` резолвит
+  хост и блокирует private/loopback/link-local/reserved (вкл. `169.254.169.254`, `127.0.0.1`); кастомный
+  `_SafeRedirect` перепроверяет каждый редирект; покрыто `tests/test_ssrf.py` (5 кейсов).
 - ☐ **P2-12 [ops] CI + линтеры + версия Python.** Нет `pyproject.toml`/ruff/mypy/pre-commit/GitHub Actions
   (хотя в коде есть `# noqa` — линтер ожидался). **Фикс:** `pyproject.toml` (ruff + ruff format, mypy на
   `core/`), workflow `ruff check && pytest`, `.python-version` (3.11; код требует 3.10+).

@@ -5,9 +5,13 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
+import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 import feedparser
 import yaml
@@ -27,17 +31,64 @@ def _clean(html_text: str, limit: int = 500) -> str:
     return text[:limit]
 
 
+# --- SSRF-защита: fetch_page берёт URL из веб-контента (недоверенный вход), поэтому НЕ пускаем
+# запросы на приватные/локальные адреса (метаданные облака 169.254.169.254, 127.0.0.1, внутренняя сеть). ---
+def _ip_is_blocked(ip_str: str) -> bool:
+    """True для приватных/loopback/link-local/reserved/multicast адресов (и для не-IP)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _host_is_blocked(host: str) -> bool:
+    """True, если хост сам является или резолвится в заблокированный адрес. Не резолвится → блок."""
+    if not host:
+        return True
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return True
+    return any(_ip_is_blocked(info[4][0]) for info in infos)
+
+
+def _url_blocked_reason(url: str) -> str | None:
+    """Причина блокировки URL или None если безопасен (http/https + публичный адрес)."""
+    p = urlparse(url)
+    if p.scheme not in ("http", "https"):
+        return "нужен http/https"
+    if _host_is_blocked(p.hostname or ""):
+        return "приватный/локальный адрес (SSRF-защита)"
+    return None
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Перепроверяет КАЖДЫЙ редирект: открытый хост может увести на внутренний адрес."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        reason = _url_blocked_reason(newurl)
+        if reason:
+            raise urllib.error.HTTPError(newurl, code, f"редирект заблокирован ({reason})", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_SAFE_OPENER = urllib.request.build_opener(_SafeRedirect())
+
+
 def fetch_page(url: str, limit: int = 4000) -> str:
     """Скачать страницу по ссылке и вернуть очищенный текст.
 
     «Рука» для Скаута: прочитать источник и вытащить ТОЧНЫЕ цифры/цитаты, а не только
     сниппет из поиска. Клиентская загрузка (urllib) — без серверных контейнеров.
+    SSRF-защита: блокируем приватные/локальные адреса и проверяем редиректы.
     """
-    if not url.lower().startswith(("http://", "https://")):
-        return "Некорректный URL (нужен http/https)."
+    reason = _url_blocked_reason(url)
+    if reason:
+        return f"Ссылку не открыл ({reason})."
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (KanakiScout)"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with _SAFE_OPENER.open(req, timeout=15) as resp:
             raw = resp.read(800_000)  # кап на размер тела
             charset = resp.headers.get_content_charset() or "utf-8"
             html = raw.decode(charset, errors="replace")
