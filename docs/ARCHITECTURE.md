@@ -1,95 +1,247 @@
 # Архитектура TG-Agents
 
-Карта проекта для инженера: что где лежит, как устроен агент, как добавить нового.
+Карта проекта для инженера: что где лежит, как устроен агент, как течёт пост от идеи до канала,
+как добавить агента/коннектор и что НЕЛЬЗЯ трогать не подумав.
 Полное «зачем» и стратегия — в [PLAN.md](PLAN.md). Контекст для Claude Code — в [../CLAUDE.md](../CLAUDE.md).
+Зрелость и панч-лист фиксов — в [AUDIT.md](AUDIT.md).
 
-## Принцип
+> Статус на 2026-06-23: завод работает end-to-end (Скаут→Криейтор→Публикатор). 5 ботов + 1 «бот-без-бота»
+> (Публикатор). Общая зрелость 7/10.
+
+---
+
+## 1. Принцип
+
 **Мозги vs руки.** LLM-логика (рассуждения агента) дёшева и единообразна — её крутит общий
-движок. Дорогое и хрупкое — это **руки**: коннекторы к внешнему миру (Telegram, RSS, веб). Ядро
-отделено от коннекторов, чтобы переносить систему и на другие продукты, не только этот канал.
+движок `core/agent_runtime.py`. Дорогое и хрупкое — это **руки**: коннекторы к внешнему миру
+(`connectors/`). Ядро отделено от коннекторов, чтобы переносить систему и на другие продукты.
 
-**Данные vs суждение** (см. PLAN §11): чтение данных — через общий слой (прямой вызов), обмен
-суждениями между агентами — позже через оркестратор. Память — **отдельный общий слой, ничей**.
+**Данные vs суждение** (PLAN §11): чтение данных — через общий слой (прямой вызов), обмен суждениями
+между агентами — пока через ФАЙЛЫ-шину (брифы/драфты), оркестратор позже. Память — **отдельный общий
+слой, ничей**.
 
-## Слои
+**Инверсия зависимостей** (главный архитектурный актив): `agent_runtime.run()` полностью
+параметризован (`tools_schema`/`dispatch`/`system_builder`) — движок НЕ знает про агентов; агенты
+импортируют движок, не наоборот. Добавить агента = заполнить параметры, ядро не трогать.
+
+---
+
+## 2. Слои (дерево)
 
 ```
 core/         ДВИЖОК + реализация агентов (код, импортируемый)
 agents/       ОПРЕДЕЛЕНИЯ агентов (данные: config.yaml + SKILL.md + README) — папки с дефисами, НЕ пакеты
-connectors/   РУКИ к внешнему миру (Telegram MTProto, RSS/веб)
-memory/       ОБЩИЙ СЛОЙ ПАМЯТИ (канон бренда, стандарт поста, профиль, задачи, журнал)
-docs/         документация (PLAN, ARCHITECTURE)
-run_*.py      точки входа (по одной на агента)
+connectors/   РУКИ к внешнему миру (Telegram MTProto, RSS/веб, X, ChatGPT-картинки)
+memory/       ОБЩИЙ СЛОЙ ПАМЯТИ (канон бренда, стандарт, уроки, брифы, драфты, профиль, задачи)
+data/         РАНТАЙМ-артефакты (вне git: сессии, выгрузки, обложки, cost-лог, режим)
+docs/         документация (PLAN, ARCHITECTURE, AUDIT)
+run_*.py      точки входа (по одной на агента) + run_pipeline.py (вся цепь) + run_cost_report.py
+main.py       точка входа Личного ассистента (исторически, не run_assistant.py)
 ```
 
-## core/ — что движок, а что код агента
+---
 
-Чтобы `core/` не читался как «куча», вот таксономия (per-agent файлы лежат тут вынужденно —
-см. «Почему» ниже):
+## 3. Точки входа (что запускает кого)
+
+| Файл | Поднимает | Токен (.env) | Ключ Claude | Модель |
+|---|---|---|---|---|
+| `main.py` | Личный ассистент | `SECRETARY_BOT_TOKEN` | `ANTHROPIC_API_KEY` | haiku-4-5 |
+| `run_scout.py` | Скаут | `SCOUT_BOT_TOKEN` | `SCOUT_ANTHROPIC_KEY`→общий | sonnet-4-6 |
+| `run_creator.py` | Криейтор | `CREATOR_BOT_TOKEN` | `CREATOR_ANTHROPIC_KEY`→общий | opus-4-8 |
+| `run_analyst.py` | Аналитик | `ANALYST_BOT_TOKEN` | `ANALYST_ANTHROPIC_KEY`→общий | haiku-4-5 |
+| `run_dev.py` | Разработчик | `DEVELOPER_BOT_TOKEN` | `DEVELOPER_ANTHROPIC_KEY`→общий | opus-4-8 |
+| `run_pipeline.py` | НЕ бот — вся цепь Скаут→Криейтор→2FA→отложка одной командой | ключи агентов | — | через runmode |
+| `run_cost_report.py` | НЕ бот — отчёт по `data/cost_log.jsonl` (прогоны/дни/цена/кэш) | — | — | — |
+
+**Публикатор** (`agents/publisher/`) — НЕ бот: точки входа и токена нет. Это команда `/schedule` внутри
+Криейтора (детерминированная, без LLM) + коннектор `telegram_publish`. `config.yaml` оставлен как
+документация роли.
+
+---
+
+## 4. core/ — что движок, а что код агента
+
+Per-agent файлы лежат в `core/` вынужденно (см. §8 «Почему»). Таксономия:
 
 **Движок (генерик, переиспользуется всеми):**
-- `agent_runtime.py` — aiogram-бот + цикл: приём сообщения → `llm.reply` → ответ. Здесь же
-  общие предохранители: подрезка истории, замок «занят», разбивка длинных ответов, рендер в HTML.
-- `llm.py` — обёртка над Claude API: агентный цикл инструментов (tool_use), дата в системный промпт.
-- `config.py` — загрузка `.env` (секреты) + `agents/<name>/{config.yaml,SKILL.md}`.
-- `tg_format.py` — Markdown ответа модели → Telegram-HTML (жирный/код/ссылки/списки).
+- `agent_runtime.py` — aiogram-бот + ход: приём → `llm.reply` → ответ. Здесь же общее: **авторизация
+  OWNER_ID** (outer-middleware), подрезка истории, замок «занят», разбивка длинных ответов по `[[SPLIT]]`,
+  доставка обложки+текста, периодические задачи, команды-пресеты/действия/post-hooks.
+- `llm.py` — обёртка над Claude API: агентный цикл инструментов (tool_use), prompt-caching, дата в
+  системный промпт, per-tool try/except.
+- `config.py` — `.env` (секреты), `owner_ids()`, `agents/<name>/{config.yaml,SKILL.md}`, ключ агента.
+- `runmode.py` — выбор модели: `/test` (дёшево) / `/main` (бой) / `MODEL_OVERRIDE`; глобально через
+  `data/run_mode.txt`.
+- `cost.py` — учёт токенов/цены каждого вызова → `data/cost_log.jsonl`.
+- `tg_format.py` — Markdown ответа → Telegram-HTML (жирный/код/ссылки/списки + кастом-эмодзи).
 
 **Общие слои данных:**
-- `memory.py` — память Личного ассистента (профиль/задачи/журнал в `/memory`).
-- `analytics.py` — метрики канала (читает `data/`), используется Аналитиком, Скаутом, Криейтором.
+- `memory.py` — память Личного ассистента (профиль/задачи/журнал).
+- `analytics.py` — метрики канала (читает `data/`); используют Аналитик, Скаут, Криейтор.
+- `workshop.py` — propose→apply правок SKILL.md (только Разработчик; гейт + бэкап + анти-traversal).
+- `content_plan.py` — слоты ритма недели для публикации (Вт/Чт флагман, Пн/Ср/Пт короткий).
+- `verify.py` — независимый 2FA-фактчек поста (Sonnet + web_search) перед постановкой.
 
 **Реализация агентов (бот + «руки» каждого):**
-| Агент | Бот | Инструменты |
+| Агент | Бот | Инструменты (`*_tools.py`) → бэкенд |
 |---|---|---|
-| personal-assistant | `bot.py` | `tools.py` (память) → `memory.py` |
+| personal-assistant | `bot.py` | `tools.py` → `memory.py` |
 | channel-analyst | `analyst_bot.py` | `analyst_tools.py` → `analytics.py` |
 | developer | `dev_bot.py` | `dev_tools.py` → `workshop.py` |
 | scout | `scout_bot.py` | `scout_tools.py` → `connectors/*` + `analytics.py` |
-| creator | `creator_bot.py` | — (чистое письмо) |
+| creator | `creator_bot.py` | `creator_tools.py` (~17 инстр.: `make_image`, `publish_now`, `save_draft`, `read_brief`, линтер `_lint`, `record_lesson`…) → `connectors/gpt_image`, `telegram_publish`, `content_plan`, `analytics` |
+
+> ⚠️ Криейтор НЕ «чистое письмо» — у него самый богатый набор рук (рисует обложку, ставит отложку,
+> учится на правках). Старая версия этого документа врала «без инструментов».
+
+---
+
+## 5. Сквозной конвейер: как пост доходит до канала
+
+Шаги развязаны **через ФАЙЛЫ-шину** (не через память процесса) — поэтому каждый можно гонять отдельно,
+а `run_pipeline.py` просто связывает их в один прогон.
+
+```
+СКАУТ /scan
+  читает: web_sources(RSS) + telegram_scan(чужие каналы) + x_scan(X-лидеры) + web_search + analytics(дедуп)
+  ПИШЕТ → memory/briefs/<дата>-<slug>.md                                    ★ШИНА★
+        │
+        ▼
+КРИЕЙТОР /post
+  читает: memory/briefs/ (read_brief 'latest') + 5 файлов памяти в системный промпт + analytics(что зашло)
+  рисует обложку: make_image → connectors/gpt_image → PNG в data/gpt_images/
+                  путь → data/creator_last_cover.txt                        ★ШИНА★ (для /schedule)
+  ПИШЕТ → memory/drafts/<дата>-<slug>.md (save_draft + код-линтер _lint)    ★ШИНА★
+  АВТО-2FA (post-hook): verify.verify_post(latest_draft, latest_brief) — независимый Sonnet; правки→_fix_facts
+        │
+        ▼
+ПУБЛИКАТОР /schedule  (command_action — БЕЗ LLM, детерминированно, $0)
+  creator_tools._publish_now(): берёт последний draft + cover-файл
+    → БОЙ: авто-гейт 2FA (есть замечания → НЕ публикует) + авто-2FA-код
+    → content_plan.next_slot(kind) — слот по ритму недели
+    → telegram_publish.publish() — MTProto userbot ставит нативную ОТЛОЖКУ в канал
+    → notify(PUBLISH_NOTIFY) — ЛС владельцу «запланировано на …»
+        │
+        ▼
+  Владелец видит/правит/одобряет в нативных «Отложенных» канала → Telegram отправляет по слоту.
+```
+
+`run_pipeline.py` гоняет всю цепь в одном процессе (тоже через те же файлы); `--skip-scout` берёт
+последний бриф. Каждый шаг — в отдельном потоке (playwright/make_image требует свой event loop).
+
+---
+
+## 6. Память и данные: кто пишет, кто читает
+
+`★` = шина конвейера. Источник правды для задач/форматов — JSON; `.md` генерируется.
+
+**memory/ (в git, кроме pending/briefs/drafts):**
+| Файл | Писатель | Читатель |
+|---|---|---|
+| `brand.md` (канон: ниша/голос/линза ценности) | владелец | Скаут, Криейтор (`_system`) |
+| `content_manual.md` («библия», самый жирный вход) | владелец | Криейтор |
+| `post_standard.md` (стандарт+форматы) | Криейтор `apply_standard` (бэкап `.history/`) | Скаут, Криейтор; зеркалит `content_plan.py` |
+| `format_playbook.md` («что заходит») | **Аналитик** `save_playbook` | **Криейтор** `_system` |
+| `post_lessons.md` (уроки из правок) | Криейтор `record_lesson` (анти-дубль) | Криейтор `_system` |
+| `sources.md` / `sources.pending.md` | владелец / Скаут `propose_source` | Скаут / владелец |
+| `x_authors.json` ★ леджер X (gitignore) | `x_scan.update_author` | `x_scan`, `read_x_ledger` |
+| `briefs/*.md` ★ (gitignore) | Скаут `save_brief` | Криейтор, verify |
+| `drafts/*.md` ★ (gitignore) | Криейтор `save_draft` | Криейтор, `_publish_now`, verify |
+| `image_prompt.md` (стиль обложки) | владелец | Криейтор `_build_image_prompt` |
+| `profile.md` / `tasks.json` ★ / `journal/` | Личный ассистент | он же / люди |
+| `agents/<name>/SKILL.md` (личность) | **Разработчик** `workshop.apply` (бэкап `.history/`) | этот агент `_system` |
+
+**data/ (вне git — рантайм):**
+| Файл | Писатель | Читатель |
+|---|---|---|
+| `channel_posts.json` / `channel_stats.json` / `post_topics.json` / `post_formats.json` | `telegram_export/*` + Аналитик | `analytics.py` |
+| `custom_emoji.json` | `telegram_emoji/collect_ids.py` | `tg_format`, `creator_tools._lint` |
+| `creator_last_cover.txt` ★ / `creator_pending_media.txt` ★ | `creator_tools.make_image` | `_publish_now` / `agent_runtime` |
+| `cost_log.jsonl` | `cost.py` | `run_cost_report.py` |
+| `run_mode.txt` | `runmode.set_*` (любой бот) | `runmode.resolve` (все, каждый ход) |
+| `<agent>_owner.txt` | `agent_runtime._write_owner` | `_periodic_loop` (проактивные отчёты) |
+| `evgeniyp.session` (MTProto, **невосстановима**) | `telegram_export/login.py` | весь MTProto (export/scan/publish) |
+| `gpt_profile/` / `gpt_images/*.png` | `gpt_image/login.py` / `generate.py` | `gpt_image/generate` / `telegram_publish` |
+
+---
+
+## 7. Коннекторы (руки): что / креды / кто зовёт
+
+| Коннектор | Что | Креды | Зовёт |
+|---|---|---|---|
+| `telegram_export/` | сбор постов+статистики своего канала, разметка тем | MTProto (`TELEGRAM_API_ID/HASH/PHONE/SESSION`, `data/evgeniyp.session`) | CLI; `_client` импортируют scan+publish |
+| `telegram_scan/` | чтение чужих каналов (Тир-3); `channels.yaml` | та же MTProto-сессия | `scout_tools` |
+| `web_sources/` | RSS/Atom (Тир-2, `sources.yaml`) + `fetch_page` | публичные URL | `scout_tools` |
+| `x_scan/` | твиты X-лидеров (`leaders.yaml`); монки-патч `_twikit_patch` | бёрнер-куки (`X_AUTH_TOKEN/CT0` или `data/x_cookies.json`) | `scout_tools` |
+| `gpt_image/` | обложка через веб-ChatGPT (playwright) | бёрнер-профиль `data/gpt_profile/` | `creator_tools.make_image` |
+| `telegram_publish/` | нативная отложка в канал (userbot) | та же MTProto-сессия (`PUBLISH_CHANNEL/NOTIFY`) | `creator_tools._publish_now` |
+| `telegram_emoji/` | сбор id кастом-эмодзи | `EMOJI_BOT_TOKEN`→`CREATOR_BOT_TOKEN` | CLI → `data/custom_emoji.json` |
+
+---
+
+## 8. Авторизация и режимы
+
+- **OWNER_ID** (`config.owner_ids()`): один outer-middleware `_owner_only` в `agent_runtime` гейтит ВСЕХ
+  по `OWNER_ID` (список через запятую в `.env`). Пусто = открыт всем + громкий warning на старте. Узнать
+  свой id — `/whoami`. CLI-входы (`run_pipeline`) гейт не проходят — они доверенные (запускает владелец).
+- **Режим test/main** (`/test`, `/main`) — глобально для ВСЕХ ботов через `data/run_mode.txt`. `/test`
+  подменяет модель на дешёвую (не публиковать в прод).
+
+---
+
+## 9. ⚠️ Точки хрупкости — что НЕ трогать не подумав
+
+Перед изменением проверь, не зацепишь ли:
+1. **Один MTProto-аккаунт на 3 коннектора** (`telegram_export._client` ← scan, publish). Протухла
+   сессия / сменил логику клиента → разом легли аналитика, разведка ТГ И публикация.
+2. **Файлы-шина без схемы** — `_publish_now` берёт САМЫЙ СВЕЖИЙ `.md` из `drafts/` по mtime. Любой
+   посторонний файл в папке станет «постом». Бриф↔драфт↔verify связаны только «latest», не id.
+3. **`content_plan.py` — ручное зеркало** `post_standard.md` (дни/время захардкожены). Меняешь стандарт
+   текстом — план в коде НЕ обновится сам.
+4. **Маркеры-протоколы модель↔код:** `[[SPLIT]]` (разбивка), `СТАТУС: ЧИСТО`/`СТАТУС: ПРАВКИ`
+   (вердикт 2FA — смена формулировки в `verify` ломает авто-гейт `/schedule`), `[ПРОВЕРИТЬ]`,
+   футер-эмодзи/якорный жирный (ловит линтер `_lint` регэкспами).
+5. **Имя папки агента = имя везде** (`config.load_agent`, `data/<name>_owner.txt`, `.history`, workshop).
+   Переименование = каскад поломок.
+6. **Публикация — ФАЙЛОМ, без URL/хостинга** (выстрадано 20.06): хостинги обложек выкинуты, ломали.
+   Не возвращать telegra.ph/превью-ссылки.
+7. **Prompt-caching завязан на байт-стабильность системного промпта** (`llm.py`, TTL=1h). Если
+   `_system()` меняется внутри серии прогонов — кэш протухает, цена растёт (`run_cost_report` кричит при
+   кэш-хите <40%).
+
+---
+
+## 10. Как устроен один агент (5 частей)
+1. `agents/<name>/config.yaml` — модель, `token_env`, опц. `api_key_env`, флаги (`custom_emoji`, `thinking`).
+2. `agents/<name>/SKILL.md` — личность (системный промпт: роль, тон, правила).
+3. `agents/<name>/README.md` — человекочитаемое описание.
+4. `core/<name>_bot.py` — обвязка: собирает `tools_schema`+`dispatch`+`_system()` и зовёт `agent_runtime.run(...)`.
+5. `core/<name>_tools.py` — «руки» (схемы инструментов + dispatch).
 
 ### Почему код агентов в core/, а не в agents/<name>/
-Папки агентов названы с дефисами (`channel-analyst`, `personal-assistant`) и используются как
-**имя агента** (`config.load_agent(name)`), путь к `.history`, цель для workshop. Дефис недопустим
-в имени Python-пакета — `import agents.channel-analyst` невозможен. Поэтому импортируемый код агента
-живёт в `core/` по конвенции **`core/<agent>_bot.py` + `core/<agent>_tools.py`**, а в `agents/<name>/`
-лежат только **данные** (config + SKILL + README). Менять это = переименовывать папки в underscore
-и чинить каскад (конфиги, история, workshop) — не делаем без тестового прогона.
+Папки агентов с дефисами (`channel-analyst`) = **имя агента** (`config.load_agent`, `.history`, workshop).
+Дефис недопустим в имени Python-пакета — `import agents.channel-analyst` невозможен. Поэтому
+импортируемый код живёт в `core/` по конвенции **`core/<agent>_bot.py` + `core/<agent>_tools.py`**, а в
+`agents/<name>/` — только данные. Решение 15.06.2026: для живого 5-агентного проекта стабильность важнее
+структурной чистоты; «пакет-на-агента» = рефактор без выигрыша. Пересмотреть при сильном росте/команде.
 
-**Решение по структуре (15.06.2026):** сознательно выбран этот плоский паттерн (движок + код
-агентов в `core/` по конвенции `<agent>_bot.py`/`<agent>_tools.py`), а НЕ «пакет-на-агента».
-Для живого 5-агентного проекта стабильность и ясность (через документацию) важнее структурной
-чистоты; «пакет-на-агента» = рефактор без функционального выигрыша. Пересмотреть при сильном
-росте или появлении команды разработчиков.
+---
 
-## Как устроен один агент (5 частей)
-1. `agents/<name>/config.yaml` — модель, `token_env`, опц. `api_key_env`, флаги.
-2. `agents/<name>/SKILL.md` — личность (системный промпт: роль, тон, правила).
-3. `agents/<name>/README.md` — человекочитаемое описание (этот файл у каждого).
-4. `core/<name>_bot.py` — обвязка: собирает `tools_schema` + `dispatch` + системный контекст и
-   зовёт `agent_runtime.run(...)`.
-5. `core/<name>_tools.py` — «руки» агента (схемы инструментов + диспетчер). У Криейтора их нет.
-
-Точка входа — `run_<name>.py` (у Личного ассистента исторически `main.py`).
-
-## Коннекторы (руки)
-- `connectors/telegram_export/` — сбор истории своего канала через MTProto (Telethon): вход,
-  сбор постов/статистики, обогащение темами → пишет в `data/`.
-- `connectors/telegram_scan/` — чтение чужих ТГ-каналов (Тир-3) через ту же MTProto-сессию;
-  список — `channels.yaml` (по трекам crypto/ai).
-- `connectors/web_sources/` — RSS-фиды Тир-2 (`sources.yaml`, по трекам) + `fetch_page` (чтение
-  страницы по ссылке).
-
-## Память (общий слой)
-- **Канон контента:** `brand.md` (ниша/голос/красные линии), `post_standard.md` (стандарт поста),
-  `sources.md` (реестр источников). Читают Скаут и Криейтор.
-- **Личный ассистент:** `profile.md`, `tasks.json`/`tasks.md`, `journal/`.
-- `sources.pending.md` — очередь предложенных Скаутом источников (в .gitignore).
-
-## Как добавить нового агента (чеклист)
-1. `agents/<name>/` → `config.yaml` (модель, `token_env`, `api_key_env`) + `SKILL.md` + `README.md`.
+## 11. Как добавить нового агента (чеклист)
+1. `agents/<name>/` → `config.yaml` (модель, `token_env`, опц. `api_key_env`) + `SKILL.md` + `README.md`.
 2. `core/<name>_tools.py` — `TOOLS` (схемы) + `dispatch(name, args)` (если нужны «руки»).
-3. `core/<name>_bot.py` — `_system()` (персона + нужный контекст из памяти), `WELCOME`, `COMMANDS`,
-   `main()` → `agent_runtime.run(...)`.
+3. `core/<name>_bot.py` — `_system()` (персона + нужный контекст из памяти), `WELCOME`, `COMMANDS`, `main()`
+   → `agent_runtime.run(...)`.
 4. `run_<name>.py` — `asyncio.run(main())`.
 5. `.env.example` + `.env` — `<NAME>_BOT_TOKEN` (+ опц. `<NAME>_ANTHROPIC_KEY`).
-6. Завести бота в @BotFather, вписать токен, `python run_<name>.py`.
+6. Завести бота в @BotFather, вписать токен. Если агент должен встать в конвейер — добавить шаг в
+   `run_pipeline.py`. Запуск: `python run_<name>.py`.
+7. `OWNER_ID` уже покрывает нового бота автоматически (гейт общий).
+
+## 12. Как добавить новый коннектор (руку)
+1. `connectors/<name>/` — модуль с публичными функциями (напр. `recent()`, `fetch()`), креды через
+   `config.get_secret(...)`/`get_optional(...)` (НЕ хардкодить — см. AUDIT P0-16).
+2. Внешние списки/конфиг — рядом в `<name>/*.yaml`.
+3. Подключить к нужному агенту: добавить инструмент в его `*_tools.py` (схема + ветка dispatch),
+   вызывающую коннектор.
+4. Секреты — в `.env` + `.env.example` (пустыми). Сессии/куки/профили — в `data/` (он в .gitignore).
