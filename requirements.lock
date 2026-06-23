@@ -1,11 +1,10 @@
-# Точные версии (lock) — снимок реально установленного окружения на 2026-06-23, Python 3.13.
-# Зачем: requirements.txt задаёт ДИАПАЗОНЫ (что совместимо), а этот файл — ТОЧНЫЕ версии (что
-# реально работает), чтобы на другой машине/в CI собралось байт-в-байт и не сломалось молча.
-#
-# Установка строго по локу:   pip install -r requirements.lock
-# Обновить лок после смены зависимостей (на машине с рабочим venv):  pip freeze > requirements.lock
-#
-# Прямые зависимости проекта — в requirements.txt; здесь они + все транзитивные.
+# Exact versions (lock) - snapshot of the working env on 2026-06-23, Python 3.13.
+# requirements.txt gives ranges (what is compatible); this file gives exact versions
+# (what actually works) so another machine / CI builds identically and nothing breaks silently.
+# Install exactly:  pip install -r requirements.lock
+# Refresh after changing deps (on a machine with the working venv):  pip freeze > requirements.lock
+# NB: keep ASCII-only - pip reads this in the OS locale codec (cp1251 on RU Windows); non-ASCII
+# without a BOM breaks `pip install -r` with UnicodeDecodeError.
 
 aiofiles==25.1.0
 aiogram==3.29.0

@@ -1,4 +1,6 @@
-# Инструменты разработки (НЕ нужны для запуска ботов в проде — только для тестов/линта).
-# Установка:  pip install -r requirements-dev.txt
-# Запуск тестов из корня репо:  pytest -q
+# Dev tools (NOT needed to run the bots in prod - only for tests/lint).
+# Install:  pip install -r requirements-dev.txt
+# Run tests from repo root:  python -m pytest -q
+# NB: keep this file ASCII-only - pip reads it in the OS locale codec (cp1251 on RU Windows),
+# so Cyrillic/UTF-8 comments without a BOM cause UnicodeDecodeError on install.
 pytest>=8.0,<9
