@@ -262,6 +262,25 @@ async def run(
     owner_file = config.ROOT / "data" / f"{agent_name}_owner.txt"  # куда слать проактивные отчёты
     dp = Dispatcher()
 
+    # --- АВТОРИЗАЦИЯ: пускаем к боту только владельца (OWNER_ID из .env) ---
+    # Один outer-middleware гейтит ВСЕ хэндлеры разом (команды, фото, чат) ДО фильтров.
+    # OWNER_ID пуст → гейт выкл (бот отвечает всем) + громкий warning на старте: см. ниже.
+    allowed = config.owner_ids()
+    if not allowed:
+        logging.warning(
+            "[%s] OWNER_ID не задан в .env — бот отвечает ВСЕМ. Узнай свой id командой /whoami "
+            "и впиши OWNER_ID=<id> в .env (несколько — через запятую), чтобы закрыть доступ.",
+            agent_name)
+
+    @dp.message.outer_middleware()
+    async def _owner_only(handler, event, data):
+        if allowed:
+            uid = getattr(getattr(event, "from_user", None), "id", None)
+            if uid not in allowed:
+                logging.info("[%s] отклонён не-владелец uid=%s", agent_name, uid)
+                return  # молча игнорируем чужого
+        return await handler(event, data)
+
     async def _turn(m: Message, user_text: str, cover: str | None = None) -> None:
         uid = m.from_user.id
         _write_owner(owner_file, m.chat.id)  # запоминаем чат для проактивных (еженедельных) отчётов
@@ -289,6 +308,14 @@ async def run(
             )
             history[uid] = _trim_history(hist)
             await _deliver(m, text or "…", media_outbox, custom_emoji=render_emoji, cover=cover)
+        except Exception:
+            # сбой вызова Claude (rate-limit/сеть/400) или доставки: не молчим — пишем владельцу
+            # и логируем стек. История за этот ход НЕ обновлена → следующий ход стартует с чистого.
+            logging.exception("[%s] ход упал (uid=%s)", agent_name, uid)
+            try:
+                await m.answer("Сбой при обработке запроса — загляни в лог. Попробуй ещё раз.")
+            except Exception:
+                logging.exception("Не смог даже сообщить владельцу о сбое")
         finally:
             busy.discard(uid)
 
@@ -296,6 +323,12 @@ async def run(
     async def _start(m: Message) -> None:
         _write_owner(owner_file, m.chat.id)
         await m.answer(f"{welcome}\n\n⚙️ {runmode.banner(model)}")
+
+    @dp.message(Command("whoami"))
+    async def _whoami(m: Message) -> None:
+        # помогает узнать свой numeric id, чтобы вписать OWNER_ID в .env (см. _owner_only)
+        gate = "ВКЛ (доступ только владельцу)" if allowed else "ВЫКЛ — бот открыт всем; впиши OWNER_ID в .env"
+        await m.answer(f"Твой Telegram id: `{m.from_user.id}`\nГейт OWNER_ID: {gate}")
 
     # /test и /main — ГЛОБАЛЬНЫЙ переключатель режима (дёшево тестируй / дорого публикуй).
     # Режим один на всех агентов (data/run_mode.txt), действует со следующего хода без перезапуска.

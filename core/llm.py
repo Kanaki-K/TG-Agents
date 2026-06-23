@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Callable
 
@@ -112,7 +113,13 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
         # выполняем инструменты и возвращаем результаты модели
         results = []
         for tu in tool_uses:
-            output = dispatch(tu.name, tu.input or {})
+            try:
+                output = dispatch(tu.name, tu.input or {})
+            except Exception as e:
+                # один кривой инструмент НЕ должен ронять весь ход: вернём ошибку модели
+                # как tool_result — она сможет среагировать/сообщить, а не упадёт хэндлер.
+                logging.exception("Инструмент %s упал", tu.name)
+                output = f"(ошибка инструмента {tu.name}: {e})"
             # tool_result не может быть пустым — иначе Anthropic отклонит запрос (400)
             if not (output and str(output).strip()):
                 output = "(инструмент не вернул данных)"

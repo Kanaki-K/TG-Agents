@@ -2,7 +2,7 @@
 
     python main.py
 
-Перед запуском заполни в .env: TELEGRAM_BOT_TOKEN и ANTHROPIC_API_KEY.
+Перед запуском заполни в .env: SECRETARY_BOT_TOKEN и ANTHROPIC_API_KEY.
 """
 import asyncio
 

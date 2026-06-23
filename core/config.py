@@ -26,6 +26,21 @@ def get_optional(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
+def owner_ids() -> set[int]:
+    """Разрешённые Telegram user-id (владелец + при нужде свои боты для bot-to-bot).
+
+    Берём из .env OWNER_ID — одно число или несколько через запятую. Пусто = гейт ВЫКЛЮЧЕН
+    (бот отвечает всем) — стартовый рантайм об этом громко предупреждает. Узнать свой id: /whoami.
+    """
+    raw = (os.getenv("OWNER_ID") or "").strip()
+    ids: set[int] = set()
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.add(int(part))
+    return ids
+
+
 def agent_api_key(cfg: dict) -> str:
     """Ключ Claude для агента: свой (cfg['api_key_env']) или общий ANTHROPIC_API_KEY."""
     env = cfg.get("api_key_env")
