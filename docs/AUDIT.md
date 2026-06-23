@@ -92,8 +92,15 @@
   `config.yaml`/`.env.example` ждут `SECRETARY_BOT_TOKEN`. Новый пользователь впишет не тот ключ →
   RuntimeError. **Фикс:** заменить на `SECRETARY_BOT_TOKEN`. 1 строка.
 
-- ☐ **P0-16 [security] Захардкоженный Telegram API_HASH + телефон в коде, в истории git.** НАЙДЕНО при
-  переаудите 23.06.2026. `connectors/telegram_export/make_session.py:21-22` содержит реальные `API_ID=REDACTED`
+- ☑ **P0-16 [security] Захардкоженный Telegram API_HASH + телефон в коде, в истории git.** ✅ СДЕЛАНО
+  23.06.2026 — (1) секрет убран из кода (`make_session.py` читает из `.env`); (2) история git очищена
+  (`filter-branch` по `make_session.py` + `docs/AUDIT.md`, продут gc) — номер/хэш/api_id отовсюду удалены
+  (0/0/0); (3) **force-push на GitHub** (`b246f31→341d1bc`), origin синхронен. NB: ротацию самого api_hash
+  НЕ делали — Telegram не даёт пересоздать hash приложения; репо приватный, hash≠токен/сессия (низкий риск).
+  Остаточно: GitHub может держать «висячие» старые коммиты по прямому SHA до своего GC (приватный, без
+  форков — практически недоступны). ↓ исходный контекст:
+- ~~☐ **P0-16 [security] Захардкоженный Telegram API_HASH + телефон.**~~ НАЙДЕНО при
+  переаудите 23.06.2026. `connectors/telegram_export/make_session.py:21-22` содержал реальные `API_ID=REDACTED`
   и `API_HASH="cb9e44…"`, в докстроке `:4` — реальный телефон (PII, redacted). Файл трекается; api_hash
   **подтверждённо в истории** (коммит `a0fe09b`). Серьёзность УМЕРЕННАЯ: это app-hash + PII, не бот-токен и
   не сессия (аккаунт им не угоняют), репо приватный. `.env`/`*.session`/куки в индексе чисты. **Фикс:**
