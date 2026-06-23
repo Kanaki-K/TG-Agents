@@ -1,6 +1,6 @@
 # Зависимости личного ассистента (Python)
 aiogram>=3.7,<4        # Telegram-бот
-anthropic>=0.40        # клиент Claude API (для веб-поиска Скаута нужен свежий SDK: pip install -U anthropic)
+anthropic>=0.40,<1     # клиент Claude API. Потолок <1: код завязан на структуру resp.content/stop_reason/server_tool_use (llm.py) — мажор 1.0 их перепишет и молча сломает парк ботов. Точные пины — requirements.lock
 python-dotenv>=1.0     # чтение .env
 PyYAML>=6.0            # конфиги агентов
 telethon>=1.36         # Telegram Client API (MTProto) — сбор истории канала

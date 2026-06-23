@@ -1,0 +1,65 @@
+# Точные версии (lock) — снимок реально установленного окружения на 2026-06-23, Python 3.13.
+# Зачем: requirements.txt задаёт ДИАПАЗОНЫ (что совместимо), а этот файл — ТОЧНЫЕ версии (что
+# реально работает), чтобы на другой машине/в CI собралось байт-в-байт и не сломалось молча.
+#
+# Установка строго по локу:   pip install -r requirements.lock
+# Обновить лок после смены зависимостей (на машине с рабочим venv):  pip freeze > requirements.lock
+#
+# Прямые зависимости проекта — в requirements.txt; здесь они + все транзитивные.
+
+aiofiles==25.1.0
+aiogram==3.29.0
+aiohappyeyeballs==2.6.2
+aiohttp==3.14.1
+aiosignal==1.4.0
+annotated-types==0.7.0
+anthropic==0.109.1
+anyio==4.13.0
+attrs==26.1.0
+beautifulsoup4==4.15.0
+certifi==2026.5.20
+colorama==0.4.6
+distro==1.9.0
+docstring-parser==0.18.0
+et-xmlfile==2.0.0
+feedparser==6.0.12
+filetype==1.2.0
+frozenlist==1.8.0
+greenlet==3.5.2
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+jiter==0.15.0
+Js2Py-3.13==0.74.1
+lxml==6.1.1
+m3u8==6.0.0
+magic-filter==1.0.12
+multidict==6.7.1
+openpyxl==3.1.5
+playwright==1.60.0
+propcache==0.5.2
+pyaes==1.6.1
+pyasn1==0.6.3
+pydantic==2.13.4
+pydantic-core==2.46.4
+pyee==13.0.1
+pyjsparser==2.7.1
+pyotp==2.10.0
+python-dotenv==1.2.2
+PyYAML==6.0.3
+qrcode==8.2
+rsa==4.9.1
+sgmllib3k==1.0.0
+six==1.17.0
+sniffio==1.3.1
+socksio==1.0.0
+soupsieve==2.8.4
+telethon==1.43.2
+twikit==2.3.3
+typing-extensions==4.15.0
+typing-inspection==0.4.2
+tzdata==2026.2
+tzlocal==5.4
+webvtt-py==0.5.1
+yarl==1.24.2
