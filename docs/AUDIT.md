@@ -128,11 +128,11 @@
 
 ### 🟢 P2 — чистота кода и техдолг
 
-- ☐ **P2-8 [arch/quality] Общий реестр аналитических tools.** `find_posts`/`by_theme`/`top_posts`/
-  `by_dimension`/`themes_overview`/`recent_posts` продублированы (схема + ветка dispatch) в
-  `analyst_tools`/`scout_tools`/`creator_tools` — с расходящимися описаниями (риск качества: модель видит
-  разные инструкции на один инструмент). **Фикс:** общий модуль `core/analytics_tools.py` с `SCHEMAS`/
-  `DISPATCH`, агенты импортируют и расширяют. Снимет ~120 строк копипасты.
+- ◐ **P2-8 [arch/quality] Общий реестр аналитических tools.** ✅ ЧАСТИЧНО 23.06.2026 — общий **dispatch**
+  вынесен в `core/analytics_tools.py` (см. P2-13). **СХЕМЫ намеренно НЕ объединены:** их описания у агентов
+  разные не случайно, а под роль (Скаут `find_posts`=«дедуп», Криейтор=«анти-повтор», Аналитик=«сравнение»)
+  — это не дубль, а полезная подсказка модели. `top_posts` тоже оставлен в агентах (дефолт metric у Аналитика
+  `views`, у Криейтора `er`). Вывод: «дубль схем» оказался ролевой кастомизацией — трогать НЕ надо.
 - ☐ **P2-9 [arch] Персистентность истории диалога.** `agent_runtime.py:179` `history` — в RAM, гибнет на
   рестарте; для «личного ассистента/живого ТуДу» теряется контекст сессии. **Фикс:** хвост на диск
   (`data/<agent>_history.json`) по аналогии с owner-файлами (которые уже персистятся).
@@ -145,8 +145,12 @@
 - ☐ **P2-12 [ops] CI + линтеры + версия Python.** Нет `pyproject.toml`/ruff/mypy/pre-commit/GitHub Actions
   (хотя в коде есть `# noqa` — линтер ожидался). **Фикс:** `pyproject.toml` (ruff + ruff format, mypy на
   `core/`), workflow `ruff check && pytest`, `.python-version` (3.11; код требует 3.10+).
-- ☐ **P2-13 [quality] dispatch как таблица, не if-цепочка.** Паттерн `if name == ...` повторён в 5
-  tools-файлах. **Фикс:** `DISPATCH.get(name, _unknown)(args)`; частично решается вместе с P2-8.
+- ☑ **P2-13 [quality] dispatch как таблица, не if-цепочка.** ✅ СДЕЛАНО 23.06.2026 — общие read-only
+  аналитич. инструменты (`channel_summary`/`find_posts`/`by_theme`/`themes_overview`/`by_dimension`/
+  `recent_posts`) вынесены в `core/analytics_tools._SHARED` (dict имя→вызов); Скаут/Аналитик/Криейтор зовут
+  `analytics_tools.handle(name,args)` в начале своих dispatch, дубли-ветки удалены. Поведение идентично
+  (те же вызовы/дефолты), покрыто `tests/test_analytics_registry.py`. Агент-специфичные tools остались
+  в своих файлах.
 - ☐ **P2-14 [ops] Бэкап памяти/данных.** `.history/` бэкапит только `post_standard.md`/`SKILL.md`. Живое
   состояние (`tasks.json`, `post_lessons.md`, `journal/`, `x_authors.json`) не бэкапится; `data/kanaki.session`
   (невосстановимая MTProto-учётка) только локально. **Фикс:** периодический снапшот `memory/` + задокументировать

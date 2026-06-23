@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from core import analytics, config
+from core import analytics, analytics_tools, config
 
 PLAYBOOK = config.ROOT / "memory" / "format_playbook.md"
 
@@ -181,8 +181,9 @@ TOOLS = [
 
 
 def dispatch(name: str, args: dict) -> str:
-    if name == "channel_summary":
-        return analytics.summary()
+    shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
+    if shared is not None:
+        return shared
     if name == "top_posts":
         return analytics.top_posts(args.get("metric", "views"),
                                    int(args.get("n", 10)), args.get("content_type", ""),
@@ -191,24 +192,14 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.formats_overview()
     if name == "by_format":
         return analytics.by_format(args["format"])
-    if name == "recent_posts":
-        return analytics.recent_posts(int(args.get("n", 5)), args.get("post_format", ""))
     if name == "classify_formats":
         return analytics.auto_classify_formats(bool(args.get("force", False)))
     if name == "set_format":
         return analytics.set_format(int(args["post_id"]), args.get("format", ""))
     if name == "bottom_posts":
         return analytics.bottom_posts(args.get("metric", "views"), int(args.get("n", 10)))
-    if name == "by_dimension":
-        return analytics.by_dimension(args.get("dim", "weekday"))
     if name == "post_details":
         return analytics.post_details(int(args["post_id"]))
-    if name == "find_posts":
-        return analytics.find_posts(args["query"], int(args.get("n", 8)))
-    if name == "themes_overview":
-        return analytics.themes_overview()
-    if name == "by_theme":
-        return analytics.by_theme(args["theme"])
     if name == "audience":
         return analytics.audience()
     if name == "update_metrics":

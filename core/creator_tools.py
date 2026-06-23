@@ -27,7 +27,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from connectors.telegram_publish import publish
-from core import analytics, config, content_plan
+from core import analytics, analytics_tools, config, content_plan
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -681,6 +681,9 @@ def _publish_now() -> str:
 
 
 def dispatch(name: str, args: dict) -> str:
+    shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
+    if shared is not None:
+        return shared
     if name == "publish_now":
         return _publish_now()
     if name == "list_briefs":
@@ -699,12 +702,8 @@ def dispatch(name: str, args: dict) -> str:
         return _read_md(DRAFTS_DIR, args.get("which", "latest"),
                         "Драфтов пока нет (memory/drafts/ пуст).",
                         f"Драфт по запросу «{args.get('which', '')}» не найден. Доступны:")
-    if name == "find_posts":
-        return analytics.find_posts(args["query"], int(args.get("n", 8)))
     if name == "read_post":
         return analytics.read_post(int(args["id"]))
-    if name == "by_theme":
-        return analytics.by_theme(args["theme"])
     if name == "save_draft":
         return _save_draft(args)
     if name == "make_image":
@@ -714,12 +713,6 @@ def dispatch(name: str, args: dict) -> str:
     if name == "top_posts":
         return analytics.top_posts(args.get("metric", "er"),
                                    int(args.get("n", 10)), args.get("content_type", ""))
-    if name == "by_dimension":
-        return analytics.by_dimension(args.get("dim", "weekday"))
-    if name == "themes_overview":
-        return analytics.themes_overview()
-    if name == "recent_posts":
-        return analytics.recent_posts(int(args.get("n", 5)), args.get("post_format", ""))
     if name == "propose_standard":
         return _propose_standard(args)
     if name == "apply_standard":

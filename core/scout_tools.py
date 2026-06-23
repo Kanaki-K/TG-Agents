@@ -17,7 +17,7 @@ from datetime import date
 from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
 from connectors.x_scan import read as x_read
-from core import analytics, config
+from core import analytics_tools, config
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
 PENDING_X = config.ROOT / "memory" / "x_leaders.pending.md"
@@ -353,6 +353,9 @@ def _propose_source(args: dict) -> str:
 
 
 def dispatch(name: str, args: dict) -> str:
+    shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
+    if shared is not None:
+        return shared
     if name == "scan_sources":
         return _render(feeds.fetch_recent(int(args.get("per_source", 4)),
                                           args.get("source", ""), args.get("track", "")))
@@ -365,14 +368,6 @@ def dispatch(name: str, args: dict) -> str:
                                        int(args.get("max_accounts", 12)), args.get("tier", "")))
     if name == "fetch_url":
         return feeds.fetch_page(args["url"])
-    if name == "find_posts":
-        return analytics.find_posts(args["query"], int(args.get("n", 8)))
-    if name == "by_theme":
-        return analytics.by_theme(args["theme"])
-    if name == "themes_overview":
-        return analytics.themes_overview()
-    if name == "channel_summary":
-        return analytics.summary()
     if name == "save_brief":
         return _save_brief(args)
     if name == "read_recent_briefs":
