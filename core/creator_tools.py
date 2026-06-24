@@ -44,6 +44,9 @@ MEDIA_OUTBOX = config.ROOT / "data" / "creator_pending_media.txt"
 # Последняя обложка от make_image (персистентно, в отличие от аутбокса, который рантайм чистит каждый
 # ход): её берёт publish_now, когда планирует пост в канал. data/ = вне git.
 LAST_COVER = config.ROOT / "data" / "creator_last_cover.txt"
+# Формат последнего сохранённого драфта (флагман/короткий/scope/…): его читает publish_now, чтобы
+# НЕ угадывать формат по длине текста и не цеплять обложку к короткому посту. data/ = вне git.
+LAST_KIND = config.ROOT / "data" / "creator_last_kind.txt"
 
 TOOLS = [
     {
@@ -315,6 +318,9 @@ def _lint(content: str, kind: str = "") -> tuple:
     предупреждений) для того, что нельзя править вслепую (валюта, размер, футер, «является»).
     """
     clean = content or ""
+    # Разметка цитат веб-поиска (<cite index="1-4">…</cite>) протекает в текст у слабых моделей —
+    # срезаем теги, сохраняя содержимое (это служебная аннотация поиска, не часть поста).
+    clean = re.sub(r"</?cite[^>]*>", "", clean)
     for d in ("—", "–", "―"):          # длинные тире → обычный дефис
         clean = clean.replace(d, "-")
     for q in ("«", "»", "“", "”", "„", "‟"):  # ёлочки/фигурные кавычки → прямые
@@ -441,6 +447,17 @@ def _lint(content: str, kind: str = "") -> tuple:
                          f"оставь запас под футер")
         if "notion" not in clean.lower() and "🖥" not in clean:
             warns.append("нет футера (🖥 Медиа | 🥸 Мемы | 📱 Notion)")
+    if "scope" in k or "коротк" in k:
+        n = len(clean.encode("utf-16-le")) // 2
+        if n > 1000:
+            warns.append(f"⛔ scope РАЗДУЛСЯ: {n} знаков — это недофлагман. Норма ~400–900 (потолок 1000): "
+                         f"оставь триггер → суть/цифры → угол долгосрочнику → честный риск, всё лишнее режь")
+        if "💭" in clean or "Вопрос к Вам" in clean:
+            warns.append("scope: УБЕРИ флагман-закрытие 💭 «Вопрос к Вам» — в коротком финал это обычная "
+                         "строка-вывод, а не отдельный раздел-вопрос")
+        if "💡" in clean:
+            warns.append("scope: УБЕРИ 💡-раздел с афоризмом (флагман-фурнитура) — встрой мысль в текст "
+                         "обычным предложением")
     return clean, warns
 
 
@@ -452,6 +469,11 @@ def _save_draft(args: dict) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", base.lower()).strip("-") or "post"
     fname = f"{date.today().isoformat()}-{slug}.md"
     (DRAFTS_DIR / fname).write_text(clean, encoding="utf-8", newline="\n")
+    try:  # запоминаем формат — publish_now возьмёт его, а не будет гадать по длине текста
+        LAST_KIND.parent.mkdir(parents=True, exist_ok=True)
+        LAST_KIND.write_text(kind, encoding="utf-8")
+    except Exception:
+        pass
     msg = f"Драфт сохранён: memory/drafts/{fname}. Типографику привёл к канону (тире/кавычки)."
     if warns:
         msg += " ⚠ ИСПРАВЬ перед выдачей: " + "; ".join(warns) + "."
@@ -636,10 +658,12 @@ def _apply_standard() -> str:
             "Предложение очищено.")
 
 
-def _publish_now() -> str:
-    """Поставить ПОСЛЕДНИЙ готовый пост (последний драфт + обложка от make_image) в отложенные канала
-    на слот контент-плана и уведомить мейн владельца. Детерминированно: текст берётся ДОСЛОВНО из
-    сохранённого драфта, не переписывается. Гейт А (обкатка): зовётся по команде владельца /schedule."""
+def _publish_now(args: dict | None = None) -> str:
+    """Поставить ПОСЛЕДНИЙ готовый пост (последний драфт + обложка) в отложенные канала на слот
+    контент-плана и уведомить мейн владельца. Детерминированно: текст берётся ДОСЛОВНО из сохранённого
+    драфта, не переписывается. Формат берём из сохранённого kind драфта (или явного args['kind']), НЕ
+    угадываем по длине. Обложку цепляем ТОЛЬКО флагману — короткий/scope уходит ТЕКСТОМ. /schedule."""
+    args = args or {}
     channel = config.get_optional("PUBLISH_CHANNEL")
     if not channel:
         return "PUBLISH_CHANNEL не задан в .env — некуда планировать."
@@ -649,11 +673,20 @@ def _publish_now() -> str:
     text = drafts[0].read_text(encoding="utf-8").strip()
     if not text:
         return "Последний драфт пустой — нечего планировать."
+    # Формат: явный аргумент → сохранённый kind драфта → фолбэк-эвристика по длине.
+    raw = str(args.get("kind", "") or "").strip().lower()
+    if not raw and LAST_KIND.exists():
+        raw = LAST_KIND.read_text(encoding="utf-8").strip().lower()
+    if raw:
+        kind = "flagship" if any(s in raw for s in ("флагман", "flagman", "flagship")) else "short"
+    else:
+        kind = content_plan.infer_kind(text)
+    # Обложка — ТОЛЬКО для флагмана. Короткий/scope = текст-онли, даже если LAST_COVER от прошлого
+    # флагмана висит в data/ (иначе короткий пост уйдёт с чужой картинкой «из сохранёнок»).
     cover = ""
-    if LAST_COVER.exists():
+    if kind == "flagship" and LAST_COVER.exists():
         c = LAST_COVER.read_text(encoding="utf-8").strip()
         cover = c if c and Path(c).exists() else ""
-    kind = content_plan.infer_kind(text)
     try:
         busy = {dt.astimezone(content_plan.tz()).date() for dt in publish.scheduled_times(channel)}
     except Exception:
@@ -685,7 +718,7 @@ def dispatch(name: str, args: dict) -> str:
     if shared is not None:
         return shared
     if name == "publish_now":
-        return _publish_now()
+        return _publish_now(args)
     if name == "list_briefs":
         return _list_md(BRIEFS_DIR, "Брифы Скаута (свежие сверху):",
                         "Брифов Скаута пока нет (memory/briefs/ пуст). Напиши из присланного "
