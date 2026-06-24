@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from core import agent_runtime, analytics, config, creator_tools, llm, runmode
+from core import agent_runtime, analytics, config, creator_tools, llm, runmode, scope_writer
 
 AGENT_NAME = "creator"
 
@@ -22,6 +22,7 @@ WELCOME = (
     "Я Криейтор KANAKI CRYPTO. Пишу посты в твоём голосе по стандарту канала — материал беру прямо "
     "из брифов Скаута, формат выбираю по данным Аналитика (копировать ничего не нужно).\n"
     "Команды: /post — пост по свежему брифу, формат подберу под тему (или скажи, по какому/каким); "
+    "/scope — короткий аналитич. 🔭 «Под прицелом» по важному поводу (текст, без картинки, с фактчеком); "
     "/light — лёгкий философский (200–400 слов); /formats — предложу форматы под тему по данным; "
     "/polish — пришли ~готовый текст: вычищу и доведу до лучшего вида; /feedback — пришли свой финал, "
     "сравню со своим драфтом и усвою урок; /derive — выведу/обновлю стандарт (на твоё утверждение); "
@@ -234,6 +235,13 @@ def _schedule() -> str:
     return "🔎 2FA: факты чисто.\n\n" + out
 
 
+def _scope() -> str:
+    """🔭 «Под прицелом» — короткий аналитический пост ОТДЕЛЬНОЙ веткой (core/scope_writer): свой
+    лёгкий контекст/модель + встроенный 2FA. Картинку не делает. Дальше владелец ставит /schedule
+    (publish_now увидит kind='scope' → отложка текстом). Команда-ДЕЙСТВИЕ — флагман-контекст не грузит."""
+    return scope_writer.write()
+
+
 def _verify() -> str:
     """2FA по последнему драфту вручную: независимый Sonnet сверяет факты; есть замечания → Криейтор
     САМ исправляет (владелец ничего не сверяет). Возвращает короткий итог + финал."""
@@ -260,7 +268,7 @@ async def main() -> None:
         commands=COMMANDS,
         # /schedule — ставит последний пост в отложку (+ предупреждение в тест-режиме, см. _schedule).
         # /verify — независимый 2FA-фактчек последнего драфта (Sonnet, web_search) — см. _verify.
-        command_actions={"schedule": _schedule, "verify": _verify},
+        command_actions={"schedule": _schedule, "verify": _verify, "scope": _scope},
         # авто-2FA СРАЗУ после генерации поста (на каждом /post и /light; в тест-режиме пропускается)
         post_hooks={"post": _post_2fa, "light": _post_2fa},
         thinking=thinking,
