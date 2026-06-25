@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-from core import config, cost, llm, runmode
+from core import config, cost, llm, market_tools, runmode
 
 # Серверный веб-поиск Anthropic для сверки (его выполняет Claude). max_uses — кап стоимости проверки.
 VERIFY_WEB = {"type": "web_search_20250305", "name": "web_search", "max_uses": 10}
@@ -23,7 +23,10 @@ VERIFIER_SYSTEM = (
     "цифры, проценты, суммы, даты, связки «X сделал Y / в тот же день», цитаты. По каждому: сверь "
     "через web_search и/или с брифом-источниками ниже. Будь скептичен: пока не нашёл источник "
     "Тир-1/2 — считай «не подтверждено». Особое внимание — связкам «одновременно/в тот же день» и "
-    "круглым/вирусным цифрам.\n\n"
+    "круглым/вирусным цифрам.\n"
+    "ЖИВЫЕ ЦЕНЫ И %-ИЗМЕНЕНИЯ (BTC/ETH/альты) сверяй инструментом market_price — это ТОЧНЫЙ спот "
+    "сейчас; приблизительной/устаревшей цене из web_search не доверяй. Если цена в посте расходится "
+    "со спотом market_price — это ⚠️ КОНФЛИКТ, укажи верное текущее значение.\n\n"
     "Текст НЕ правь и пост НЕ пиши. Выведи СПИСОК, по одной строке на утверждение:\n"
     "  <✅|⚠️|❓|📝> «<утверждение из поста, коротко>» — <источник / в чём конфликт / почему не подтверждено>\n"
     "Легенда: ✅ подтверждено Тир-1/2; ⚠️ КОНФЛИКТ (укажи, что на самом деле в источниках и какой "
@@ -72,8 +75,8 @@ def verify_post(post: str, brief: str = "", api_key: str | None = None, model: s
             f"ИСХОДНЫЙ БРИФ СКАУТА (источники для сверки):\n{brief or '(бриф не найден)'}\n\n"
             "Проверь КАЖДОЕ проверяемое утверждение. Выдай вердикт-список и ИТОГ.")
     try:
-        text, _ = llm.reply(mdl, VERIFIER_SYSTEM, [], user, [VERIFY_WEB],
-                            lambda _n, _a: "", api_key, {"type": "adaptive"})
+        text, _ = llm.reply(mdl, VERIFIER_SYSTEM, [], user, [VERIFY_WEB, market_tools.PRICE_TOOL],
+                            lambda n, a: market_tools.handle(n, a) or "", api_key, {"type": "adaptive"})
         return (text or "(пусто)").strip()
     except Exception as e:  # noqa: BLE001 — фактчек не должен ронять конвейер
         return f"(фактчек не удался: {e})"

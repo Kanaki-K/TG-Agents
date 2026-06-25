@@ -17,7 +17,7 @@ from datetime import date
 from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
 from connectors.x_scan import read as x_read
-from core import analytics_tools, config
+from core import analytics_tools, config, market_tools
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
 PENDING_X = config.ROOT / "memory" / "x_leaders.pending.md"
@@ -222,6 +222,7 @@ TOOLS = [
             "required": ["name", "why"],
         },
     },
+    market_tools.PRICE_TOOL,   # market_price — точная цена для хук-цифр (а не приблизительная из поиска)
 ]
 
 
@@ -356,6 +357,9 @@ def dispatch(name: str, args: dict) -> str:
     shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
     if shared is not None:
         return shared
+    priced = market_tools.handle(name, args)     # живая цена (market_price) — общий ценовой бэкенд
+    if priced is not None:
+        return priced
     if name == "scan_sources":
         return _render(feeds.fetch_recent(int(args.get("per_source", 4)),
                                           args.get("source", ""), args.get("track", "")))
