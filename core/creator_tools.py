@@ -27,7 +27,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from connectors.telegram_publish import publish
-from core import analytics, analytics_tools, config, content_plan
+from core import analytics, analytics_tools, config, content_plan, market_tools
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -240,6 +240,7 @@ TOOLS = [
                        "владельца /apply_standard (его явное «ок»). Сам по себе, в /derive, не вызывай.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    market_tools.PRICE_TOOL,   # market_price — точный спот для сверки живых цен (см. шаг 3.5 /post)
 ]
 
 
@@ -325,6 +326,22 @@ def _lint(content: str, kind: str = "") -> tuple:
         clean = clean.replace(d, "-")
     for q in ("«", "»", "“", "”", "„", "‟"):  # ёлочки/фигурные кавычки → прямые
         clean = clean.replace(q, '"')
+    # Заголовок поста (1-я непустая строка) ДОЛЖЕН быть жирным (§5). Модель регулярно забывает разметку
+    # (см. §5-детектор ниже) — чиним ДЕТЕРМИНИРОВАННО, а не только предупреждаем: короткую титульную
+    # строку без ** оборачиваем в **…** (эмодзи-якорь остаётся ВНУТРИ жирного, как в эталонах канала).
+    # 'light' (Ф3, чистый текст) пропускаем — у него заголовка-строки может не быть, а длинную (>80
+    # знаков) первую строку не трогаем (это не заголовок, а абзац-хук).
+    if "light" not in (kind or "").lower():
+        _ls = clean.split("\n")
+        for _i, _ln in enumerate(_ls):
+            if not _ln.strip():
+                continue
+            _vis = re.sub(r"^[^\wА-Яа-яЁё]+", "", _ln.replace("**", "")).strip()
+            if "**" not in _ln and 0 < len(_vis) <= 80:
+                _ind = _ln[:len(_ln) - len(_ln.lstrip())]
+                _ls[_i] = f"{_ind}**{_ln.strip()}**"
+            break
+        clean = "\n".join(_ls)
     warns = []
     cur = len(re.findall(r"\$\s?\d", clean))
     if cur:
@@ -683,10 +700,19 @@ def _publish_now(args: dict | None = None) -> str:
         kind = content_plan.infer_kind(text)
     # Обложка — ТОЛЬКО для флагмана. Короткий/scope = текст-онли, даже если LAST_COVER от прошлого
     # флагмана висит в data/ (иначе короткий пост уйдёт с чужой картинкой «из сохранёнок»).
+    # И для флагмана обложка должна принадлежать ИМЕННО этому драфту: cover не старше драфта. Иначе
+    # make_image в этом прогоне упал/не вызывался, LAST_COVER хранит картинку ПРОШЛОГО флагмана —
+    # лучше уйти ТЕКСТОМ (владелец увидит в «Отложенных» и перегенерит), чем прицепить чужую обложку.
     cover = ""
-    if kind == "flagship" and LAST_COVER.exists():
-        c = LAST_COVER.read_text(encoding="utf-8").strip()
-        cover = c if c and Path(c).exists() else ""
+    cover_note = ""
+    if kind == "flagship":
+        c = LAST_COVER.read_text(encoding="utf-8").strip() if LAST_COVER.exists() else ""
+        if c and Path(c).exists() and LAST_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
+            cover = c
+        else:
+            cover_note = (" ⚠️ Обложку НЕ прицепил: актуальной картинки для ЭТОГО поста нет "
+                          "(make_image не сработал в этом прогоне / LAST_COVER от прошлого флагмана). "
+                          "Флагман ушёл ТЕКСТОМ — сгенерь обложку и поставь заново, если нужна.")
     try:
         busy = {dt.astimezone(content_plan.tz()).date() for dt in publish.scheduled_times(channel)}
     except Exception:
@@ -709,7 +735,7 @@ def _publish_now(args: dict | None = None) -> str:
     except Exception:
         check = " (проверку отложенных сделать не вышло)"
     return (f"✅ Поставил в отложенные канала: {content_plan.kind_label(kind)} на {when} "
-            f"(режим: {res.get('mode', '?')}).{note}{check}\n"
+            f"(режим: {res.get('mode', '?')}).{note}{check}{cover_note}\n"
             f"Сообщи владельцу слот; проверить/поправить/отменить — в нативных «Отложенных» канала.")
 
 
@@ -717,6 +743,9 @@ def dispatch(name: str, args: dict) -> str:
     shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
     if shared is not None:
         return shared
+    priced = market_tools.handle(name, args)     # живая цена (market_price) — общий ценовой бэкенд
+    if priced is not None:
+        return priced
     if name == "publish_now":
         return _publish_now(args)
     if name == "list_briefs":
