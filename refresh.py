@@ -27,15 +27,24 @@ def run(module: str, *args: str) -> bool:
     return r.returncode == 0
 
 
-def main() -> None:
+def main() -> int:
     full = "--all" in sys.argv
-    run("collect", "collect")
-    run("collect_stats")
-    run("snapshot", *(("--all",) if full else ()))
-    run("enrich_topics")              # обогащает только новые посты
-    run("build_table")
+    results = {
+        "collect": run("collect", "collect"),
+        "collect_stats": run("collect_stats"),
+        "snapshot": run("snapshot", *(("--all",) if full else ())),
+        "enrich_topics": run("enrich_topics"),   # обогащает только новые посты
+        "build_table": run("build_table"),
+    }
+    failed = [name for name, ok in results.items() if not ok]
+    if failed:
+        # НЕ маскируем сбой нулевым кодом: иначе вызывающий (refresh_metrics) рапортует «всё ок»,
+        # хотя шаг упал. collect/enrich критичны для анти-повтора, build_table — только Excel-артефакт.
+        print(f"\n⚠️ Готово С ОШИБКАМИ: упали шаги — {', '.join(failed)}.")
+        return 1
     print("\nГотово: data/posts_analytics.xlsx обновлён.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

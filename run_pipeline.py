@@ -8,8 +8,12 @@
 его, повторный поиск пропускается (--skip-scout форсит пропуск всегда; свежесть и так бережёт кредиты).
 
 В день публикации прогоняет цепь без твоего участия в передаче:
+  0) Актуальность данных — если выгрузка канала устарела (>12ч), тянет свежие посты (collect +
+     enrich_topics), чтобы анти-повтор сверялся с тем, что РЕАЛЬНО уже опубликовано (core/dedup);
   1) Скаут — разведка → бриф (топ-темы) в memory/briefs/ [можно пропустить --skip-scout];
-  2) Криейтор — тема №1: пост + обложка (make_image), сохраняет драфт;
+  1.5) Анти-повтор (флагман) — сверяет направления брифа с историей канала: повтор → берёт другую
+     тему; ВСЕ повторы → пост не делает (дубль в канал не уйдёт);
+  2) Криейтор — утверждённая НЕ-повторная тема: пост + обложка (make_image), сохраняет драфт;
   3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление на @Kanaki_K.
 Дальше проверяешь готовый пост в нативных «Отложенных» канала.
 
@@ -23,7 +27,7 @@ import logging
 import sys
 import time
 
-from core import (config, cost, creator_bot, creator_tools, llm, runmode, scope_writer,
+from core import (config, cost, creator_bot, creator_tools, dedup, llm, runmode, scope_writer,
                   scout_bot, scout_tools, verify)
 
 logging.basicConfig(level=logging.INFO)
@@ -68,7 +72,7 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator(command: str = "post") -> str:
+def _run_creator(command: str = "post", theme: str = "") -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -82,7 +86,11 @@ def _run_creator(command: str = "post") -> str:
     label = ("короткий 🔭 «Под прицелом» (без обложки)" if command == "scope"
              else "пост по свежему брифу + обложка")
     print(f"✍️ [2/3] Криейтор: {label}...")
-    text, _ = _threaded(llm.reply, model, creator_bot._system(), [], creator_bot.COMMANDS[command],
+    user = creator_bot.COMMANDS[command]
+    if theme:  # тема прошла анти-повтор → подставляем её как «названную владельцем» (см. шаг 1 /post)
+        user = (f"ТЕМА УТВЕРЖДЕНА (анти-повтор пройден — сверено со свежей выгрузкой канала): «{theme}». "
+                f"Пиши флагман ИМЕННО на неё; другие направления брифа не бери.\n\n") + user
+    text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
@@ -125,6 +133,10 @@ def main() -> None:
     _mode = runmode.get()
     if _mode["mode"] == "test":
         print(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
+    # АКТУАЛЬНОСТЬ ДАННЫХ: выгрузка канала устарела → тянем свежие посты ДО разведки и анти-повтора
+    # (иначе сверка «было/не было» врёт на самых недавних постах — там и прячется самый частый дубль).
+    print("🗂 [0] Актуальность данных канала (для анти-повтора)...")
+    print(dedup.refresh_if_stale(), "\n")
     age = _latest_brief_age_hours()
     if skip_scout:
         print("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
@@ -138,9 +150,25 @@ def main() -> None:
             _run_scout()
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
+    # АНТИ-ПОВТОР (только флагман): сверяем направления свежего брифа с уже опубликованным ДО письма —
+    # дешевле поймать дубль на теме, чем после готового флагмана. Данные уже актуализированы (шаг 0).
+    theme = ""
+    if not scope:
+        try:
+            verdict = dedup.check(verify.latest_brief(),
+                                  api_key=config.agent_api_key(config.load_agent("creator")))
+            print("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
+            print(verdict, "\n")
+            if dedup.all_repeats(verdict):
+                print("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
+                      "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
+                return
+            theme = dedup.recommended_theme(verdict)  # сильнейшая НЕ-повторная тема (пусто → Криейтор сам)
+        except Exception:
+            logging.exception("Анти-повтор не сработал — не блокирую, Криейтор берёт тему из брифа сам")
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope() if scope else _run_creator("post")
+        post = _run_scope() if scope else _run_creator("post", theme)
     except Exception as e:
         print(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return
