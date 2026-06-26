@@ -423,11 +423,17 @@ def refresh_metrics(full: bool = True) -> str:
 
     Требует окружения сборщика (сессия аккаунта + telethon). Может занять до пары минут.
     """
+    import os
     import subprocess
     import sys
     cmd = [sys.executable, str(ROOT / "refresh.py")] + (["--all"] if full else [])
+    # UTF-8 в ОБЕ стороны (RU-Windows): без этого text=True декодит вывод подпроцесса в cp1251 и падает
+    # на эмодзи/русском (UnicodeDecodeError 0x98 в reader-потоке). encoding/errors — для ЧТЕНИЯ родителем;
+    # PYTHONUTF8/PYTHONIOENCODING — чтобы сам refresh.py и его под-модули ПИСАЛИ в pipe utf-8, а не cp1251.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     try:
-        r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=300)
+        r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=300,
+                           encoding="utf-8", errors="replace", env=env)
     except subprocess.TimeoutExpired:
         return "Обновление идёт дольше обычного (>5 мин) — проверь позже."
     except Exception as e:  # noqa: BLE001
