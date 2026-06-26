@@ -33,6 +33,7 @@ MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
 DRAFTS_DIR = MEM / "drafts"            # архив драфтов — выход Криейтора
 LESSONS = MEM / "post_lessons.md"      # уроки из правок владельца (живое состояние)
+SCOPE_LESSONS = MEM / "scope_lessons.md"  # уроки scope-ветки 🔭 — ОТДЕЛЬНО от флагман-уроков (свой дом)
 PLAYBOOK = MEM / "format_playbook.md"  # плейбук форматов — ведёт Аналитик, читает Криейтор
 STANDARD = MEM / "post_standard.md"    # живой стандарт постов (Telegram)
 STANDARD_PROPOSED = MEM / "post_standard.proposed.md"  # предложение стандарта (gate: на одобрение)
@@ -326,6 +327,17 @@ def _lint(content: str, kind: str = "") -> tuple:
         clean = clean.replace(d, "-")
     for q in ("«", "»", "“", "”", "„", "‟"):  # ёлочки/фигурные кавычки → прямые
         clean = clean.replace(q, '"')
+    # §5/voice_core §2: ТОЧКА в конце СТРОКИ не ставится (фирменный маркер — 93% концовок автора без точки;
+    # с точкой = палево ИИ-подачи). Чиним ДЕТЕРМИНИРОВАННО (модель забывает, в контексте правило есть, но
+    # не доезжает): срезаем одиночную «.» в конце каждой строки. Бережём «...» (троеточие), «?»/«!» и точку
+    # МЕЖДУ предложениями НА ОДНОЙ строке (её не трогаем — режем только самый конец строки).
+    _pl = []
+    for _ln in clean.split("\n"):
+        _r = _ln.rstrip()
+        if _r.endswith(".") and not _r.endswith(".."):   # одиночная точка, не троеточие
+            _r = _r[:-1].rstrip()
+        _pl.append(_r)
+    clean = "\n".join(_pl)
     # Заголовок поста (1-я непустая строка) ДОЛЖЕН быть жирным (§5). Модель регулярно забывает разметку
     # (см. §5-детектор ниже) — чиним ДЕТЕРМИНИРОВАННО, а не только предупреждаем: короткую титульную
     # строку без ** оборачиваем в **…** (эмодзи-якорь остаётся ВНУТРИ жирного, как в эталонах канала).
@@ -466,15 +478,25 @@ def _lint(content: str, kind: str = "") -> tuple:
             warns.append("нет футера (🖥 Медиа | 🥸 Мемы | 📱 Notion)")
     if "scope" in k or "коротк" in k:
         n = len(clean.encode("utf-16-le")) // 2
-        if n > 1000:
-            warns.append(f"⛔ scope РАЗДУЛСЯ: {n} знаков — это недофлагман. Норма ~400–900 (потолок 1000): "
-                         f"оставь триггер → суть/цифры → угол долгосрочнику → честный риск, всё лишнее режь")
+        if n > 1100:
+            warns.append(f"⛔ scope ДЛИННЫЙ: {n} знаков — это почти флагман. Потолок ~1100 (тело ~600–900 + "
+                         f"футер): scope = БЫСТРАЯ реакция, ОДИН поворот + одна цифра. Срежь лекцию/разбор вдвое")
+        elif n < 350:
+            warns.append(f"scope коротковат: {n} знаков — телеграмма. Дай один поворот + цифру-механику + угол (см. §8)")
         if "💭" in clean or "Вопрос к Вам" in clean:
             warns.append("scope: УБЕРИ флагман-закрытие 💭 «Вопрос к Вам» — в коротком финал это обычная "
                          "строка-вывод, а не отдельный раздел-вопрос")
         if "💡" in clean:
             warns.append("scope: УБЕРИ 💡-раздел с афоризмом (флагман-фурнитура) — встрой мысль в текст "
                          "обычным предложением")
+        # Едж-правило §5: линза/честный риск ВПЛЕТАЮТСЯ живой строкой, а не ярлыком-разделом «методички».
+        for label in ("риск честно", "что значит долгосрочнику", "что это значит долгосрочнику",
+                      "главное для инвестора", "что значит для долгосрочника"):
+            if label in clean.lower():
+                warns.append("scope: УБЕРИ ярлык-раздел (нашёл «" + label + ":») — линзу долгосрочника и "
+                             "честный риск ВПЛЕТАЙ живой строкой в текст, а не методичкой-рубрикой (§5). "
+                             "Отдельный ярлык = недофлагман, главный признак бота.")
+                break
     return clean, warns
 
 
@@ -491,7 +513,7 @@ def _save_draft(args: dict) -> str:
         LAST_KIND.write_text(kind, encoding="utf-8")
     except Exception:
         pass
-    msg = f"Драфт сохранён: memory/drafts/{fname}. Типографику привёл к канону (тире/кавычки)."
+    msg = f"Драфт сохранён: memory/drafts/{fname}. Типографику привёл к канону (тире/кавычки, точки в конце строк убраны)."
     if warns:
         msg += " ⚠ ИСПРАВЬ перед выдачей: " + "; ".join(warns) + "."
     else:
@@ -607,13 +629,14 @@ def _lesson_keywords(s: str) -> set:
     return {w for w in re.findall(r"[а-яёa-z0-9]{4,}", s) if w not in _LESSON_STOP}
 
 
-def _lesson_duplicate(new: str) -> str | None:
+def _lesson_duplicate(new: str, lessons_path: Path = LESSONS) -> str | None:
     """Near-дубль среди уже записанных уроков? Вернёт похожую строку или None.
-    Сверяем по доле общих значимых слов (Жаккар к новому уроку); порог 0.6."""
+    Сверяем по доле общих значимых слов (Жаккар к новому уроку); порог 0.6.
+    lessons_path — против какого файла уроков сверяем (флагман post_lessons / scope_lessons)."""
     nw = _lesson_keywords(new)
-    if len(nw) < 3 or not LESSONS.exists():
+    if len(nw) < 3 or not lessons_path.exists():
         return None
-    for ln in LESSONS.read_text(encoding="utf-8").splitlines():
+    for ln in lessons_path.read_text(encoding="utf-8").splitlines():
         if not ln.lstrip().startswith("- ("):
             continue
         ow = _lesson_keywords(ln)
@@ -622,31 +645,46 @@ def _lesson_duplicate(new: str) -> str | None:
     return None
 
 
-def _record_lesson(args: dict) -> str:
+# Шапка файла уроков при первом создании — по имени файла (флагман / scope).
+_LESSONS_SEED = {
+    "post_lessons.md": (
+        "# Уроки Криейтора из правок владельца\n\n"
+        "> Живое состояние: устойчивые правила письма, извлечённые из того, как владелец\n"
+        "> доредактирует посты перед публикацией. Грузится в контекст Криейтора к каждому посту.\n"
+        "> Новое перекрывает старое; неудачный урок владелец удаляет руками. Личность (SKILL.md)\n"
+        "> правит только Девелопер через гейт — устоявшийся урок поднимают туда отдельно.\n\n"),
+    "scope_lessons.md": (
+        "# Уроки 🔭 «Под прицелом» из правок владельца\n\n"
+        "> Живое состояние: устойчивые правила КОРОТКОГО аналитического поста из правок владельца\n"
+        "> к 🔭-постам. Грузится в контекст scope-ветки (core/scope_writer) — ОТДЕЛЬНО от флагман-\n"
+        "> уроков (post_lessons.md). Правила рубрики (длина/подача/линии) — в scope_manual.md.\n\n"),
+}
+
+
+def _record_lesson(args: dict, lessons_path: Path = LESSONS) -> str:
+    """Записать урок в файл уроков. lessons_path выбирает дом: флагман (post_lessons) или scope
+    (scope_lessons) — «один факт — один дом», ветки не смешиваются."""
     lesson = str(args.get("lesson", "") or "").strip()
     if not lesson:
         return "Пустой урок — нечего записывать."
-    dup = _lesson_duplicate(lesson)
+    rel = f"memory/{lessons_path.name}"
+    dup = _lesson_duplicate(lesson, lessons_path)
     if dup and not args.get("confirm_new"):
         return ("⚠ Похоже на ДУБЛЬ уже записанного урока:\n  " + dup + "\n\n"
                 "Если это ТО ЖЕ правило — НЕ дублируй (оно уже есть; правило, которое уже в "
-                "мануале/линтере, в post_lessons тоже не нужно). Если урок правда НОВЫЙ или "
+                f"мануале/линтере, в {rel} тоже не нужно). Если урок правда НОВЫЙ или "
                 "уточняет старый — переформулируй так, чтобы было видно ЧЕМ отличается, и вызови "
                 "снова с confirm_new=true.")
-    LESSONS.parent.mkdir(parents=True, exist_ok=True)
-    if not LESSONS.exists():
-        LESSONS.write_text(
-            "# Уроки Криейтора из правок владельца\n\n"
-            "> Живое состояние: устойчивые правила письма, извлечённые из того, как владелец\n"
-            "> доредактирует посты перед публикацией. Грузится в контекст Криейтора к каждому посту.\n"
-            "> Новое перекрывает старое; неудачный урок владелец удаляет руками. Личность (SKILL.md)\n"
-            "> правит только Девелопер через гейт — устоявшийся урок поднимают туда отдельно.\n\n",
+    lessons_path.parent.mkdir(parents=True, exist_ok=True)
+    if not lessons_path.exists():
+        lessons_path.write_text(
+            _LESSONS_SEED.get(lessons_path.name, f"# Уроки ({lessons_path.name})\n\n"),
             encoding="utf-8", newline="\n")
     ev = str(args.get("evidence", "") or "").strip()
     line = f"- ({date.today().isoformat()}) {lesson}" + (f" — _из правки: {ev}_" if ev else "") + "\n"
-    with open(LESSONS, "a", encoding="utf-8", newline="\n") as f:
+    with open(lessons_path, "a", encoding="utf-8", newline="\n") as f:
         f.write(line)
-    return ("Урок записан в memory/post_lessons.md — учту в следующих постах. "
+    return (f"Урок записан в {rel} — учту в следующих постах. "
             "Отчитайся владельцу одной строкой, что усвоил.")
 
 
@@ -772,6 +810,8 @@ def dispatch(name: str, args: dict) -> str:
         return _make_image(args)
     if name == "record_lesson":
         return _record_lesson(args)
+    if name == "record_scope_lesson":   # scope-ветка пишет в СВОЙ файл уроков (scope_lessons.md)
+        return _record_lesson(args, SCOPE_LESSONS)
     if name == "top_posts":
         return analytics.top_posts(args.get("metric", "er"),
                                    int(args.get("n", 10)), args.get("content_type", ""))

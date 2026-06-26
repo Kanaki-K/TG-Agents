@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from datetime import date
@@ -370,20 +371,40 @@ async def run(
 
     # команды-ДЕЙСТВИЯ: выполняют код напрямую, БЕЗ обращения к LLM (детерминированно, без трат/кредитов).
     # Нужны для безопасных операций вроде публикации: модель в цепочке не участвует.
-    def _make_action(fn):
+    def _make_action(cmd: str, fn):
+        # действие может ПРИНЯТЬ текст после команды (напр. /scope_feedback <финал>) — если его
+        # сигнатура берёт аргумент; иначе зовём без аргументов (обратная совместимость с /schedule и пр.).
+        takes_arg = bool(inspect.signature(fn).parameters)
+
         async def handler(m: Message) -> None:
+            uid = m.from_user.id
             _write_owner(owner_file, m.chat.id)
-            await m.bot.send_chat_action(m.chat.id, "typing")
+            # ТА ЖЕ защита от наложения, что у диалога: /scope, /run, /run_scope идут МИНУТЫ. Без неё
+            # параллельные сообщения уходят в LLM-чат отдельными ответами («бот не отвечает / отвечает не то»).
+            if uid in busy:
+                await m.answer("Ещё выполняю прошлую команду — секунду, пришлю результат сюда.")
+                return
+            busy.add(uid)
+            text = "…"
             try:
-                text = await asyncio.to_thread(fn)
+                # СРАЗУ подтверждаем, что взяли в работу (длинные действия идут молча минуты — выглядит мёртвым).
+                await m.answer(f"⏳ Взял в работу /{cmd} — идёт прогон, пришлю результат сюда, как будет готово.")
+                await m.bot.send_chat_action(m.chat.id, "typing")
+                if takes_arg:
+                    parts = (m.text or "").split(maxsplit=1)   # отрезаем «/cmd», берём хвост-текст
+                    text = await asyncio.to_thread(fn, parts[1] if len(parts) > 1 else "")
+                else:
+                    text = await asyncio.to_thread(fn)
             except Exception:
                 logging.exception("Команда-действие упала")
                 text = "Не смог выполнить команду — см. лог."
+            finally:
+                busy.discard(uid)
             await _send(m, text or "…", custom_emoji=render_emoji)
         return handler
 
     for cmd, fn in (command_actions or {}).items():
-        dp.message(Command(cmd))(_make_action(fn))
+        dp.message(Command(cmd))(_make_action(cmd, fn))
 
     if media_outbox is not None:  # агенты с «руками»-картинками умеют принять фото от владельца
         @dp.message(F.photo)
