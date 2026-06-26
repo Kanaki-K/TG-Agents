@@ -124,74 +124,93 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
-def main() -> None:
-    skip_scout = "--skip-scout" in sys.argv
-    scope = "--scope" in sys.argv
+def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
+    """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
+
+    emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
+    чтобы вернуть отчёт в чат. Вынесено из main(), чтобы тот же цикл дёргать и из бота (там — ленивый
+    импорт run_pipeline во избежание циклического импорта: run_pipeline сам импортирует creator_bot).
+    """
+    report: list[str] = []
+
+    def out(s: str = "") -> None:
+        emit(s)
+        report.append(s)
+
     cost.reset()  # начинаем замер стоимости всего прогона (Скаут→Криейтор→отложка)
     kind = "🔭 Под прицелом (короткий)" if scope else "флагман"
-    print(f"=== Контент-завод: прогон [{kind}] ===\n")
+    out(f"=== Контент-завод: прогон [{kind}] ===\n")
     _mode = runmode.get()
     if _mode["mode"] == "test":
-        print(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
+        out(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
     # АКТУАЛЬНОСТЬ ДАННЫХ: выгрузка канала устарела → тянем свежие посты ДО разведки и анти-повтора
     # (иначе сверка «было/не было» врёт на самых недавних постах — там и прячется самый частый дубль).
-    print("🗂 [0] Актуальность данных канала (для анти-повтора)...")
-    print(dedup.refresh_if_stale(), "\n")
+    out("🗂 [0] Актуальность данных канала (для анти-повтора)...")
+    out(str(dedup.refresh_if_stale()) + "\n")
     age = _latest_brief_age_hours()
     if skip_scout:
-        print("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
+        out("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
     elif age is not None and age < SCOUT_FRESH_HOURS:
-        print(f"⏭ Скаута пропускаю: последний бриф свежий ({age:.1f}ч < {SCOUT_FRESH_HOURS}ч) — "
-              f"повторная разведка не нужна, берём его.\n")
+        out(f"⏭ Скаута пропускаю: последний бриф свежий ({age:.1f}ч < {SCOUT_FRESH_HOURS}ч) — "
+            f"повторная разведка не нужна, берём его.\n")
     else:
         if age is not None:
-            print(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч) — запускаю свежую разведку.\n")
+            out(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч) — запускаю свежую разведку.\n")
         try:
             _run_scout()
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
-    # АНТИ-ПОВТОР (только флагман): сверяем направления свежего брифа с уже опубликованным ДО письма —
-    # дешевле поймать дубль на теме, чем после готового флагмана. Данные уже актуализированы (шаг 0).
+    # АНТИ-ПОВТОР (флагман И scope): сверяем направления свежего брифа с уже опубликованным ДО письма —
+    # дешевле поймать дубль на теме, чем после готового поста. Данные уже актуализированы (шаг 0).
+    # ГЕЙТ для обоих (дубль в канал не уйдёт); но ТЕМУ подменяем только флагману — scope сам берёт свой
+    # 🔭-повод из брифа по гейту важности, ему чужая «сильнейшая не-повторная» тема не нужна.
     theme = ""
-    if not scope:
-        try:
-            verdict = dedup.check(verify.latest_brief(),
-                                  api_key=config.agent_api_key(config.load_agent("creator")))
-            print("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
-            print(verdict, "\n")
-            if dedup.all_repeats(verdict):
-                print("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
-                      "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
-                return
-            theme = dedup.recommended_theme(verdict)  # сильнейшая НЕ-повторная тема (пусто → Криейтор сам)
-        except Exception:
-            logging.exception("Анти-повтор не сработал — не блокирую, Криейтор берёт тему из брифа сам")
+    try:
+        verdict = dedup.check(verify.latest_brief(),
+                              api_key=config.agent_api_key(config.load_agent("creator")))
+        out("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
+        out(str(verdict) + "\n")
+        if dedup.all_repeats(verdict):
+            out("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
+                "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
+            return "\n".join(report)
+        if not scope:
+            theme = dedup.recommended_theme(verdict)  # флагман берёт сильнейшую НЕ-повторную тему
+    except Exception:
+        logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
         post = _run_scope() if scope else _run_creator("post", theme)
     except Exception as e:
-        print(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
-        return
+        out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
+        return "\n".join(report)
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
     # 2FA уже прошёл внутри его ветки — здесь его НЕ дублируем.
     if post and not scope:
         ckey = config.agent_api_key(config.load_agent("creator"))
-        print("🔎 [Фактчек 2FA] Независимая проверка цифр/фактов (Sonnet)...")
+        out("🔎 [Фактчек 2FA] Независимая проверка цифр/фактов (Sonnet)...")
         try:
             verdict = verify.verify_post(post, verify.latest_brief(), api_key=ckey)
-            print(verdict, "\n")
+            out(str(verdict) + "\n")
             if verify.has_issues(verdict):
-                print("🛠 Есть замечания — Криейтор исправляет САМ (без твоей проверки)...")
+                out("🛠 Есть замечания — Криейтор исправляет САМ (без твоей проверки)...")
                 post = _run_creator_fix(post, verdict)
-                print((post or "").strip()[:600], "\n")
-                print("🔎 Повторный фактчек после правок:")
-                print(verify.verify_post(post, verify.latest_brief(), api_key=ckey), "\n")
+                out((post or "").strip()[:600] + "\n")
+                out("🔎 Повторный фактчек после правок:")
+                out(str(verify.verify_post(post, verify.latest_brief(), api_key=ckey)) + "\n")
         except Exception:
             logging.exception("Фактчек 2FA не удался — пост НЕ блокирую, ставлю как есть")
-    print("🗓 [3/3] Ставлю в отложенные канала...")
-    print(_threaded(creator_tools.dispatch, "publish_now", {"kind": "short" if scope else ""}))
-    print("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
-    print("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $
+    out("📝 --- ГОТОВЫЙ ПОСТ ---")
+    out((post or "").strip())
+    out("\n🗓 [3/3] Ставлю в отложенные канала...")
+    out(str(_threaded(creator_tools.dispatch, "publish_now", {"kind": "short" if scope else ""})))
+    out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
+    out("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $
+    return "\n".join(report)
+
+
+def main() -> None:
+    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv)
 
 
 if __name__ == "__main__":
