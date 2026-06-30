@@ -72,7 +72,7 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator(command: str = "post", theme: str = "") -> str:
+def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -87,9 +87,18 @@ def _run_creator(command: str = "post", theme: str = "") -> str:
              else "пост по свежему брифу + обложка")
     print(f"✍️ [2/3] Криейтор: {label}...")
     user = creator_bot.COMMANDS[command]
-    if theme:  # тема прошла анти-повтор → подставляем её как «названную владельцем» (см. шаг 1 /post)
-        user = (f"ТЕМА УТВЕРЖДЕНА (анти-повтор пройден — сверено со свежей выгрузкой канала): «{theme}». "
-                f"Пиши флагман ИМЕННО на неё; другие направления брифа не бери.\n\n") + user
+    if avoid or hint:  # анти-повтор — это ОГРАНИЧЕНИЕ («чего не брать»), а НЕ приказ «пиши вот это».
+        # Криейтор сам выбирает сильнейшее НЕ-повторное направление и комбинирует источники (шаги 1-2
+        # его ТЗ) — иначе пост скатывается в один слабый повод и сухость (урок 30.06).
+        guard = "АНТИ-ПОВТОР (сверено со свежей выгрузкой канала).\n"
+        if avoid:
+            guard += f"НЕ бери эти направления — они уже выходили на канале: {avoid}.\n"
+        if hint:
+            guard += f"Подсказка (НЕ приказ, решаешь ты): сильным НЕ-повтором выглядит «{hint}».\n"
+        guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (шаги 1-2 ТЗ: возьми сильнейшее, "
+                  "СКОМБИНИРУЙ несколько источников вокруг одной антитезы, выбери формат) — не зацикливайся "
+                  "на одном поводе/источнике.\n\n")
+        user = guard + user
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
@@ -164,7 +173,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
     # дешевле поймать дубль на теме, чем после готового поста. Данные уже актуализированы (шаг 0).
     # ГЕЙТ для обоих (дубль в канал не уйдёт); но ТЕМУ подменяем только флагману — scope сам берёт свой
     # 🔭-повод из брифа по гейту важности, ему чужая «сильнейшая не-повторная» тема не нужна.
-    theme = ""
+    avoid = hint = ""
     try:
         verdict = dedup.check(verify.latest_brief(),
                               api_key=config.agent_api_key(config.load_agent("creator")))
@@ -175,12 +184,15 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
                 "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
             return "\n".join(report)
         if not scope:
-            theme = dedup.recommended_theme(verdict)  # флагман берёт сильнейшую НЕ-повторную тему
+            # Анти-повтор отдаём флагману как ОГРАНИЧЕНИЕ (повторы — мимо) + мягкую подсказку. Тему он
+            # выбирает САМ (рельсовый «пиши ИМЕННО это» давал сухой однотемный пост — урок 30.06).
+            avoid = dedup.repeat_themes(verdict)
+            hint = dedup.recommended_theme(verdict)
     except Exception:
         logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope() if scope else _run_creator("post", theme)
+        post = _run_scope() if scope else _run_creator("post", avoid, hint)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)

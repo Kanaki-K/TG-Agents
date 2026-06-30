@@ -116,6 +116,22 @@ def recommended_theme(verdict: str) -> str:
     return ""
 
 
+def repeat_themes(verdict: str) -> str:
+    """Темы-повторы (строки 🔁) из вердикта — одной строкой через «; ». Это список «чего НЕ брать»,
+    который отдаём Криейтору как ОГРАНИЧЕНИЕ (а не «пиши вот это»): сильнейшее НЕ-повторное
+    направление он выбирает сам (шаги 1-2 его ТЗ — комбинирует источники, выбирает формат).
+    Пусто, если явных 🔁 нет."""
+    out = []
+    for ln in (verdict or "").splitlines():
+        s = ln.strip()
+        if s.startswith("🔁"):
+            a, b = s.find("«"), s.find("»")
+            t = s[a + 1:b].strip() if a != -1 and b > a else s.lstrip("🔁").strip(" —-")
+            if t:
+                out.append(t)
+    return "; ".join(out)
+
+
 def all_repeats(verdict: str) -> bool:
     """True, если КАЖДОЕ направление — повтор (пост выпускать нельзя). Сначала по строке СТАТУС,
     фолбэк — по наличию 🆕/🔁 в вердикте."""
