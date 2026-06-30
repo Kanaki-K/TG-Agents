@@ -110,7 +110,7 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
     return text or ""
 
 
-def _run_scope() -> str:
+def _run_scope(avoid: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Картинку не делает — в отложку уйдёт текстом (publish_now с kind=short)."""
     try:  # на всякий случай чистим аутбокс обложки — scope её не делает, отложка должна быть текстом
@@ -120,7 +120,7 @@ def _run_scope() -> str:
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, без обложки)...")
-    text = _threaded(scope_writer.write, "")
+    text = _threaded(scope_writer.write, "", avoid)
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
 
@@ -196,16 +196,17 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             out("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
                 "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
             return "\n".join(report)
+        # Повторы — мимо для ОБОИХ. scope раньше avoid НЕ получал и брал уже вышедшую тему (баг 30.06:
+        # взял x402 после поста 23.06). Тему-ПОДСКАЗКУ даём только флагману; scope повод выбирает САМ,
+        # но теперь с запретом на повторы (рельсовый «пиши ИМЕННО это» давал сухой однотемный пост).
+        avoid = dedup.repeat_themes(verdict)
         if not scope:
-            # Анти-повтор отдаём флагману как ОГРАНИЧЕНИЕ (повторы — мимо) + мягкую подсказку. Тему он
-            # выбирает САМ (рельсовый «пиши ИМЕННО это» давал сухой однотемный пост — урок 30.06).
-            avoid = dedup.repeat_themes(verdict)
             hint = dedup.recommended_theme(verdict)
     except Exception:
         logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope() if scope else _run_creator("post", avoid, hint)
+        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)
