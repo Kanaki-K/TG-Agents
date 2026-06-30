@@ -224,15 +224,19 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             ob = creator_tools.MEDIA_OUTBOX
             have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
                 if ob.exists() else []
-            if not have:
+            if have:
+                out("🖼 Обложка прогона есть (Криейтор вызвал make_image в ходе) — прицеплю её.")
+            else:
                 body = post.split("[[SPLIT]]")[0]
                 title = next((l.strip() for l in body.splitlines() if l.strip()), "").replace("**", "")
-                out("🖼 Обложки в прогоне нет — генерирую из финального поста (make_image)...")
+                out("🖼 Обложки в прогоне нет (Криейтор не вызвал make_image) — генерирую из финала через GPT...")
                 out(str(_threaded(creator_tools.dispatch, "make_image",
                                   {"title": title, "post_text": body})))
                 have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
                     if ob.exists() else []
             cover_path = have[-1] if have else ""
+            out(f"🖼 Обложка к публикации: {cover_path}" if cover_path
+                else "⚠️ Обложку получить не удалось — флагман уйдёт ТЕКСТОМ.")
         except Exception:
             logging.exception("обложка: не смог получить/сгенерить — флагман уйдёт текстом")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
