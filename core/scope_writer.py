@@ -14,11 +14,13 @@ import logging
 from core import config, creator_tools, llm, runmode, verify
 
 AGENT_NAME = "creator"            # голос автора тот же — переиспользуем персону Криейтера
-# Письмо scope — Opus (как флагман): на КОРОТКОМ посте почти не дороже Sonnet (вывод крошечный, вход
-# кэшируется), но голос/анти-ИИ держит заметно лучше — Sonnet скатывался в ИИ-риторику (лозунг-реверс,
-# списки-обрубки). 2FA при этом отдельно на Haiku (verify.VERIFY_MODEL). В /test → Haiku через runmode.
-SCOPE_MODEL = "claude-opus-4-8"
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 6}
+# Письмо scope — Sonnet (короткий формат, Opus тут избыточен: вывод крошечный). Старый риск «Sonnet
+# скатывался в ИИ-риторику» теперь подстрахован: voice_core + линтер + scope_lessons в контексте enforce-ят
+# голос/анти-ИИ. Если на первых выходах подача поплывёт — добавить урок (record_scope_lesson) или вернуть
+# Opus. 2FA — отдельным проходом (verify, Sonnet, thinking off). В /test всё падает на Haiku через runmode.
+SCOPE_MODEL = "claude-sonnet-4-6"
+# Быстрая реакция: 3 поиска хватает на проверку свежести повода + ключевых цифр (было 6 — лишнее для короткого).
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
 
 # Инструменты scope = «руки» Криейтера БЕЗ make_image (картинку не делаем) и без правки стандарта/аналитики.
 # record_lesson флагмана выкинут НАМЕРЕННО — у scope свой урок-инструмент (record_scope_lesson, пишет в
