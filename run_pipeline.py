@@ -214,8 +214,30 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             logging.exception("Фактчек 2FA не удался — пост НЕ блокирую, ставлю как есть")
     out("📝 --- ГОТОВЫЙ ПОСТ ---")
     out((post or "").strip())
+    # ОБЛОЖКА флагмана: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image — и mtime-гейт publish_now ронял
+    # валидную обложку в текст. Берём обложку ЭТОГО прогона из аутбокса и передаём publish_now ЯВНО (минуя
+    # гейт). Аутбокс пуст (Криейтор не вызвал make_image в длинном ТЗ) → генерим САМИ из ФИНАЛЬНОГО поста:
+    # одна генерация, лимит бережём, заголовок берём из финала. scope — текстом, обложку не трогаем.
+    cover_path = ""
+    if not scope and (post or "").strip():
+        try:
+            ob = creator_tools.MEDIA_OUTBOX
+            have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
+                if ob.exists() else []
+            if not have:
+                body = post.split("[[SPLIT]]")[0]
+                title = next((l.strip() for l in body.splitlines() if l.strip()), "").replace("**", "")
+                out("🖼 Обложки в прогоне нет — генерирую из финального поста (make_image)...")
+                out(str(_threaded(creator_tools.dispatch, "make_image",
+                                  {"title": title, "post_text": body})))
+                have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
+                    if ob.exists() else []
+            cover_path = have[-1] if have else ""
+        except Exception:
+            logging.exception("обложка: не смог получить/сгенерить — флагман уйдёт текстом")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
-    out(str(_threaded(creator_tools.dispatch, "publish_now", {"kind": "short" if scope else ""})))
+    out(str(_threaded(creator_tools.dispatch, "publish_now",
+                      {"kind": "short" if scope else "", "cover": cover_path})))
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
     out("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $
     return "\n".join(report)

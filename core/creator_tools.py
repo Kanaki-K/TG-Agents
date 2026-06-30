@@ -771,8 +771,14 @@ def _publish_now(args: dict | None = None) -> str:
     cover = ""
     cover_note = ""
     if kind == "flagship":
+        # Явная обложка ЭТОГО прогона (пайплайн передаёт путь из аутбокса/свежей генерации) — берём её
+        # БЕЗ mtime-гейта: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image, и гейт «cover ≥ draft» ронял
+        # валидную картинку. Доверяем явному аргументу (его шлёт только наш конвейер из аутбокса прогона).
+        forced = str(args.get("cover", "") or "").strip()
         c = LAST_COVER.read_text(encoding="utf-8").strip() if LAST_COVER.exists() else ""
-        if c and Path(c).exists() and LAST_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
+        if forced and Path(forced).exists():
+            cover = forced
+        elif c and Path(c).exists() and LAST_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
             cover = c
         else:
             cover_note = (" ⚠️ Обложку НЕ прицепил: актуальной картинки для ЭТОГО поста нет "
