@@ -23,6 +23,7 @@ make_image (playwright-браузер) получает рабочий event-loo
 не родился — публикацию пропускаем (пустое в канал не уйдёт). База будущего оркестратора по расписанию.
 """
 import concurrent.futures
+import datetime
 import logging
 import sys
 import time
@@ -33,6 +34,10 @@ from core import (config, cost, creator_bot, creator_tools, dedup, llm, runmode,
 logging.basicConfig(level=logging.INFO)
 
 SCOUT_FRESH_HOURS = 3  # бриф свежее этого — повторную разведку не запускаем (бережём кредиты)
+# Дни ГЛУБОКОЙ разведки: Пн=0, Вт=1, Чт=3. В остальные дни берём последний бриф из «банка» — мы НЕ
+# новостник (горячка не цель), мануал Скаута + актуальность важнее свежей разведки на каждый пост.
+# Скаут с ~6×/нед → 3×/нед. Если брифа в банке вообще нет — разведка запустится в любой день.
+SCOUT_DAYS = {0, 1, 3}
 
 
 def _latest_brief_age_hours() -> float | None:
@@ -157,14 +162,21 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
     out("🗂 [0] Актуальность данных канала (для анти-повтора)...")
     out(str(dedup.refresh_if_stale()) + "\n")
     age = _latest_brief_age_hours()
+    scout_day = datetime.date.today().weekday() in SCOUT_DAYS
     if skip_scout:
         out("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
     elif age is not None and age < SCOUT_FRESH_HOURS:
         out(f"⏭ Скаута пропускаю: последний бриф свежий ({age:.1f}ч < {SCOUT_FRESH_HOURS}ч) — "
             f"повторная разведка не нужна, берём его.\n")
+    elif age is not None and not scout_day:
+        out(f"⏭ Скаута пропускаю: сегодня не день разведки (глубокий поиск Пн/Вт/Чт) — беру последний "
+            f"бриф из банка ({age:.1f}ч). Мы не новостник: мануал Скаута + актуальность важнее горячки.\n")
     else:
-        if age is not None:
-            out(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч) — запускаю свежую разведку.\n")
+        if age is None:
+            out("🔄 Брифа в банке нет — запускаю разведку (даже вне дня поиска: писать не из чего).\n")
+        else:
+            out(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч), сегодня день разведки — "
+                f"запускаю свежую.\n")
         try:
             _run_scout()
         except Exception:
@@ -175,6 +187,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
     # 🔭-повод из брифа по гейту важности, ему чужая «сильнейшая не-повторная» тема не нужна.
     avoid = hint = ""
     try:
+        cost.set_context("dedup")  # иначе анти-повтор логировался под чужой меткой (scout/«?») — путал в отчёте
         verdict = dedup.check(verify.latest_brief(),
                               api_key=config.agent_api_key(config.load_agent("creator")))
         out("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
