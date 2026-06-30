@@ -16,8 +16,10 @@ from __future__ import annotations
 
 from core import config, cost, llm, market_tools, runmode
 
-# Модель 2FA: Haiku — задача проверочная (чек-лист по собранному), не генеративная. Хватает и дёшево.
-# Если на флагмане Haiku начнёт пропускать тонкие конфликты — поднять до claude-sonnet-4-6.
+# Модель 2FA — Sonnet (резолвится в verify_post): тонкие конфликты в цифрах (внутренние противоречия,
+# «впервые с N» vs «случалось дважды») Haiku пропускал — цифры красная линия бренда, тут не экономим на
+# модели. Экономия идёт по ДРУГОЙ оси: thinking ВЫКЛ (см. verify_post) — выход был дороже самой модели.
+# В /test всё равно падает на Haiku через runmode. VERIFY_MODEL ниже — фолбэк для дешёвого ручного вызова.
 VERIFY_MODEL = "claude-haiku-4-5"
 # Серверный веб-поиск — ТОЛЬКО фолбэк для цифры, которой нет в брифе. Кап низкий: без «х2 скаутинга».
 VERIFY_WEB = {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
@@ -91,8 +93,10 @@ def verify_post(post: str, brief: str = "", api_key: str | None = None, model: s
             f"ИСХОДНЫЙ БРИФ СКАУТА (источники для сверки):\n{brief or '(бриф не найден)'}\n\n"
             "Проверь КАЖДОЕ проверяемое утверждение. Выдай вердикт-список и ИТОГ.")
     try:
+        # thinking ВЫКЛ намеренно: это ЧЕК-ЛИСТ (сверка по собранному), не генерация. Adaptive thinking
+        # тут раздувал ВЫХОДНЫЕ токены — самую дорогую статью verify (~55% цены) — не добавляя точности.
         text, _ = llm.reply(mdl, VERIFIER_SYSTEM, [], user, [VERIFY_WEB, market_tools.PRICE_TOOL],
-                            lambda n, a: market_tools.handle(n, a) or "", api_key, {"type": "adaptive"})
+                            lambda n, a: market_tools.handle(n, a) or "", api_key, None)
         return (text or "(пусто)").strip()
     except Exception as e:  # noqa: BLE001 — фактчек не должен ронять конвейер
         return f"(фактчек не удался: {e})"
