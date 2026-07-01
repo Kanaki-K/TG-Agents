@@ -1,7 +1,7 @@
 """Полная цепочка контент-завода ОДНИМ запуском (оркестратор v0 — ручной триггер):
 
     python run_pipeline.py                # полный прогон: Скаут → Криейтор (флагман) → отложка
-    python run_pipeline.py --scope        # короткий 🔭 «Под прицелом» (аналитич., БЕЗ обложки) → отложка
+    python run_pipeline.py --scope        # короткий 🔭 «Под прицелом» (аналитич., обложка из первоисточника) → отложка
     python run_pipeline.py --skip-scout   # БЕЗ Скаута: Криейтор берёт ПОСЛЕДНИЙ бриф
 
 Скаут НЕ дёргается впустую: если последний бриф разведки младше SCOUT_FRESH_HOURS (3ч) — прогон берёт
@@ -27,6 +27,7 @@ import datetime
 import logging
 import sys
 import time
+from pathlib import Path
 
 from core import (config, cost, creator_bot, creator_tools, dedup, llm, runmode, scope_writer,
                   scout_bot, scout_tools, verify)
@@ -50,6 +51,13 @@ def _latest_brief_age_hours() -> float | None:
         return None
     newest = max(p.stat().st_mtime for p in files)
     return (time.time() - newest) / 3600.0
+
+
+def _latest_draft_mtime() -> float:
+    """mtime самого свежего драфта (0 — драфтов нет). Гейт «пост создан в ЭТОМ прогоне»: сравниваем
+    до и после генерации — если новее не появилось, scope/Криейтор отказался и публиковать НЕЧЕГО."""
+    files = creator_tools._md_files(creator_tools.DRAFTS_DIR)
+    return files[0].stat().st_mtime if files else 0.0
 
 
 def _threaded(fn, *args):
@@ -112,14 +120,15 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
 
 def _run_scope(avoid: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
-    внутри. Картинку не делает — в отложку уйдёт текстом (publish_now с kind=short)."""
-    try:  # на всякий случай чистим аутбокс обложки — scope её не делает, отложка должна быть текстом
+    внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
+    гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится."""
+    try:  # флагман-аутбокс GPT-обложки чистим — scope им не пользуется (у него свой SCOPE_COVER)
         if creator_tools.MEDIA_OUTBOX.exists():
             creator_tools.MEDIA_OUTBOX.unlink()
     except Exception:
         pass
     cost.set_context("scope")
-    print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, без обложки)...")
+    print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
     text = _threaded(scope_writer.write, "", avoid)
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
@@ -204,6 +213,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             hint = dedup.recommended_theme(verdict)
     except Exception:
         logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
+    pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
         post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint)
@@ -228,10 +238,20 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             logging.exception("Фактчек 2FA не удался — пост НЕ блокирую, ставлю как есть")
     out("📝 --- ГОТОВЫЙ ПОСТ ---")
     out((post or "").strip())
+    # ГЕЙТ «свежий пост»: публикуем ТОЛЬКО если в этом прогоне сохранён НОВЫЙ драфт. scope/Криейтор мог
+    # ОТКАЗАТЬСЯ писать (нет свежего повода — штатно) и не вызвать save_draft — тогда самый свежий драфт
+    # на диске СТАРЫЙ (из архива), и publish_now поставил бы в канал его (был баг: старый флагман ушёл под
+    # меткой «короткий»). Нет нового драфта → НИЧЕГО не публикуем и обложку не трогаем.
+    if _latest_draft_mtime() <= pre_mtime:
+        out("\n⛔ Свежего поста в этом прогоне НЕ создано (scope/Криейтор не сохранил драфт — вероятно, "
+            "нет подходящего повода). В отложку НИЧЕГО не ставлю — старый драфт из архива в канал не уйдёт.")
+        out("\n" + cost.summary())
+        return "\n".join(report)
     # ОБЛОЖКА флагмана: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image — и mtime-гейт publish_now ронял
     # валидную обложку в текст. Берём обложку ЭТОГО прогона из аутбокса и передаём publish_now ЯВНО (минуя
     # гейт). Аутбокс пуст (Криейтор не вызвал make_image в длинном ТЗ) → генерим САМИ из ФИНАЛЬНОГО поста:
-    # одна генерация, лимит бережём, заголовок берём из финала. scope — текстом, обложку не трогаем.
+    # одна генерация, лимит бережём, заголовок берём из финала. scope — своя ветка обложки ниже (из
+    # первоисточника, не GPT): путь берём из SCOPE_COVER, который положил scope_writer.
     cover_path = ""
     if not scope and (post or "").strip():
         try:
@@ -253,6 +273,22 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
                 else "⚠️ Обложку получить не удалось — флагман уйдёт ТЕКСТОМ.")
         except Exception:
             logging.exception("обложка: не смог получить/сгенерить — флагман уйдёт текстом")
+    elif scope and (post or "").strip():
+        # Картинка для 🔭 ОБЯЗАТЕЛЬНА (правило владельца: без картинки пост не нужен). scope достал og:image
+        # со статей-кандидатов, vision выбрал подходящую по смыслу → путь в SCOPE_COVER. Пусто → НЕ публикуем.
+        try:
+            sc = creator_tools.SCOPE_COVER
+            cp = sc.read_text(encoding="utf-8").strip() if sc.exists() else ""
+            cover_path = cp if cp and Path(cp).exists() else ""
+        except Exception:
+            logging.exception("scope-обложка: не смог подхватить SCOPE_COVER")
+            cover_path = ""
+        if not cover_path:
+            out("\n⛔ У 🔭-поста НЕТ подходящей картинки — по правилу «без картинки не публикуем» в отложку "
+                "НЕ ставлю. Драфт сохранён в архиве (добавь картинку вручную или пропусти повод).")
+            out("\n" + cost.summary())
+            return "\n".join(report)
+        out(f"🖼 Обложка выбрана (по смыслу подходит посту): {cover_path}")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
     out(str(_threaded(creator_tools.dispatch, "publish_now",
                       {"kind": "short" if scope else "", "cover": cover_path})))

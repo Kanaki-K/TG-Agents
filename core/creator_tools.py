@@ -48,6 +48,9 @@ LAST_COVER = config.ROOT / "data" / "creator_last_cover.txt"
 # Формат последнего сохранённого драфта (флагман/короткий/scope/…): его читает publish_now, чтобы
 # НЕ угадывать формат по длине текста и не цеплять обложку к короткому посту. data/ = вне git.
 LAST_KIND = config.ROOT / "data" / "creator_last_kind.txt"
+# Обложка scope 🔭 из ПЕРВОИСТОЧНИКА (не GPT): её кладёт scope_writer, читает пайплайн и передаёт
+# publish_now явным cover. ОТДЕЛЬНО от флагманского LAST_COVER — изоляция форматов. data/ = вне git.
+SCOPE_COVER = config.ROOT / "data" / "scope_last_cover.txt"
 
 TOOLS = [
     {
@@ -787,20 +790,30 @@ def _publish_now(args: dict | None = None) -> str:
     # лучше уйти ТЕКСТОМ (владелец увидит в «Отложенных» и перегенерит), чем прицепить чужую обложку.
     cover = ""
     cover_note = ""
-    if kind == "flagship":
-        # Явная обложка ЭТОГО прогона (пайплайн передаёт путь из аутбокса/свежей генерации) — берём её
-        # БЕЗ mtime-гейта: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image, и гейт «cover ≥ draft» ронял
-        # валидную картинку. Доверяем явному аргументу (его шлёт только наш конвейер из аутбокса прогона).
-        forced = str(args.get("cover", "") or "").strip()
+    # Явная обложка ЭТОГО прогона (пайплайн передаёт путь) — берём её БЕЗ mtime-гейта: её собрал этот же
+    # прогон. Работает для ЛЮБОГО формата: флагман-GPT (аутбокс) ИЛИ scope-картинка из первоисточника
+    # (SCOPE_COVER). 2FA-фикс пересохраняет драфт ПОЗЖЕ картинки, и гейт «cover ≥ draft» ронял валидную.
+    forced = str(args.get("cover", "") or "").strip()
+    if forced and Path(forced).exists():
+        cover = forced
+    elif kind == "flagship":
+        # Фолбэк флагмана: персистентная LAST_COVER, но только если принадлежит ЭТОМУ драфту (mtime-гейт).
+        # Иначе make_image в этом прогоне упал/не вызывался и LAST_COVER хранит картинку ПРОШЛОГО флагмана —
+        # лучше уйти ТЕКСТОМ (владелец увидит в «Отложенных» и перегенерит), чем прицепить чужую обложку.
         c = LAST_COVER.read_text(encoding="utf-8").strip() if LAST_COVER.exists() else ""
-        if forced and Path(forced).exists():
-            cover = forced
-        elif c and Path(c).exists() and LAST_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
+        if c and Path(c).exists() and LAST_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
             cover = c
         else:
             cover_note = (" ⚠️ Обложку НЕ прицепил: актуальной картинки для ЭТОГО поста нет "
                           "(make_image не сработал в этом прогоне / LAST_COVER от прошлого флагмана). "
                           "Флагман ушёл ТЕКСТОМ — сгенерь обложку и поставь заново, если нужна.")
+    else:
+        # short/scope: обложка из ПЕРВОИСТОЧНИКА (SCOPE_COVER, кладёт scope_writer) — но только если она
+        # принадлежит ЭТОМУ драфту (mtime-гейт), иначе это картинка прошлого 🔭 → лучше текстом. Так scope
+        # получает обложку и в бот-флоу (/schedule без явного cover), не только когда путь передал пайплайн.
+        sc = SCOPE_COVER.read_text(encoding="utf-8").strip() if SCOPE_COVER.exists() else ""
+        if sc and Path(sc).exists() and SCOPE_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
+            cover = sc
     try:
         busy = {dt.astimezone(content_plan.tz()).date() for dt in publish.scheduled_times(channel)}
     except Exception:

@@ -6,12 +6,19 @@
   3) чисто — флагман и scope не мешают друг другу.
 
 «Руки» (save_draft/read_brief/publish/web_search) переиспользуем из creator_tools — дублировать
-инструменты незачем. Картинку (make_image) и правку стандарта намеренно НЕ даём. Самодостаточно:
-write() делает генерацию → обязательный 2FA-фактчек → правку фактов СВОЕЙ моделью → финал.
+инструменты незачем. Рисование обложки (make_image, GPT) и правку стандарта намеренно НЕ даём.
+Обложку берём ИНАЧЕ — из ПЕРВОИСТОЧНИКА повода (og:image), а не рисуем: живое медиа новости,
+дёшево, без флагман-make_image (изоляция форматов). Самодостаточно: write() делает генерацию →
+обязательный 2FA-фактчек → правку фактов СВОЕЙ моделью → ленивую тягу обложки источника → финал.
 """
+import base64
 import logging
+import re
 
-from core import config, creator_tools, llm, runmode, verify
+from anthropic import Anthropic
+
+from connectors import source_media
+from core import config, cost, creator_tools, llm, runmode, verify
 
 AGENT_NAME = "creator"            # голос автора тот же — переиспользуем персону Криейтера
 # Письмо scope — Sonnet (короткий формат, Opus тут избыточен: вывод крошечный). Старый риск «Sonnet
@@ -19,6 +26,15 @@ AGENT_NAME = "creator"            # голос автора тот же — пе
 # голос/анти-ИИ. Если на первых выходах подача поплывёт — добавить урок (record_scope_lesson) или вернуть
 # Opus. 2FA — отдельным проходом (verify, Sonnet, thinking off). В /test всё падает на Haiku через runmode.
 SCOPE_MODEL = "claude-sonnet-4-6"
+# Vision-гейт обложки из источника — дёшево (Haiku поддерживает картинки): годна ли она как обложка.
+# В /test падает на дешёвую модель через runmode. Один маленький вызов на готовый пост — копейки.
+VISION_MODEL = "claude-haiku-4-5"
+# Мышление для scope ВЫКЛЮЧЕНО намеренно (не наследуем adaptive из creator-конфига). Причина: короткому
+# формату (600-900) глубокое мышление избыточно, а adaptive на Sonnet раздувал вывод до потолка MAX_TOKENS
+# и ОБРЕЗАЛ хвост с мета-ссылками обложки [[MEDIA_SRC]] (баг 01.07: пост без картинки → гейт не публиковал) +
+# делал прогон вчетверо дороже ($0.84 vs $0.20). Композицию/красные линии держат мануал + линтер + 2FA.
+# Вернуть — заменить на {"type": "adaptive"}, если качество подачи заметно просядет.
+SCOPE_THINKING = None
 # Быстрая реакция: 3 поиска хватает на проверку свежести повода + ключевых цифр (было 6 — лишнее для короткого).
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
 
@@ -65,16 +81,34 @@ TASK = (
     "тег-рубрика); разговорный заход; денежная МЕХАНИКА с переподачей (оборот→комиссии→доля выручки ИЛИ крипта "
     "vs TradFi-масштаб — образ, не список статов); value-accrual линза (adoption доходит ДО холдера) + оптика "
     "долгосрочника, ВПЛЕТЁННЫЕ живой строкой, НЕ ярлыком-разделом «Риск честно:»/«Что значит долгосрочнику:»; "
-    "человеческое закрытие одной строкой; стандартный футер (scope_manual §4). РЕМЕСЛО (voice_core, ОБЯЗАТЕЛЬНО): "
-    "§2 типографика — БЕЗ точки в конце строк/абзацев, тире `-`, кавычки `\"…\"`, валюта после числа; §4 анти-ИИ "
-    "запретник (без «является»/канцелярита/стаккато/«Это не X. Это Y»); §3 якорный жирный на несущих цифрах/именах. "
+    "человеческое закрытие одной строкой; стандартный футер (scope_manual §4) — вставь ДОСЛОВНО СО ССЫЛКАМИ "
+    "(markdown-линки, не голый текст). РЕМЕСЛО (voice_core, ОБЯЗАТЕЛЬНО): §2 типографика — БЕЗ точки в конце "
+    "строк/абзацев, тире `-`, кавычки `\"…\"`, валюта после числа; §4 анти-ИИ запретник (без «является»/канцелярита/"
+    "стаккато/«Это не X. Это Y»); §3 РАЗМЕТКА как флагман — **ЗАГОЛОВОК жирным** (`**...**`) и якорный жирный на "
+    "несущих цифрах/именах (эталоны §8 показаны без разметки — это НЕ значит «без жирного»); "
+    "§6 ЗАГОЛОВОК-КРЮЧОК — факт/число + вопрос-флип (НЕ вялая двухчастная констатация типа «X под водой. Но кто-то "
+    "покупает»), но МЯГЧЕ флагмана по тону — рубрика 🔭 ОТДЕЛЬНАЯ, не мини-флагман; §7 ПРОСТОЙ ЯЗЫК — спец-метрики "
+    "(90D-SMA, индекс капитуляции, Risk-Off, Market Compass) объясни простыми словами или УБЕРИ; имя источника "
+    "(Glassnode и пр.) НЕ по кругу — цифру оставь, имя из тела убери (максимум один раз под твёрдые данные). "
     "Голый пересказ новости = провал (стал новостником). Длина ~600–900 тела — ВДВОЕ короче флагмана: это БЫСТРАЯ реакция, не разбор. ОДИН "
     "поворот + ОДНА цифра-механика, 1–3 цифры всего, БЕЗ полной лекции/мехразбора; подзаголовок-врезка обычно "
     "не нужен на таком объёме. Безлично. Красные линии строго (BTC не проигравший, без политоты/России/сигналов). "
     "4) save_draft(kind='scope') — линтер вернёт правки/предупреждения (длина >1100 = почти флагман, ярлыки-разделы, фурнитура 💡/💭); "
     "устрани и вызови save_draft ЕЩЁ РАЗ с ФИНАЛОМ. "
-    "5) ВЫВОД В ЧАТ: сперва ТОЛЬКО финальный пост (без преамбулы), затем `[[SPLIT]]` и ОТДЕЛЬНОЙ строкой "
-    "короткая заметка проверки (почему повод тянет на 🔭 + что сверить). Брифов нет — скажи, попроси /scan."
+    "5) ВЫВОД В ЧАТ строго В ЭТОМ ПОРЯДКE (мета — СРАЗУ после поста, ДО заметки проверки: она в самом низу и "
+    "может обрезаться по лимиту вывода, поэтому ссылки-обложку ставим выше): "
+    "(а) ТОЛЬКО финальный пост (без преамбулы); (б) строка `[[SPLIT]]`; "
+    "(в) ОТДЕЛЬНОЙ строкой `[[MEDIA_SRC]] <url1>, <url2>, <url3>, <url4>` — 3-4 ссылки на НОВОСТНЫЕ СТАТЬИ повода "
+    "(coindesk, theblock, decrypt, cointelegraph, blockworks, dlnews и т.п. — у них есть картинка-превью с "
+    "героем/логотипом/событием). БОЛЬШЕ ссылок = выше шанс годной обложки (vision выберет лучшую по смыслу). "
+    "НЕ давай: голые твиты (x.com/twitter — картинку не отдают), PDF/документы/SEC-филинги/пресс-релизы-PDF и "
+    "абстрактные блоги-иллюстрации (у них нет нормального og:image-фото). Мало статей в брифе — ОБЯЗАТЕЛЬНО "
+    "сделай web_search «<суть повода> новость» и добери до 3-4 ссылок на НОВОСТНЫЕ статьи; "
+    "(г) ОТДЕЛЬНОЙ строкой `[[MEDIA_SUBJECT]] <2-5 сущностей: люди/компании/проекты/тикеры/объекты>` (напр. "
+    "«Michael Saylor, Strategy, MSTR, биткоин») — якорь для отбора обложки; "
+    "(д) В КОНЦЕ — КОРОТКАЯ (1-2 строки) заметка проверки (почему повод тянет на 🔭 + что сверить). "
+    "⚠️ КАРТИНКА ОБЯЗАТЕЛЬНА: без ссылок-статей пост НЕ выйдет — пункты (в) и (г) дай ОБЯЗАТЕЛЬНО и СРАЗУ после "
+    "[[SPLIT]]. Совсем нет статей ни по брифу, ни поиском — так и скажи. Брифов нет — скажи, попроси /scan."
 )
 
 FIX = (
@@ -123,13 +157,153 @@ def _turn(user_text: str, model: str, key: str, thinking, tools: list = TOOLS) -
     return text or ""
 
 
+# --- Обложка из ПЕРВОИСТОЧНИКА (ленивая тяга: только для готового поста, не для всех кандидатов) ---
+_MEDIA_SRC_RE = re.compile(r"\[\[MEDIA_SRC\]\]\s*(.+)")
+_URL_RE = re.compile(r"https?://[^\s,)>\]]+")
+_IMG_MEDIA_TYPE = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                   ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def _parse_media_srcs(text: str) -> list[str]:
+    """URL(ы) статей-первоисточников из меты поста (строка [[MEDIA_SRC]] url1, url2, ...). Несколько
+    кандидатов → vision выберет подходящий по смыслу. Парсим ДО 2FA-фикса — тот мету срезает. Кап 4."""
+    m = _MEDIA_SRC_RE.search(text or "")
+    if not m:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in _URL_RE.findall(m.group(1)):
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out[:4]
+
+
+_MEDIA_SUBJECT_RE = re.compile(r"\[\[MEDIA_SUBJECT\]\]\s*(.+)")
+
+
+def _parse_media_subject(text: str) -> str:
+    """Ключевые сущности повода из меты ([[MEDIA_SUBJECT]] ...) — ЯКОРЬ для vision: что ждём на картинке.
+    Так vision сверяет кандидатов с конкретным списком (люди/компании/тикеры), а не гадает по всему тексту."""
+    m = _MEDIA_SUBJECT_RE.search(text or "")
+    return m.group(1).strip()[:200] if m else ""
+
+
+# ЧТО ГОДИТСЯ на обложку 🔭 — широкий, но чёткий список (чем яснее критерий, тем меньше vision зря бракует;
+# картинка обязательна, поэтому берём ВСЁ, что СВЯЗАНО с поводом, а не только «идеальный» кадр).
+_MEDIA_CRITERIA = (
+    "ГОДИТСЯ ПРАКТИЧЕСКИ ЛЮБАЯ картинка В ТЕМЕ денег/крипты/финансов/бизнеса — даже генеричный сток или "
+    "абстракция (идеал НЕ требуется, обложка обязательна). В тему, например:\n"
+    "- человек повода (CEO/аналитик/чиновник/трейдер); компания/биржа/банк (логотип, офис, продукт, скриншот);\n"
+    "- монеты/токены/BTC/ETH/тикеры/символы валют, купюры, карты; график/дашборд/цифры/ончейн;\n"
+    "- событие/сцена (конференция, подписание, слушания, торговый зал); место/регуляция (биржа, ЦБ, флаг/карта);\n"
+    "- ЛЮБАЯ концепт-иллюстрация про деньги/крипту (монеты, доллар, стейблкоин, сеть-рельсы, замок) — абстрактная тоже ОК;\n"
+    "- обложка/график ОТЧЁТА источника ДАННЫХ (Glassnode, CoinMetrics, Kaiko, офиц. блог/пресс проекта повода) — "
+    "С ИХ лого ГОДИТСЯ: это атрибуция первоисточника, НЕ чужой вотермарк.\n"
+    "ГЛАВНЫЙ ПРИНЦИП ПРО ЛОГО: лого ПЕРВОИСТОЧНИКА (кто САМ создал картинку/данные — автор отчёта, компания "
+    "повода) = БЕРЁМ, это честная атрибуция. Лого ТОГО, КТО ЧУЖОЕ ПЕРЕЗАЛИЛ и налепил свой знак поверх "
+    "(репост-агентство: Getty, Shutterstock, Reuters, AP, coindesk.tv) = НЕ берём.\n"
+    "СКЛОНЯЙСЯ ВЗЯТЬ. Ставь 0 (ни одна) ТОЛЬКО если картинка: (1) явно НЕ про деньги/крипту/бизнес (еда, спорт, "
+    "случайный пейзаж/человек, мем не в тему); ИЛИ (2) с чужим РЕПОСТ-вотермарком третьей стороны (см. принцип "
+    "выше); ИЛИ (3) 18+; ИЛИ (4) битая/нечитаемая; ИЛИ (5) просто лого-заглушка сайта-новостника. Иначе — БЕРИ."
+)
+
+
+def _vision_pick(images: list, post_body: str, subject: str, key: str):
+    """Vision ВЫБИРАЕТ из кандидатов ту картинку, что СВЯЗАНА с поводом (см. _MEDIA_CRITERIA). subject —
+    якорь-сущности от scope (люди/компании/тикеры). Один вызов на все картинки (дёшево). Path или None."""
+    if not images:
+        return None
+    try:
+        topic = "\n".join(l for l in post_body.splitlines() if l.strip())[:600]
+        anchor = f"Повод про: {subject}\n\n" if subject else ""
+        content: list = []
+        for i, p in enumerate(images, 1):
+            mt = _IMG_MEDIA_TYPE.get(p.suffix.lower(), "image/jpeg")
+            b64 = base64.standard_b64encode(p.read_bytes()).decode()
+            content.append({"type": "text", "text": f"Картинка {i}:"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}})
+        content.append({"type": "text", "text":
+            f"{anchor}Тема поста 🔭 «Под прицелом»:\n{topic}\n\nВыше {len(images)} картинок-кандидатов в "
+            f"ОБЛОЖКУ. {_MEDIA_CRITERIA}\n\nВыбери НОМЕР самой подходящей. Если НИ ОДНА не связана с поводом "
+            "— ответь 0. Ответь СТРОГО одним числом."})
+        model = runmode.resolve(VISION_MODEL)
+        resp = Anthropic(api_key=key).messages.create(
+            model=model, max_tokens=10, messages=[{"role": "user", "content": content}])
+        cost.record(model, resp.usage)
+        ans = "".join(b.text for b in resp.content if b.type == "text").strip()
+        m = re.search(r"\d+", ans)
+        idx = int(m.group()) if m else 0
+        return images[idx - 1] if 1 <= idx <= len(images) else None
+    except Exception:
+        logging.exception("scope vision-выбор не сработал — картинку НЕ прицепляю (уйдём текстом)")
+        return None
+
+
+def _vision_ok(img_path, post_body: str, key: str) -> bool:
+    """Дёшево (Haiku vision): годна ли картинка источника как обложка 🔭 — релевантна теме и осмысленна
+    (не логотип-заглушка/баннер/18+/битый скрин). Ошибка или сомнение → False (пост уйдёт текстом)."""
+    try:
+        media_type = _IMG_MEDIA_TYPE.get(img_path.suffix.lower(), "image/jpeg")
+        b64 = base64.standard_b64encode(img_path.read_bytes()).decode()
+        topic = "\n".join(l for l in post_body.splitlines() if l.strip())[:600]
+        model = runmode.resolve(VISION_MODEL)
+        resp = Anthropic(api_key=key).messages.create(
+            model=model, max_tokens=10,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+                {"type": "text", "text":
+                    "Это картинка-кандидат в ОБЛОЖКУ Telegram-поста. Тема поста:\n" + topic +
+                    "\n\nГодится ли она как обложка — визуально релевантна теме И осмысленна "
+                    "(НЕ логотип-заглушка, НЕ рекламный баннер, НЕ 18+, не битый скрин)? "
+                    "Ответь СТРОГО одним словом: YES или NO. При любом сомнении — NO."},
+            ]}],
+        )
+        cost.record(model, resp.usage)  # учёт расхода (cost-дисциплина): vision-гейт тоже считаем
+        ans = "".join(b.text for b in resp.content if b.type == "text").strip().upper()
+        return ans.startswith("YES")
+    except Exception:
+        logging.exception("scope vision-гейт не сработал — картинку НЕ прицепляю (уйдём текстом)")
+        return False
+
+
+def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> str:
+    """Из СТАТЕЙ-первоисточников: с каждой тянем og:image → vision ВЫБИРАЕТ подходящую по смыслу → пишем
+    в SCOPE_COVER (для publish_now). Всегда сперва ОБНУЛЯЕТ SCOPE_COVER (свежесть: старую обложку не тащим).
+    Возвращает путь-строку обложки или '' (нет статей / ни одного og:image / vision не выбрал → текстом)."""
+    creator_tools.SCOPE_COVER.parent.mkdir(parents=True, exist_ok=True)
+    creator_tools.SCOPE_COVER.write_text("", encoding="utf-8")
+    if not source_urls:
+        return ""
+    imgs = []
+    for i, url in enumerate(source_urls):
+        try:
+            p = source_media.fetch_source_image(url, name=f"scope_{i}")
+        except Exception:
+            logging.exception("scope: og:image не достал (%s)", url)
+            p = None
+        if p:
+            imgs.append(p)
+    if not imgs:
+        logging.info("scope: ни у одной статьи нет годного og:image (%s) — уйдём текстом", source_urls)
+        return ""
+    chosen = _vision_pick(imgs, post_body, subject, key)
+    if not chosen:
+        logging.info("scope: vision не выбрал подходящую по смыслу картинку (%d кандидат.) — уйдём текстом",
+                     len(imgs))
+        return ""
+    creator_tools.SCOPE_COVER.write_text(str(chosen), encoding="utf-8")
+    logging.info("scope: обложка выбрана из %d кандидат. — %s", len(imgs), chosen)
+    return str(chosen)
+
+
 def write(theme: str = "", avoid: str = "") -> str:
     """Сгенерировать 🔭-пост (своя модель/контекст) + обязательный 2FA-фактчек с правкой. Возвращает
     финальный пост (его текст уже в драфте через save_draft; публикует владелец /schedule или пайплайн).
     avoid — направления-повторы от анти-повтора: scope их НЕ берёт (баг 30.06 — взял x402 после поста 23.06)."""
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
-    thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
+    thinking = SCOPE_THINKING  # scope пишет БЕЗ мышления (см. SCOPE_THINKING: дёшево + не режет мету обложки)
     model = runmode.resolve(SCOPE_MODEL)
     task = TASK
     if avoid:  # запрет на уже вышедшие темы — scope повод выбирает сам, но не из повторов
@@ -138,6 +312,8 @@ def write(theme: str = "", avoid: str = "") -> str:
     if theme:
         task += f"\n\nТЕМА ОТ ВЛАДЕЛЬЦА: {theme} — пиши по ней."
     post = _turn(task, model, key, thinking)
+    media_srcs = _parse_media_srcs(post)      # URL(ы) статей из меты — ДО 2FA (фикс мету срезает)
+    media_subj = _parse_media_subject(post)   # якорь-сущности повода для vision (тоже до 2FA)
     # 2FA обязателен (цифры — красная линия). Свой фактчек на Sonnet, правки — своей же моделью/контекстом.
     try:
         verdict = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=key)
@@ -147,6 +323,10 @@ def write(theme: str = "", avoid: str = "") -> str:
             post = fixed or post
     except Exception:
         logging.exception("scope 2FA не удался — пост не блокирую, отдаю как есть")
+    # Обложка из ПЕРВОИСТОЧНИКА — ленивая тяга ТОЛЬКО здесь (пост уже готов, повод утверждён): og:image
+    # со статей-кандидатов → vision ВЫБИРАЕТ подходящую по смыслу → SCOPE_COVER. Нет годной → текстом. Пост
+    # не блокируем.
+    _attach_media(media_srcs, post.split("[[SPLIT]]")[0], media_subj, key)
     return post
 
 
@@ -168,7 +348,7 @@ def write_feedback(final_text: str) -> str:
     ОТДЕЛЬНО от флагман-/feedback (тот пишет в post_lessons на полном контексте)."""
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
-    thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
+    thinking = SCOPE_THINKING  # scope пишет БЕЗ мышления (см. SCOPE_THINKING: дёшево + не режет мету обложки)
     model = runmode.resolve(SCOPE_MODEL)
     # урок-инструмент даём ТОЛЬКО здесь (при генерации поста он не нужен и не должен соблазнять модель)
     return _turn(FEEDBACK.format(final=final_text.strip()), model, key, thinking,
