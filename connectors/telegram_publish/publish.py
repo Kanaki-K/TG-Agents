@@ -28,7 +28,7 @@ import logging
 import re
 from datetime import datetime
 
-from telethon.errors import MediaCaptionTooLongError
+from telethon.errors import MediaCaptionTooLongError, PhotoInvalidDimensionsError
 from telethon.tl import functions
 
 from connectors.telegram_export.collect import _client
@@ -145,19 +145,37 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
         if not cover:  # без обложки — просто текст
             return done("только текст", await _msg(entity))
 
-        # С обложкой (файл от ГПТ/владельца): фото + текст-подпись ОДНИМ сообщением.
-        for pm, body in (("html", html), (None, text)):  # html, при сбое разметки — чистый
+        # С обложкой: фото + текст-подпись ОДНИМ сообщением (html-разметка → при сбое чистый текст).
+        caption_too_long = False
+        for pm, body in (("html", html), (None, text)):
             try:
                 msg = await client.send_file(entity, cover, caption=body, parse_mode=pm,
                                              force_document=False, schedule=when)
                 return done("фото + текст (одним сообщением)", msg)
             except MediaCaptionTooLongError:
+                caption_too_long = True
                 break  # подпись длиннее лимита Telegram — уходим на два сообщения
+            except PhotoInvalidDimensionsError:
+                break  # неверные размеры для ФОТО — ниже пробуем документом (примет любые размеры)
             except Exception:
                 logging.exception("[публикатор] подпись (%s) отклонена — пробую дальше", pm)
-        # Подпись не вместила текст → фото + текст двумя сообщениями (Telegram-лимит подписи; пост не теряем)
-        await client.send_file(entity, cover, force_document=False, schedule=when)
-        return done("фото + текст (два сообщения — текст не влез в подпись)", await _msg(entity))
+        # Подпись не вместила текст → фото отдельным сообщением + текст (два отложенных; пост не теряем).
+        if caption_too_long:
+            try:
+                await client.send_file(entity, cover, force_document=False, schedule=when)
+                return done("фото + текст (два сообщения — текст не влез в подпись)", await _msg(entity))
+            except PhotoInvalidDimensionsError:
+                pass  # размеры невалидны для фото → уйдём документом ниже
+            except Exception:
+                logging.exception("[публикатор] фото отдельным сообщением отклонено — пробую документом")
+        # Крайний фолбэк: Telegram не принял картинку как ФОТО (кривые размеры и т.п.) → шлём её ДОКУМЕНТОМ
+        # + текст (не теряем ни картинку, ни пост). Если и это не вышло — только текст. НИКОГДА не роняем прогон.
+        try:
+            await client.send_file(entity, cover, force_document=True, schedule=when)
+            return done("картинка документом + текст (размеры не подошли под фото)", await _msg(entity))
+        except Exception:
+            logging.exception("[публикатор] и документом картинку не отправил — публикую только текстом")
+            return done("только текст (картинку Telegram отклонил)", await _msg(entity))
     finally:
         await client.disconnect()
 
@@ -207,8 +225,13 @@ async def _check_async(channel: str) -> dict:
 
 def publish(channel: str, text: str, cover: str | None = None, when: datetime | None = None) -> dict:
     """Синхронно поставить пост (зовётся из потока бота). when задан → нативный ОТЛОЖЕННЫЙ пост.
-    Файлом: фото+текст одним сообщением, либо двумя, если текст не влез в подпись."""
-    return asyncio.run(_publish_async(channel, text, (cover or "").strip() or None, when))
+    Файлом: фото+текст одним сообщением, либо двумя, если текст не влез в подпись. НИКОГДА не бросает —
+    любой сбой возвращаем как {ok: False, error}, чтобы не ронять прогон завода (драфт остаётся цел)."""
+    try:
+        return asyncio.run(_publish_async(channel, text, (cover or "").strip() or None, when))
+    except Exception as e:
+        logging.exception("[публикатор] публикация упала — прогон не роняю")
+        return {"ok": False, "error": f"публикация не удалась: {e}"}
 
 
 def scheduled_times(channel: str) -> list:
