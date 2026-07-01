@@ -99,6 +99,23 @@ def fetch_page(url: str, limit: int = 4000) -> str:
     return text[:limit] or "(страница без читаемого текста — возможно, требует JS)"
 
 
+def fetch_bytes(url: str, max_bytes: int = 800_000, timeout: int = 15) -> tuple[bytes, str] | None:
+    """SSRF-безопасный GET → (тело, content-type) или None (заблокирован/ошибка/таймаут).
+
+    Общий низкоуровневый забор для «рук», которым нужны сырые байты (og:image страницы,
+    скачивание картинки первоисточника), а не очищенный текст. Та же защита, что у fetch_page:
+    блокируем приватные/локальные адреса и проверяем каждый редирект.
+    """
+    if _url_blocked_reason(url):
+        return None
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (KanakiScout)"})
+    try:
+        with _SAFE_OPENER.open(req, timeout=timeout) as resp:
+            return resp.read(max_bytes), (resp.headers.get_content_type() or "")
+    except Exception:  # таймаут/403/404/сеть — не роняем вызывающего, отдаём None
+        return None
+
+
 def load_sources() -> list[dict]:
     """Плоский список фидов с треком: [{name, url, track}, ...]."""
     if not SOURCES_FILE.exists():

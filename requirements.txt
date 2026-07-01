@@ -11,4 +11,5 @@ qrcode>=7.4            # QR login to Telegram (login.py)
 feedparser>=6.0        # RSS/Atom feeds - Scout sources (Tier-2)
 twikit>=2.1            # X (Twitter) via burner session - read-only KOL recon (Scout edge)
 playwright>=1.44       # render flagship cover via web ChatGPT burner (after pip: playwright install chromium)
+Pillow>=10.0           # resize source-media covers to Telegram-safe photo dimensions (source_media/fetch.py)
 tzdata>=2024.1         # timezone DB for zoneinfo (Publisher, PUBLISH_TZ) - Windows has none
