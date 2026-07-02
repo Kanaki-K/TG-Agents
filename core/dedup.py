@@ -210,7 +210,9 @@ def free_bank_topics() -> list[str]:
             continue
         if active and s.startswith("- "):
             name = s[2:].replace("**", "").strip()
-            if name and "рефк" not in name.lower():  # ≈#id-пометки оставляем: роутеру видно, что выходило
+            low = name.lower()
+            # [личное] темы автомат НЕ пишет (насочиняет «я»-факты) — их даёт только владелец с материалом.
+            if name and "рефк" not in low and "[личное]" not in low:
                 out.append(name)
     return out
 
