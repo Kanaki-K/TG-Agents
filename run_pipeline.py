@@ -3,6 +3,8 @@
     python run_pipeline.py                # полный прогон: Скаут → Криейтор (флагман) → отложка
     python run_pipeline.py --scope        # короткий 🔭 «Под прицелом» (аналитич., обложка из первоисточника) → отложка
     python run_pipeline.py --skip-scout   # БЕЗ Скаута: Криейтор берёт ПОСЛЕДНИЙ бриф
+    python run_pipeline.py --draft-only   # ТЕСТ: печатает драфт и СТОП — без GPT-обложки и без отложки
+    #   (флаги комбинируются: --skip-scout --draft-only = дешёвая проверка темы/подачи без Скаута и без GPT)
 
 Скаут НЕ дёргается впустую: если последний бриф разведки младше SCOUT_FRESH_HOURS (3ч) — прогон берёт
 его, повторный поиск пропускается (--skip-scout форсит пропуск всегда; свежесть и так бережёт кредиты).
@@ -159,7 +161,7 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
-def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
+def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False, emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
 
     emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
@@ -267,6 +269,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             "нет подходящего повода). В отложку НИЧЕГО не ставлю — старый драфт из архива в канал не уйдёт.")
         out("\n" + cost.summary())
         return "\n".join(report)
+    if draft_only:  # тест-режим: драфт готов и напечатан — обложку НЕ генерим (бережём GPT) и НЕ публикуем
+        out("\n🧪 draft-only: драфт выше. Обложку GPT НЕ генерирую и в отложку НЕ ставлю (проверка темы/подачи).")
+        out("\n" + cost.summary())
+        return "\n".join(report)
     # ОБЛОЖКА флагмана: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image — и mtime-гейт publish_now ронял
     # валидную обложку в текст. Берём обложку ЭТОГО прогона из аутбокса и передаём publish_now ЯВНО (минуя
     # гейт). Аутбокс пуст (Криейтор не вызвал make_image в длинном ТЗ) → генерим САМИ из ФИНАЛЬНОГО поста:
@@ -318,7 +324,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
 
 
 def main() -> None:
-    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv)
+    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv,
+              draft_only="--draft-only" in sys.argv)
 
 
 if __name__ == "__main__":
