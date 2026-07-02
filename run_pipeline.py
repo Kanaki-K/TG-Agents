@@ -227,7 +227,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             # АВТОНОМНЫЙ РОУТЕР ТЕМЫ ФЛАГМАНА: тема-с-хребтом из брифа (новость=крючок) ИЛИ вечная тема из
             # банка, если в брифе только репортаж/перегретый домен. Сбой роутера → ('','') → откат на hint.
             ckey = config.agent_api_key(config.load_agent("creator"))
-            ftopic, fsrc = dedup.pick_flagship_topic(verify.latest_brief(), api_key=ckey)
+            ftopic, fsrc = dedup.pick_flagship_topic(verify.latest_brief(), verdict, api_key=ckey)
             hint = ftopic or dedup.recommended_theme(verdict)
             if fsrc == "bank":
                 out(f"🧭 Тема флагмана — из БАНКА вечных тем (в брифе нет темы-с-хребтом): «{hint}».\n")
