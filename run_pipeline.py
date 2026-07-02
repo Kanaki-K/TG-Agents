@@ -228,6 +228,16 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)
+    # ЖЁСТКИЙ СТОП scope (детерминированно, как у флагмана): scope сам себя не ловит — если написал повод
+    # из paused/затёртого домена (x402/стейблы/смена-рук/Strategy…), код заворачивает. В канал не идёт:
+    # лучше молчать, чем фастфуд-новость по обдроченной теме. Список пауз — core/dedup.py PAUSED_DOMAINS.
+    if scope and post:
+        _hit = dedup._hits_paused(post)
+        if _hit:
+            out(f"⛔ scope написал затёртый/paused-домен («{_hit}») — НЕ публикую. Повод обдрочен, лучше "
+                "молчать, чем гнать фастфуд. Список пауз правится в core/dedup.py (PAUSED_DOMAINS).")
+            out("\n" + cost.summary())
+            return "\n".join(report)
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
     # 2FA уже прошёл внутри его ветки — здесь его НЕ дублируем.
     if post and not scope:
