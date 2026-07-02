@@ -25,6 +25,27 @@ from core import analytics, llm, runmode
 
 CHANNEL_FRESH_HOURS = 12  # выгрузка свежее этого — повторную тягу не запускаем (бережём время/токены)
 
+# ДОМЕНЫ НА ПАУЗЕ — жёсткий детерминированный стоп ПОВЕРХ LLM-сверки. Слабая модель рационализирует
+# «новую сущность» (Open USD ≠ x402 ≠ Cloudflare), а читателю всё «опять стейблы». Тема, где встречается
+# любое из этих слов, НЕ рекомендуется и попадает в запрет Криейтору — что бы модель ни решила.
+# ПРАВИТСЯ РУКАМИ: убрал слово из списка — домен снова разрешён. Пустой список = блока нет.
+PAUSED_DOMAINS = ["x402", "стейблкоин", "stablecoin", "cloudflare", "open usd", "usdc", "usdt",
+                  "circle", "tether", "микроплат", "платёжный слой", "агентн"]
+
+
+def _hits_paused(text: str) -> str:
+    """Первое слово из PAUSED_DOMAINS, встреченное в тексте (пусто — чисто)."""
+    low = (text or "").lower()
+    return next((d for d in PAUSED_DOMAINS if d in low), "")
+
+
+def paused_note() -> str:
+    """Строка-запрет для Криейтора по доменам на паузе (пусто, если список пуст)."""
+    if not PAUSED_DOMAINS:
+        return ""
+    return ("домены НА ПАУЗЕ (перегреты — НЕ бери совсем, даже под «новым углом»): "
+            + ", ".join(PAUSED_DOMAINS))
+
 DEDUP_SYSTEM = (
     "Ты — Аналитик канала KANAKI CRYPTO. Твоя ОДНА задача: поймать ПОВТОР темы — не дать выпустить "
     "пост про то, что на канале УЖЕ выходило. Тебе дают направления-кандидаты из брифа разведки и "
@@ -119,7 +140,10 @@ def recommended_theme(verdict: str) -> str:
         if s.upper().startswith("РЕКОМЕНДУЮ") or s.startswith("РЕКОМЕНДУЮ"):
             a, b = s.find("«"), s.rfind("»")
             theme = s[a + 1:b].strip() if a != -1 and b > a else s.split(":", 1)[-1].strip()
-            return "" if theme.upper().startswith("ВСЕ ПОВТОРЫ") else theme
+            if theme.upper().startswith("ВСЕ ПОВТОРЫ"):
+                return ""
+            # жёсткий стоп: рекомендацию по домену на паузе не отдаём (модель любит протащить x402)
+            return "" if _hits_paused(theme) else theme
     return ""
 
 
@@ -136,7 +160,11 @@ def repeat_themes(verdict: str) -> str:
             t = s[a + 1:b].strip() if a != -1 and b > a else s.lstrip("🔁").strip(" —-")
             if t:
                 out.append(t)
-    return "; ".join(out)
+    joined = "; ".join(out)
+    note = paused_note()  # всегда добавляем запрет на домены-на-паузе (детерминированно, поверх LLM)
+    if note:
+        joined = f"{joined}; {note}" if joined else note
+    return joined
 
 
 def all_repeats(verdict: str) -> bool:
