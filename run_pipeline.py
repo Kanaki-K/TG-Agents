@@ -147,7 +147,7 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
-def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
+def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False, emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
 
     emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
@@ -247,6 +247,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
             "нет подходящего повода). В отложку НИЧЕГО не ставлю — старый драфт из архива в канал не уйдёт.")
         out("\n" + cost.summary())
         return "\n".join(report)
+    if draft_only:  # тест-режим: драфт готов и напечатан — обложку GPT НЕ генерим и в отложку НЕ ставим
+        out("\n🧪 draft-only: драфт выше. Обложку GPT НЕ генерирую и в отложку НЕ ставлю (смотрим тему/текст).")
+        out("\n" + cost.summary())
+        return "\n".join(report)
     # ОБЛОЖКА флагмана: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image — и mtime-гейт publish_now ронял
     # валидную обложку в текст. Берём обложку ЭТОГО прогона из аутбокса и передаём publish_now ЯВНО (минуя
     # гейт). Аутбокс пуст (Криейтор не вызвал make_image в длинном ТЗ) → генерим САМИ из ФИНАЛЬНОГО поста:
@@ -298,7 +302,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
 
 
 def main() -> None:
-    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv)
+    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv,
+              draft_only="--draft-only" in sys.argv)
 
 
 if __name__ == "__main__":
