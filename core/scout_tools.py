@@ -17,7 +17,7 @@ from datetime import date
 from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
 from connectors.x_scan import read as x_read
-from core import analytics_tools, config, market_tools
+from core import analytics_tools, config, market_tools, untrusted
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
 PENDING_X = config.ROOT / "memory" / "x_leaders.pending.md"
@@ -242,7 +242,7 @@ def _render(items: list[dict]) -> str:
         if it.get("link"):
             line += f"\n{it['link']}"
         out.append(line)
-    return "\n\n".join(out)
+    return untrusted.wrap("\n\n".join(out), "RSS-фиды источников")
 
 
 def _render_tg(items: list[dict]) -> str:
@@ -259,7 +259,7 @@ def _render_tg(items: list[dict]) -> str:
         if it.get("text"):
             line += f"\n{it['text']}"
         out.append(line)
-    return "\n\n".join(out)
+    return untrusted.wrap("\n\n".join(out), "сообщения ТГ-каналов")
 
 
 def _render_x(items: list[dict]) -> str:
@@ -284,7 +284,7 @@ def _render_x(items: list[dict]) -> str:
         if it.get("url"):
             line += f"\n{it['url']}"
         out.append(line)
-    return "\n\n".join(out)
+    return untrusted.wrap("\n\n".join(out), "твиты X/Twitter")
 
 
 def _save_brief(args: dict) -> str:
@@ -371,7 +371,7 @@ def dispatch(name: str, args: dict) -> str:
                                        args.get("handle", ""), args.get("track", ""),
                                        int(args.get("max_accounts", 12)), args.get("tier", "")))
     if name == "fetch_url":
-        return feeds.fetch_page(args["url"])
+        return untrusted.wrap(feeds.fetch_page(args["url"]), f"страница {args['url']}")
     if name == "save_brief":
         return _save_brief(args)
     if name == "read_recent_briefs":

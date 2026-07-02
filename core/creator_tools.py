@@ -27,7 +27,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from connectors.telegram_publish import publish
-from core import analytics, analytics_tools, config, content_plan, market_tools
+from core import analytics, analytics_tools, config, content_plan, market_tools, untrusted
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -854,10 +854,12 @@ def dispatch(name: str, args: dict) -> str:
                         "Брифов Скаута пока нет (memory/briefs/ пуст). Напиши из присланного "
                         "направления или попроси Скаута /scan.", int(args.get("n", 8)))
     if name == "read_brief":
-        return _read_md(BRIEFS_DIR, args.get("which", "latest"),
-                        "Брифов Скаута нет (memory/briefs/ пуст). Пиши из присланного направления "
-                        "или попроси Скаута /scan.",
-                        f"Бриф по запросу «{args.get('which', '')}» не найден. Доступны:")
+        return untrusted.wrap(
+            _read_md(BRIEFS_DIR, args.get("which", "latest"),
+                     "Брифов Скаута нет (memory/briefs/ пуст). Пиши из присланного направления "
+                     "или попроси Скаута /scan.",
+                     f"Бриф по запросу «{args.get('which', '')}» не найден. Доступны:"),
+            "бриф разведки Скаута (составлен из внешних источников)")
     if name == "list_drafts":
         return _list_md(DRAFTS_DIR, "Твои драфты (свежие сверху):",
                         "Драфтов пока нет (memory/drafts/ пуст).", int(args.get("n", 8)))
