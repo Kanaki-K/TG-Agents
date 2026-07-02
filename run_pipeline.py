@@ -3,8 +3,6 @@
     python run_pipeline.py                # полный прогон: Скаут → Криейтор (флагман) → отложка
     python run_pipeline.py --scope        # короткий 🔭 «Под прицелом» (аналитич., обложка из первоисточника) → отложка
     python run_pipeline.py --skip-scout   # БЕЗ Скаута: Криейтор берёт ПОСЛЕДНИЙ бриф
-    python run_pipeline.py --draft-only   # ТЕСТ: печатает драфт и СТОП — без GPT-обложки и без отложки
-    #   (флаги комбинируются: --skip-scout --draft-only = дешёвая проверка темы/подачи без Скаута и без GPT)
 
 Скаут НЕ дёргается впустую: если последний бриф разведки младше SCOUT_FRESH_HOURS (3ч) — прогон берёт
 его, повторный поиск пропускается (--skip-scout форсит пропуск всегда; свежесть и так бережёт кредиты).
@@ -87,7 +85,7 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator(command: str = "post", avoid: str = "", hint: str = "", topic_source: str = "") -> str:
+def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -108,23 +106,11 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", topic_s
         guard = "АНТИ-ПОВТОР (сверено со свежей выгрузкой канала).\n"
         if avoid:
             guard += f"НЕ бери эти направления — они уже выходили на канале: {avoid}.\n"
-        if topic_source == "bank" and hint:
-            # Тема из банка вечных тем — это ТЕМА (директива), не «подсказка из брифа»: в брифе повода
-            # под неё может не быть, и это нормально (тема самодостаточна). Так автономный флагман не
-            # скатывается в новость: роутер уже решил, что брифовые кандидаты — репортаж/перегретый домен.
-            guard += (f"ТЕМА ФЛАГМАНА (автономно выбрана из банка вечных тем): «{hint}».\n"
-                      "Это ТВОЯ тема — раскрой её как флагман (мануал §4: своя тема, не новость дня). В брифе "
-                      "конкретного повода под неё может НЕ быть — это нормально, тема самодостаточна.\n"
-                      "НО НАДЕНЬ ТЕМУ НА НАСТРОЕНИЕ РЫНКА (закон флагмана, слой 2): возьми из брифа, ГДЕ рынок "
-                      "сейчас (страх/жадность, тренд, 1-2 живые цифры), и задай им ТОН и КРЮЧОК. Не ври "
-                      "настроению — на страхе/обвале не пиши «всё отлично», в эйфории не строй осторожного. "
-                      "Тон = что читатель реально чувствует сегодня. Свежесть даёт настроение+угол, не новость.\n\n")
-        else:
-            if hint:
-                guard += f"Подсказка (НЕ приказ, решаешь ты): сильным НЕ-повтором выглядит «{hint}».\n"
-            guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (шаги 1-2 ТЗ: возьми сильнейшее, "
-                      "СКОМБИНИРУЙ несколько источников вокруг одной антитезы, выбери формат) — не зацикливайся "
-                      "на одном поводе/источнике.\n\n")
+        if hint:
+            guard += f"Подсказка (НЕ приказ, решаешь ты): сильным НЕ-повтором выглядит «{hint}».\n"
+        guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (шаги 1-2 ТЗ: возьми сильнейшее, "
+                  "СКОМБИНИРУЙ несколько источников вокруг одной антитезы, выбери формат) — не зацикливайся "
+                  "на одном поводе/источнике.\n\n")
         user = guard + user
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)
@@ -161,7 +147,7 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
-def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False, emit=print) -> str:
+def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
 
     emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
@@ -208,7 +194,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # дешевле поймать дубль на теме, чем после готового поста. Данные уже актуализированы (шаг 0).
     # ГЕЙТ для обоих (дубль в канал не уйдёт); но ТЕМУ подменяем только флагману — scope сам берёт свой
     # 🔭-повод из брифа по гейту важности, ему чужая «сильнейшая не-повторная» тема не нужна.
-    avoid = hint = fsrc = ""
+    avoid = hint = ""
     try:
         cost.set_context("dedup")  # иначе анти-повтор логировался под чужой меткой (scout/«?») — путал в отчёте
         verdict = dedup.check(verify.latest_brief(),
@@ -224,21 +210,13 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # но теперь с запретом на повторы (рельсовый «пиши ИМЕННО это» давал сухой однотемный пост).
         avoid = dedup.repeat_themes(verdict)
         if not scope:
-            # АВТОНОМНЫЙ РОУТЕР ТЕМЫ ФЛАГМАНА: тема-с-хребтом из брифа (новость=крючок) ИЛИ вечная тема из
-            # банка, если в брифе только репортаж/перегретый домен. Сбой роутера → ('','') → откат на hint.
-            ckey = config.agent_api_key(config.load_agent("creator"))
-            ftopic, fsrc = dedup.pick_flagship_topic(verify.latest_brief(), verdict, api_key=ckey)
-            hint = ftopic or dedup.recommended_theme(verdict)
-            if fsrc == "bank":
-                out(f"🧭 Тема флагмана — из БАНКА вечных тем (в брифе нет темы-с-хребтом): «{hint}».\n")
-            elif ftopic:
-                out(f"🧭 Тема флагмана — из брифа, прошла тема-гейт (новость = крючок): «{hint}».\n")
+            hint = dedup.recommended_theme(verdict)
     except Exception:
         logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, fsrc)
+        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)
@@ -267,10 +245,6 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     if _latest_draft_mtime() <= pre_mtime:
         out("\n⛔ Свежего поста в этом прогоне НЕ создано (scope/Криейтор не сохранил драфт — вероятно, "
             "нет подходящего повода). В отложку НИЧЕГО не ставлю — старый драфт из архива в канал не уйдёт.")
-        out("\n" + cost.summary())
-        return "\n".join(report)
-    if draft_only:  # тест-режим: драфт готов и напечатан — обложку НЕ генерим (бережём GPT) и НЕ публикуем
-        out("\n🧪 draft-only: драфт выше. Обложку GPT НЕ генерирую и в отложку НЕ ставлю (проверка темы/подачи).")
         out("\n" + cost.summary())
         return "\n".join(report)
     # ОБЛОЖКА флагмана: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image — и mtime-гейт publish_now ронял
@@ -324,8 +298,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
 
 
 def main() -> None:
-    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv,
-              draft_only="--draft-only" in sys.argv)
+    run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv)
 
 
 if __name__ == "__main__":
