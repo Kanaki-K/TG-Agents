@@ -775,6 +775,12 @@ def _publish_now(args: dict | None = None) -> str:
     text = drafts[0].read_text(encoding="utf-8").strip()
     if not text:
         return "Последний драфт пустой — нечего планировать."
+    # ЗАЩИТА КАНАЛА: в пост идёт ТОЛЬКО тело. Всё после [[SPLIT]] — внутренняя мета владельцу (оценка,
+    # [ПРОВЕРИТЬ]-флаги), в канал НЕ уходит. Плюс режем случайные строки [ПРОВЕРИТЬ…], если просочились в тело.
+    text = text.split("[[SPLIT]]")[0]
+    text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("[ПРОВЕРИТЬ")).strip()
+    if not text:
+        return "После вырезания меты драфт пуст — нечего планировать (проверь формат поста)."
     # Формат: явный аргумент → сохранённый kind драфта → фолбэк-эвристика по длине.
     raw = str(args.get("kind", "") or "").strip().lower()
     if not raw and LAST_KIND.exists():
