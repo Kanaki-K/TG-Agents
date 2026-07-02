@@ -5,8 +5,11 @@
 Полное «зачем» и стратегия — в [PLAN.md](PLAN.md). Контекст для Claude Code — в [../CLAUDE.md](../CLAUDE.md).
 Зрелость и панч-лист фиксов — в [AUDIT.md](AUDIT.md).
 
-> Статус на 2026-06-23: завод работает end-to-end (Скаут→Криейтор→Публикатор). 5 ботов + 1 «бот-без-бота»
+> Статус на 2026-07-02: завод работает end-to-end (Скаут→Криейтор→Публикатор). 5 ботов + 1 «бот-без-бота»
 > (Публикатор). Общая зрелость 7/10.
+> **Фаза 2 (Threads):** коннектор `connectors/threads/` построен (аналитика зеркалит ТГ, веха 2.2) — но
+> ПОКА не подключён ни к одному боту (аналитик его ещё не читает; ни один `core/*` его не импортирует).
+> Публикация в Threads (веха 2.3) — впереди. Детали — [PLAN.md](PLAN.md).
 
 ---
 
@@ -31,7 +34,7 @@
 ```
 core/         ДВИЖОК + реализация агентов (код, импортируемый)
 agents/       ОПРЕДЕЛЕНИЯ агентов (данные: config.yaml + SKILL.md + README) — папки с дефисами, НЕ пакеты
-connectors/   РУКИ к внешнему миру (Telegram MTProto, RSS/веб, X, ChatGPT-картинки)
+connectors/   РУКИ к внешнему миру (Telegram MTProto, RSS/веб, X, ChatGPT-картинки, og:image-обложки, Threads API)
 memory/       ОБЩИЙ СЛОЙ ПАМЯТИ (канон бренда, стандарт, уроки, брифы, драфты, профиль, задачи)
 data/         РАНТАЙМ-артефакты (вне git: сессии, выгрузки, обложки, cost-лог, режим)
 docs/         документация (PLAN, ARCHITECTURE, AUDIT)
@@ -99,10 +102,15 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
 > учится на правках). Старая версия этого документа врала «без инструментов».
 
 **Ветка `scope_writer.py` (🔭 «Под прицелом», НЕ отдельный агент):** короткий аналитический пост. Свой
-лёгкий `_system()` (персона Криейтера + `memory/scope_manual.md` + brand + уроки, БЕЗ флагман-мануала и
-обложки), своя модель (`SCOPE_MODEL`=sonnet), руки Криейтера минус `make_image`, встроенный 2FA.
-Переиспользует персону/руки Криейтера, токена/бота своего нет. Запуск: `run_pipeline.py --scope` или
-команда-действие `/scope`. Подробно — [scope.md](scope.md).
+лёгкий `_system()` (персона Криейтера + `memory/scope_manual.md` + `voice_core.md` + brand + `scope_lessons.md`,
+БЕЗ флагман-мануала и плейбука), своя модель (`SCOPE_MODEL`=sonnet, мышление ВЫКЛ — `SCOPE_THINKING=None`),
+руки Криейтера минус `make_image`/правку стандарта/аналитику, встроенный 2FA. Своя петля обучения:
+`record_scope_lesson` → `memory/scope_lessons.md` (даётся ТОЛЬКО в `write_feedback`, отдельно от флагман-уроков).
+**Обложка — НЕ рисуется, а тянется из ПЕРВОИСТОЧНИКА:** модель отдаёт в мете `[[MEDIA_SRC]]` (3-4 URL статей) +
+`[[MEDIA_SUBJECT]]` (сущности-якорь) → `connectors/source_media.fetch_source_image` тянет og:image с каждой →
+vision-выбор (`_vision_pick`, `VISION_MODEL`=haiku) берёт подходящую по смыслу → путь в `SCOPE_COVER`
+(`data/scope_last_cover.txt`); нет годной → пост уходит текстом. Переиспользует персону/руки Криейтера,
+токена/бота своего нет. Запуск: `run_pipeline.py --scope` или команда-действие `/scope`. Подробно — [scope.md](scope.md).
 
 ---
 
@@ -171,9 +179,12 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
 | Файл | Писатель | Читатель |
 |---|---|---|
 | `channel_posts.json` / `channel_stats.json` / `post_topics.json` / `post_formats.json` | `telegram_export/*` + Аналитик | `analytics.py` |
+| `threads_posts.json` / `threads_stats.json` / `threads_topics.json` / `threads_analytics.{csv,xlsx}` ⚠️ Фаза 2 | `connectors/threads/*` (CLI) | пока НИКТО в рантайме (аналитик-бот ещё не читает) — только отчёт `threads/report` |
+| `threads_token.json` (авто-refresh, невосстановим без OAuth-бутстрапа) | `threads/auth.py` | весь `connectors/threads/*` |
 | `custom_emoji.json` | `telegram_emoji/collect_ids.py` | `tg_format`, `creator_tools._lint` |
 | `creator_last_cover.txt` ★ / `creator_pending_media.txt` ★ | `creator_tools.make_image` | `_publish_now` (обложку цепляет, ТОЛЬКО если она свежее драфта — иначе чужая «из резерва») / `agent_runtime` |
-| `creator_last_kind.txt` ★ (формат драфта: флагман/scope) | `creator_tools.save_draft` | `_publish_now` (обложка — только флагману, scope — текстом) |
+| `scope_last_cover.txt` ★ (`SCOPE_COVER`) + `source_media/scope_*.jpg` | `scope_writer._attach_media` (og:image + vision-выбор) | `_publish_now` (обложка 🔭 из первоисточника; пусто → scope уходит текстом) |
+| `creator_last_kind.txt` ★ (формат драфта: флагман/scope) | `creator_tools.save_draft` | `_publish_now` (флагман → GPT-обложка, scope → обложка из первоисточника) |
 | `cost_log.jsonl` | `cost.py` | `run_cost_report.py` |
 | `run_mode.txt` | `runmode.set_*` (любой бот) | `runmode.resolve` (все, каждый ход) |
 | `<agent>_owner.txt` | `agent_runtime._write_owner` | `_periodic_loop` (проактивные отчёты) |
@@ -190,10 +201,12 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
 | `telegram_scan/` | чтение чужих каналов (Тир-3); `channels.yaml` | та же MTProto-сессия | `scout_tools` |
 | `web_sources/` | RSS/Atom (Тир-2, `sources.yaml`) + `fetch_page` | публичные URL | `scout_tools` |
 | `x_scan/` | твиты X-лидеров (`leaders.yaml`); монки-патч `_twikit_patch` | бёрнер-куки (`X_AUTH_TOKEN/CT0` или `data/x_cookies.json`) | `scout_tools` |
-| `gpt_image/` | обложка через веб-ChatGPT (playwright) | бёрнер-профиль `data/gpt_profile/` | `creator_tools.make_image` |
+| `gpt_image/` | обложка через веб-ChatGPT (playwright) | бёрнер-профиль `data/gpt_profile/` | `creator_tools.make_image` (флагман) |
+| `source_media/` | og:image со СТАТЕЙ-первоисточников → фото Telegram-размера (Pillow); живая обложка новости для 🔭 (не рисуем) | публичные URL | `scope_writer._attach_media` (обложка scope) |
 | `market/` | живая цена/капа (CoinMarketCap, `quotes/latest`) для точной сверки чисел | `COINMARKETCAP_API_KEY` | `market_tools` → Скаут, Криейтор, `verify` (2FA) |
 | `telegram_publish/` | нативная отложка в канал (userbot) | та же MTProto-сессия (`PUBLISH_CHANNEL/NOTIFY`) | `creator_tools._publish_now` |
 | `telegram_emoji/` | сбор id кастом-эмодзи | `EMOJI_BOT_TOKEN`→`CREATOR_BOT_TOKEN` | CLI → `data/custom_emoji.json` |
+| `threads/` ⚠️ **Фаза 2, НЕ подключён к боту** | Threads Graph API (Meta): OAuth+авто-refresh токена (`auth`), сбор постов+метрик (`collect`/`insights`), комменты живые vs self (`replies`), темы (`enrich_topics`), оценка (`scoring`), таблица (`build_table`) зеркалит ТГ, отчёт (`report`). Публикация (веха 2.3) впереди | Threads-токен (seed в `.env` → авто-обновление в `data/threads_token.json`) | пока ТОЛЬКО CLI; аналитик его ещё НЕ читает |
 
 ---
 
@@ -218,7 +231,9 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
    текстом — план в коде НЕ обновится сам.
 4. **Маркеры-протоколы модель↔код:** `[[SPLIT]]` (разбивка), `СТАТУС: ЧИСТО`/`СТАТУС: ПРАВКИ`
    (вердикт 2FA — смена формулировки в `verify` ломает авто-гейт `/schedule`), `[ПРОВЕРИТЬ]`,
-   футер-эмодзи/якорный жирный (ловит линтер `_lint` регэкспами).
+   футер-эмодзи/якорный жирный (ловит линтер `_lint` регэкспами), а для 🔭 — `[[MEDIA_SRC]]` /
+   `[[MEDIA_SUBJECT]]` (парсит `scope_writer` регэкспом ДО 2FA-фикса, т.к. фикс мету срезает: сменишь
+   формулировку маркера в `scope_writer.TASK` — обложка scope перестанет цепляться).
 5. **Имя папки агента = имя везде** (`config.load_agent`, `data/<name>_owner.txt`, `.history`, workshop).
    Переименование = каскад поломок.
 6. **Публикация — ФАЙЛОМ, без URL/хостинга** (выстрадано 20.06): хостинги обложек выкинуты, ломали.
@@ -226,6 +241,9 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
 7. **Prompt-caching завязан на байт-стабильность системного промпта** (`llm.py`, TTL=1h). Если
    `_system()` меняется внутри серии прогонов — кэш протухает, цена растёт (`run_cost_report` кричит при
    кэш-хите <40%).
+8. **Threads-токен — окно refresh 60 дней** (`threads/auth.py`): долгоживущий токен обновляется в окне
+   «старше 24ч и младше 60д». Пропустил окно — доступ отваливается, нужен повторный OAuth-бутстрап.
+   `data/threads_token.json` без бэкапа. (Актуально, когда коннектор подключат к боту — веха 2.3.)
 
 ---
 

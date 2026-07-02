@@ -10,8 +10,15 @@ secrets/
 *.session
 *.session-journal
 
-# --- Память: бэкапим отдельно, но сами файлы памяти версионируем.
-#     Сырые/большие выгрузки — НЕ в git ---
+# --- Память: НАЧИНКА ПРИВАТНАЯ (playbook бренда + личные заметки владельца) —
+#     в публичный репозиторий НЕ идёт. Остаётся только структура (README + .gitkeep).
+#     Формат каждого файла описан в docs/ARCHITECTURE.md §6. ---
+memory/**
+!memory/README.md
+!memory/journal/
+!memory/journal/.gitkeep
+
+# --- Сырые/большие выгрузки — НЕ в git ---
 data/
 exports/
 
