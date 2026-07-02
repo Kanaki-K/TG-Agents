@@ -182,23 +182,23 @@ ROUTER_SYSTEM = (
 
 
 def free_bank_topics() -> list[str]:
-    """Свободные (не вышедшие) темы из 🔓-блока банка флагмана — названия из строк '- **…**'.
-    Пусто → банка/блока нет (роутер тогда сможет опереться только на бриф)."""
+    """Темы из банка флагмана — строки '- …' под секциями-КАТЕГОРИЯМИ («## 1.»…«## 6.»). Служебные
+    секции (Золотое сечение, Как пользоваться, Пометки) и реф-строки пропускаем. Пусто → банка нет
+    (роутер тогда опирается только на бриф)."""
     try:
         text = BANK_FILE.read_text(encoding="utf-8")
     except Exception:
         return []
-    out, in_free = [], False
+    out, active = [], False
     for ln in text.splitlines():
         s = ln.strip()
         if s.startswith("## "):
-            in_free = s.startswith("## 🔓")
+            head = s[3:].lstrip()
+            active = bool(head) and head[0].isdigit()  # категории тем нумерованы: «## 1.»…«## 6.»
             continue
-        if in_free and s.startswith("- **"):
-            a = s.find("**")
-            b = s.find("**", a + 2)
-            name = s[a + 2:b].strip() if a != -1 and b > a else s.lstrip("- ").strip()
-            if name:
+        if active and s.startswith("- "):
+            name = s[2:].replace("**", "").strip()
+            if name and "рефк" not in name.lower():  # ≈#id-пометки оставляем: роутеру видно, что выходило
                 out.append(name)
     return out
 
