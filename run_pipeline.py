@@ -85,7 +85,7 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
+def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: list | None = None) -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -100,17 +100,21 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
              else "пост по свежему брифу + обложка")
     print(f"✍️ [2/3] Криейтор: {label}...")
     user = creator_bot.COMMANDS[command]
-    if avoid or hint:  # анти-повтор — это ОГРАНИЧЕНИЕ («чего не брать»), а НЕ приказ «пиши вот это».
-        # Криейтор сам выбирает сильнейшее НЕ-повторное направление и комбинирует источники (шаги 1-2
-        # его ТЗ) — иначе пост скатывается в один слабый повод и сухость (урок 30.06).
+    if avoid or hint or bank:  # анти-повтор — ОГРАНИЧЕНИЕ («чего не брать»), а НЕ приказ «пиши вот это».
         guard = "АНТИ-ПОВТОР (сверено со свежей выгрузкой канала).\n"
         if avoid:
-            guard += f"НЕ бери эти направления — они уже выходили на канале: {avoid}.\n"
+            guard += f"НЕ бери эти направления (уже выходили / домен на паузе): {avoid}.\n"
         if hint:
             guard += f"Подсказка (НЕ приказ, решаешь ты): сильным НЕ-повтором выглядит «{hint}».\n"
-        guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (шаги 1-2 ТЗ: возьми сильнейшее, "
-                  "СКОМБИНИРУЙ несколько источников вокруг одной антитезы, выбери формат) — не зацикливайся "
-                  "на одном поводе/источнике.\n\n")
+            guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (СКОМБИНИРУЙ источники вокруг "
+                      "одной антитезы, выбери формат) — не зацикливайся на одном поводе.\n\n")
+        elif bank:  # свежей НЕ-перегретой темы в брифе нет → запасной пул вечных тем (не новости)
+            guard += ("Свежей НЕ-перегретой темы в брифе НЕТ (всё повтор или домен на паузе). Возьми ОДНУ "
+                      "ВЕЧНУЮ тему из списка ниже и напиши её СВОЕЙ ОБЫЧНОЙ подачей. Это НЕ новость и НЕ "
+                      "пересказ уже вышедшего поста — раскрой тему заново:\n"
+                      + "\n".join(f"- {t}" for t in bank) + "\n\n")
+        else:
+            guard += "Из направлений брифа выбери сильнейшее НЕ-повтор САМ.\n\n"
         user = guard + user
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)
@@ -213,10 +217,14 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             hint = dedup.recommended_theme(verdict)
     except Exception:
         logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
+    # Свежей НЕ-перегретой темы в брифе нет (пусто / домен на паузе) → запасной пул ВЕЧНЫХ тем (не новости)
+    bank = dedup.bank_topics() if (not scope and not hint) else []
+    if bank:
+        out(f"🧭 Свежей темы в брифе нет — даю Криейтору банк вечных тем ({len(bank)} шт.), выберет одну.\n")
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint)
+        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, bank)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)

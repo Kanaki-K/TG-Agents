@@ -21,7 +21,25 @@ from __future__ import annotations
 
 import time
 
-from core import analytics, llm, runmode
+from core import analytics, config, llm, runmode
+
+BANK_FILE = config.ROOT / "memory" / "flagship_topics.md"  # запасной пул вечных тем (простой список)
+
+
+def bank_topics() -> list[str]:
+    """Вечные темы из простого списка-банка (строки '- …'). Пусто — файла/списка нет."""
+    try:
+        text = BANK_FILE.read_text(encoding="utf-8")
+    except Exception:
+        return []
+    out = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s.startswith("- "):
+            t = s[2:].strip()
+            if t and "[вышло]" not in t.lower():
+                out.append(t)
+    return out
 
 CHANNEL_FRESH_HOURS = 12  # выгрузка свежее этого — повторную тягу не запускаем (бережём время/токены)
 
