@@ -85,7 +85,7 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
+def _run_creator(command: str = "post", avoid: str = "", hint: str = "", topic_source: str = "") -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -106,11 +106,20 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "") -> str:
         guard = "АНТИ-ПОВТОР (сверено со свежей выгрузкой канала).\n"
         if avoid:
             guard += f"НЕ бери эти направления — они уже выходили на канале: {avoid}.\n"
-        if hint:
-            guard += f"Подсказка (НЕ приказ, решаешь ты): сильным НЕ-повтором выглядит «{hint}».\n"
-        guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (шаги 1-2 ТЗ: возьми сильнейшее, "
-                  "СКОМБИНИРУЙ несколько источников вокруг одной антитезы, выбери формат) — не зацикливайся "
-                  "на одном поводе/источнике.\n\n")
+        if topic_source == "bank" and hint:
+            # Тема из банка вечных тем — это ТЕМА (директива), не «подсказка из брифа»: в брифе повода
+            # под неё может не быть, и это нормально (тема самодостаточна). Так автономный флагман не
+            # скатывается в новость: роутер уже решил, что брифовые кандидаты — репортаж/перегретый домен.
+            guard += (f"ТЕМА ФЛАГМАНА (автономно выбрана из банка вечных тем): «{hint}».\n"
+                      "Это ТВОЯ тема — раскрой её как флагман (мануал §4: своя тема, не новость дня). В брифе "
+                      "повода под неё может НЕ быть — это нормально, тема самодостаточна (математика / "
+                      "психология / механика). Свежую цифру-крючок из брифа подшивай ТОЛЬКО если реально по теме.\n\n")
+        else:
+            if hint:
+                guard += f"Подсказка (НЕ приказ, решаешь ты): сильным НЕ-повтором выглядит «{hint}».\n"
+            guard += ("Из ОСТАЛЬНЫХ направлений брифа выбери сильнейшее САМ (шаги 1-2 ТЗ: возьми сильнейшее, "
+                      "СКОМБИНИРУЙ несколько источников вокруг одной антитезы, выбери формат) — не зацикливайся "
+                      "на одном поводе/источнике.\n\n")
         user = guard + user
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)
@@ -194,7 +203,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
     # дешевле поймать дубль на теме, чем после готового поста. Данные уже актуализированы (шаг 0).
     # ГЕЙТ для обоих (дубль в канал не уйдёт); но ТЕМУ подменяем только флагману — scope сам берёт свой
     # 🔭-повод из брифа по гейту важности, ему чужая «сильнейшая не-повторная» тема не нужна.
-    avoid = hint = ""
+    avoid = hint = fsrc = ""
     try:
         cost.set_context("dedup")  # иначе анти-повтор логировался под чужой меткой (scout/«?») — путал в отчёте
         verdict = dedup.check(verify.latest_brief(),
@@ -210,13 +219,21 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, emit=print) -> str:
         # но теперь с запретом на повторы (рельсовый «пиши ИМЕННО это» давал сухой однотемный пост).
         avoid = dedup.repeat_themes(verdict)
         if not scope:
-            hint = dedup.recommended_theme(verdict)
+            # АВТОНОМНЫЙ РОУТЕР ТЕМЫ ФЛАГМАНА: тема-с-хребтом из брифа (новость=крючок) ИЛИ вечная тема из
+            # банка, если в брифе только репортаж/перегретый домен. Сбой роутера → ('','') → откат на hint.
+            ckey = config.agent_api_key(config.load_agent("creator"))
+            ftopic, fsrc = dedup.pick_flagship_topic(verify.latest_brief(), api_key=ckey)
+            hint = ftopic or dedup.recommended_theme(verdict)
+            if fsrc == "bank":
+                out(f"🧭 Тема флагмана — из БАНКА вечных тем (в брифе нет темы-с-хребтом): «{hint}».\n")
+            elif ftopic:
+                out(f"🧭 Тема флагмана — из брифа, прошла тема-гейт (новость = крючок): «{hint}».\n")
     except Exception:
         logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint)
+        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, fsrc)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)

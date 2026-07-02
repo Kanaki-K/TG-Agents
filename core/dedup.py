@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import time
 
-from core import analytics, llm, runmode
+from core import analytics, config, llm, runmode
 
 CHANNEL_FRESH_HOURS = 12  # выгрузка свежее этого — повторную тягу не запускаем (бережём время/токены)
+BANK_FILE = config.ROOT / "memory" / "flagship_topics.md"  # банк вечных тем флагмана (🔓-блок = свободные)
 
 DEDUP_SYSTEM = (
     "Ты — Аналитик канала KANAKI CRYPTO. Твоя ОДНА задача: поймать ПОВТОР темы — не дать выпустить "
@@ -155,3 +156,81 @@ def all_repeats(verdict: str) -> bool:
     has_ok = any(("🆕" in l or "⚠" in l) for l in lines)  # 🆕 и ⚠️ — обе НЕ блокируют выпуск
     has_rep = any("🔁" in l for l in lines)
     return has_rep and not has_ok
+
+
+# ─────────────────────────────── РОУТЕР ТЕМЫ ФЛАГМАНА ───────────────────────────────
+# Автономия «нажал → получил флагман-ТЕМУ, не новость». Пайплайн раньше отдавал Криейтору только
+# новостную подсказку из брифа → флагман скатывался в репортаж. Роутер решает ЗА конвейер: годна ли
+# тема-с-хребтом в брифе (новость = крючок) ИЛИ брать вечную тему из банка (memory/flagship_topics.md).
+
+ROUTER_SYSTEM = (
+    "Ты — РОУТЕР ТЕМЫ ФЛАГМАНА канала KANAKI CRYPTO. Флагман — это ТЕМА с ВЕЧНЫМ ХРЕБТОМ "
+    "(метод / механика / психология инвестора / сравнение / урок), а НЕ новость дня. Твоя ОДНА задача: "
+    "выбрать ОДНУ тему сегодняшнего флагмана. Правило:\n"
+    "1) Кандидат из БРИФА годится в флагман ТОЛЬКО если проходит тест «убери новость — что останется?»: "
+    "останется вечная тема, полезная читателю через год. Тогда свежая новость = КРЮЧОК под эту тему.\n"
+    "2) Кандидат НЕ годится, если это чистый репортаж («X объявил Y», waitlist, «N компаний объявили»), "
+    "у которого без новости не остаётся темы; ИЛИ домен перегрет (по нему уже 2+ поста за ~2 недели в "
+    "списке вышедшего — читателю «опять про то же», даже если сущность формально новая).\n"
+    "3) Если НИ ОДИН кандидат брифа не годится → возьми сильнейшую ВЕЧНУЮ тему из БАНКА, которой НЕ было "
+    "в недавно вышедшем. Банк — приоритетный запас, когда новости не дают темы. Лучше банк, чем репортаж.\n"
+    "Выведи РОВНО три строки, без пояснений:\n"
+    "ТЕМА: «<одна тема одной строкой — как её писать Криейтору>»\n"
+    "ИСТОЧНИК: brief | bank\n"
+    "КРЮЧОК: <свежая цифра/повод из брифа под тему, если уместно; иначе '-'>"
+)
+
+
+def free_bank_topics() -> list[str]:
+    """Свободные (не вышедшие) темы из 🔓-блока банка флагмана — названия из строк '- **…**'.
+    Пусто → банка/блока нет (роутер тогда сможет опереться только на бриф)."""
+    try:
+        text = BANK_FILE.read_text(encoding="utf-8")
+    except Exception:
+        return []
+    out, in_free = [], False
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s.startswith("## "):
+            in_free = s.startswith("## 🔓")
+            continue
+        if in_free and s.startswith("- **"):
+            a = s.find("**")
+            b = s.find("**", a + 2)
+            name = s[a + 2:b].strip() if a != -1 and b > a else s.lstrip("- ").strip()
+            if name:
+                out.append(name)
+    return out
+
+
+def _router_line(text: str, key: str) -> str:
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if s.upper().startswith(key.upper()):
+            val = s.split(":", 1)[-1].strip()
+            a, b = val.find("«"), val.rfind("»")
+            return val[a + 1:b].strip() if a != -1 and b > a else val
+    return ""
+
+
+def pick_flagship_topic(brief: str, api_key: str | None = None, model: str | None = None) -> tuple[str, str]:
+    """Автономный выбор ТЕМЫ флагмана. Возвращает (тема, источник), источник ∈ {'brief','bank',''}.
+    На ЛЮБОЙ сбой → ('',''), и конвейер откатывается на прежний hint (recommended_theme). Только флагман
+    (scope сам берёт свой 🔭-повод). Дёшево (Haiku через runmode)."""
+    try:
+        brief = (brief or "").strip()
+        bank = free_bank_topics()
+        digest = analytics.topics_digest()
+        mdl = model or runmode.resolve("claude-haiku-4-5")
+        bank_txt = "\n".join(f"- {t}" for t in bank) or "(банк пуст)"
+        user = (f"КАНДИДАТЫ ИЗ СВЕЖЕГО БРИФА:\n{brief or '(брифа нет)'}\n\n"
+                f"УЖЕ ВЫХОДИЛО НА КАНАЛЕ (свежие сверху, с датами):\n{digest}\n\n"
+                f"БАНК ВЕЧНЫХ ТЕМ (свободные, не выходили):\n{bank_txt}\n\n"
+                "Выбери ОДНУ тему сегодняшнего флагмана строго по правилу и форме.")
+        text, _ = llm.reply(mdl, ROUTER_SYSTEM, [], user, [], lambda _n, _a: "", api_key, None)
+        topic = _router_line(text, "ТЕМА")
+        raw_src = _router_line(text, "ИСТОЧНИК").lower()
+        src = "bank" if ("bank" in raw_src or "банк" in raw_src) else ("brief" if raw_src else "")
+        return (topic, src if topic else "")
+    except Exception:  # noqa: BLE001 — роутер не роняет конвейер, откат на старый hint
+        return ("", "")
