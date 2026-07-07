@@ -78,16 +78,17 @@ def _agent(name: str):
     return cfg, runmode.resolve(cfg["model"]), config.agent_api_key(cfg), thinking
 
 
-def _run_scout(scope: bool = False) -> None:
+def _run_scout() -> None:
     cfg, model, key, thinking = _agent("scout")
     tools = list(scout_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(scout_bot.WEB_SEARCH_TOOL)
     cost.set_context("scout")
     print("🔍 [1/3] Скаут: разведка трендов...")
-    # coverage-зрение Скаута — ТОЛЬКО во флагман-прогоне; scope получает пре-сессионного Скаута.
-    text, _ = _threaded(llm.reply, model, scout_bot._system(coverage=not scope), [],
-                        scout_bot.COMMANDS["scan"], tools, scout_tools.dispatch, key, thinking)
+    # coverage-зрение Скаута — для ОБЕИХ веток (хорошее универсальное решение: не тащить повтор у
+    # истока ни во флагман, ни в scope). Это РАЗВЕДКА, не письмо — тут scope/флагман не разделяем.
+    text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"],
+                        tools, scout_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
 
 
@@ -220,7 +221,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             out(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч), сегодня день разведки — "
                 f"запускаю свежую.\n")
         try:
-            _run_scout(scope)
+            _run_scout()
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
     # АНТИ-ПОВТОР — ВЕТКИ РАЗДЕЛЕНЫ (scope и флагман не мешают друг другу):
