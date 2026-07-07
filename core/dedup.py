@@ -71,20 +71,24 @@ def _today():
 
 
 def available_bank_themes() -> list[str]:
-    """Темы, ДОСТУПНЫЕ для ротации: ещё не выходившие (приоритет) / вышедшие >BANK_REUSE_DAYS назад.
-    Из них пайплайн выбирает по актуальности; пусто — банк пуст / всё в окне."""
+    """Темы, ДОСТУПНЫЕ для ротации: ещё не выходившие (приоритет) / вышедшие >BANK_REUSE_DAYS назад,
+    И НЕ из паузного домена (стейбл/x402/платёж… забанено — флагман их не берёт). Из них пайплайн
+    выбирает по актуальности; пусто — банк пуст / всё в окне / всё на паузе."""
     lines = _bank_lines()
     if not lines:
         return []
     never = [t for (_, t, d) in lines if d is None]
     if never:
-        return never
-    today = _today()
-    aged = [t for (_, t, d) in lines if d and today and (today - d).days >= BANK_REUSE_DAYS]
-    if aged:
-        return aged
-    used = sorted(((t, d) for (_, t, d) in lines if d), key=lambda x: x[1])  # самая старая первой
-    return [t for t, _ in used] or [lines[0][1]]
+        pool = never
+    else:
+        today = _today()
+        aged = [t for (_, t, d) in lines if d and today and (today - d).days >= BANK_REUSE_DAYS]
+        if aged:
+            pool = aged
+        else:
+            used = sorted(((t, d) for (_, t, d) in lines if d), key=lambda x: x[1])  # самая старая первой
+            pool = [t for t, _ in used] or [lines[0][1]]
+    return [t for t in pool if not _hits_paused(t)]  # паузный домен вон из ротации флагмана
 
 
 def pick_bank_theme() -> str:
@@ -132,16 +136,17 @@ CHANNEL_FRESH_HOURS = 12  # выгрузка свежее этого — пов�
 PAUSE_WEEKS = 3
 
 PAUSED_AUTO = [
-    ("x402", "2026-06-23"), ("cloudflare", "2026-06-23"), ("агентн", "2026-06-23"),
-    ("open usd", "2026-06-30"), ("usdc", "2026-06-30"),
-    # «смена рук / ETF-отток / умные деньги копят на дне» = #434 (06.06)
+    # недавний повод #434 (06.06) — авто-снятие через PAUSE_WEEKS
     ("смена рук", "2026-06-06"), ("скупают на дне", "2026-06-06"), ("скупка на дне", "2026-06-06"),
     ("умные деньги", "2026-06-06"), ("дивергенц", "2026-06-06"),
     ("отток из etf", "2026-06-06"), ("etf-отток", "2026-06-06"), ("паника розниц", "2026-06-06"),
 ]
 PAUSED_STICKY = [
-    # долгая домен-усталость (снимаем руками)
-    "стейблкоин", "stablecoin", "usdt", "circle", "tether", "микроплат", "платёжный слой",
+    # ПЛАТЁЖНО-СТЕЙБЛ ДОМЕН + x402 — владелец забанил НАДОЛГО (задолбал спам); снимается РУКАМИ.
+    # Широкие корни: «стейбл» ловит стейблкоин/стейблы/стейблами; «платёж» — платежи/платёжный/микроплатёж.
+    "стейбл", "stablecoin", "usdc", "usdt", "circle", "tether", "микроплат", "платёж",
+    "x402", "cloudflare", "open usd",
+    # корп-казначейство BTC — домен-усталость
     "strategy", "microstrategy", "сейлор", "saylor", "mnav", "metaplanet", "метапланет",
     "mica", "мика",
 ]
