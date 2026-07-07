@@ -35,8 +35,8 @@ import sys
 import time
 from pathlib import Path
 
-from core import (config, cost, creator_bot, creator_tools, dedup, llm, market_tools, runmode,
-                  scope_writer, scout_bot, scout_tools, verify)
+from core import (analytics, config, cost, creator_bot, creator_tools, dedup, llm, market_tools,
+                  runmode, scope_writer, scout_bot, scout_tools, verify)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -174,28 +174,33 @@ def _pick_timely_theme(emit=print) -> str:
     except Exception:  # noqa: BLE001
         market = ""
     brief = (verify.latest_brief() or "")[:2500]
+    try:
+        coverage = analytics.topics_digest(limit=80) or ""
+    except Exception:  # noqa: BLE001
+        coverage = ""
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(sample))
     system = (
         "Ты выбираешь ОДНУ тему образовательного флагмана крипто-канала о ДОЛГОСРОЧНОМ инвесторе (DCA). "
-        "Из списка выбери САМУЮ АКТУАЛЬНУЮ на эту неделю. Приоритеты:\n"
-        "1) НАСТРОЕНИЕ РЫНКА (обязательно): обвал/страх → психология удержания («просадка не ломает "
-        "тезис», «обвал = подарок накопителю», FOMO-наоборот); ATH/жадность/сильный рост → «уже поздно», "
-        "поздний вход, «90% холдеров не разбогатеют»; спокойно/боковик → принятие/применение/AI или словарь.\n"
-        "2) ТЕМАТИКА СВЕЖЕГО БРИФА (бонус): если бриф показывает горячий домен (стейблы, ETF, AI×крипта, "
-        "макро) — тема из этого домена своевременнее.\n"
-        "Верни ТОЛЬКО номер выбранной темы (одно число), без пояснений."
+        "Порядок:\n"
+        "1) СВЕЖЕСТЬ (ГЛАВНОЕ, обязательно): СНАЧАЛА выкинь темы, которые канал УЖЕ раскрывал — сверься со "
+        "списком опубликованного ниже ПО СУТИ, не по словам. Крахи/FTX/«−50% требует +100%»/«−90% альтов»/"
+        "циклы падений канал жевал МНОГО раз — это банально, НЕ бери. Банальный повтор хуже свежей темы.\n"
+        "2) НАСТРОЕНИЕ РЫНКА: обвал/страх → психология удержания; ATH/жадность → поздний вход/FOMO; "
+        "спокойно/боковик → принятие/применение/AI или словарь.\n"
+        "3) БРИФ (бонус): горячий домен из брифа → тема своевременнее.\n"
+        "Из оставшихся СВЕЖИХ бери самую резонансную по рынку. Верни ТОЛЬКО номер (одно число), без слов."
     )
-    user = (f"ТЕМЫ:\n{numbered}\n\nРЫНОК СЕЙЧАС:\n{market or '(нет данных)'}\n\n"
-            f"СВЕЖИЙ БРИФ (тематика недели):\n{brief or '(нет брифа)'}")
+    user = (f"ТЕМЫ:\n{numbered}\n\nЧТО КАНАЛ УЖЕ ПУБЛИКОВАЛ (не повторять ПО СУТИ):\n{coverage}\n\n"
+            f"РЫНОК СЕЙЧАС:\n{market or '(нет данных)'}\n\nСВЕЖИЙ БРИФ:\n{brief or '(нет брифа)'}")
     try:
         cost.set_context("theme-pick")
         key = config.agent_api_key(config.load_agent("creator"))
         text, _ = llm.reply(runmode.resolve("claude-sonnet-4-6"), system, [], user, [],
                             lambda _n, _a: "", key, None)
-        m = re.search(r"\d+", text or "")
-        if m and 0 <= int(m.group()) - 1 < len(sample):
-            chosen = sample[int(m.group()) - 1]
-            emit(f"🎯 Тема выбрана по актуальности (рынок + бриф) из {len(sample)} кандидатов.\n")
+        nums = re.findall(r"\d+", text or "")
+        if nums and 0 <= int(nums[-1]) - 1 < len(sample):  # последнее число = финальный ответ
+            chosen = sample[int(nums[-1]) - 1]
+            emit(f"🎯 Тема выбрана по свежести+рынку из {len(sample)} кандидатов: {chosen}\n")
             return chosen
     except Exception:  # noqa: BLE001
         logging.exception("Актуальный выбор темы упал — беру случайную из выборки")
@@ -226,7 +231,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     _mode = runmode.get()
     if _mode["mode"] == "test":
         out(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
-        no_image = True  # в тесте GPT-обложку НЕ дёргаем (её качество не тестим — экономим)
+        no_image = True     # в тесте GPT-обложку НЕ дёргаем (её качество не тестим — экономим)
+        draft_only = True   # тест НЕ публикует и НЕ метит тему [вышло] (иначе дешёвый пост уходит в канал)
     if no_image and not scope:
         out("🖼 GPT-обложку не делаю (тест/--no-image) — только текст.\n")
     # АКТУАЛЬНОСТЬ ДАННЫХ: выгрузка канала устарела → тянем свежие посты ДО разведки и анти-повтора
