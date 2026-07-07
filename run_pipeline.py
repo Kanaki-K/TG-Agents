@@ -29,12 +29,14 @@ make_image (playwright-браузер) получает рабочий event-loo
 import concurrent.futures
 import datetime
 import logging
+import random
+import re
 import sys
 import time
 from pathlib import Path
 
-from core import (config, cost, creator_bot, creator_tools, dedup, llm, runmode, scope_writer,
-                  scout_bot, scout_tools, verify)
+from core import (config, cost, creator_bot, creator_tools, dedup, llm, market_tools, runmode,
+                  scope_writer, scout_bot, scout_tools, verify)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -159,6 +161,47 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
+def _pick_timely_theme(emit=print) -> str:
+    """Тема флагмана по АКТУАЛЬНОСТИ: случайная выборка из банка (разнообразие) → дешёвый выбор самой
+    резонансной по (1) НАСТРОЕНИЮ РЫНКА [обязательно, market_price] + (2) ТЕМАТИКЕ свежего брифа Скаута
+    от scope [бонус]. Фолбэк — случайная тема, если рынок/бриф/модель недоступны."""
+    pool = dedup.available_bank_themes()
+    if len(pool) <= 1:
+        return pool[0] if pool else ""
+    sample = random.sample(pool, min(25, len(pool)))
+    try:
+        market = market_tools.handle("market_price", {}) or ""
+    except Exception:  # noqa: BLE001
+        market = ""
+    brief = (verify.latest_brief() or "")[:2500]
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(sample))
+    system = (
+        "Ты выбираешь ОДНУ тему образовательного флагмана крипто-канала о ДОЛГОСРОЧНОМ инвесторе (DCA). "
+        "Из списка выбери САМУЮ АКТУАЛЬНУЮ на эту неделю. Приоритеты:\n"
+        "1) НАСТРОЕНИЕ РЫНКА (обязательно): обвал/страх → психология удержания («просадка не ломает "
+        "тезис», «обвал = подарок накопителю», FOMO-наоборот); ATH/жадность/сильный рост → «уже поздно», "
+        "поздний вход, «90% холдеров не разбогатеют»; спокойно/боковик → принятие/применение/AI или словарь.\n"
+        "2) ТЕМАТИКА СВЕЖЕГО БРИФА (бонус): если бриф показывает горячий домен (стейблы, ETF, AI×крипта, "
+        "макро) — тема из этого домена своевременнее.\n"
+        "Верни ТОЛЬКО номер выбранной темы (одно число), без пояснений."
+    )
+    user = (f"ТЕМЫ:\n{numbered}\n\nРЫНОК СЕЙЧАС:\n{market or '(нет данных)'}\n\n"
+            f"СВЕЖИЙ БРИФ (тематика недели):\n{brief or '(нет брифа)'}")
+    try:
+        cost.set_context("theme-pick")
+        key = config.agent_api_key(config.load_agent("creator"))
+        text, _ = llm.reply(runmode.resolve("claude-sonnet-4-6"), system, [], user, [],
+                            lambda _n, _a: "", key, None)
+        m = re.search(r"\d+", text or "")
+        if m and 0 <= int(m.group()) - 1 < len(sample):
+            chosen = sample[int(m.group()) - 1]
+            emit(f"🎯 Тема выбрана по актуальности (рынок + бриф) из {len(sample)} кандидатов.\n")
+            return chosen
+    except Exception:  # noqa: BLE001
+        logging.exception("Актуальный выбор темы упал — беру случайную из выборки")
+    return random.choice(sample)
+
+
 def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False,
               evergreen: bool = False, no_image: bool = False, emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
@@ -236,7 +279,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # в промпт), пропуская вышедшие <полугода назад. Помечаем [вышло ДАТА] ТОЛЬКО при реальной публикации.
     theme = ""
     if not scope:
-        theme = dedup.pick_bank_theme()
+        theme = _pick_timely_theme(emit)  # выбор по актуальности (рынок+бриф); фолбэк — случайная
         if not theme:
             out("⚠️ Банк тем пуст — флагману не из чего писать. Пополни memory/flagship_topics.md.\n")
             return "\n".join(report)

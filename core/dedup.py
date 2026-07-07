@@ -70,22 +70,28 @@ def _today():
         return None
 
 
-def pick_bank_theme() -> str:
-    """ОДНА тема из банка по ротации (для 200+ тем: выбор в пайплайне, не в промпте Криейтора).
-    Приоритет — ещё не выходившие (среди них случайная — разнообразие); иначе вышедшие раньше окна
-    рециклинга; в крайнем случае самая старая. Пусто — банк пуст."""
+def available_bank_themes() -> list[str]:
+    """Темы, ДОСТУПНЫЕ для ротации: ещё не выходившие (приоритет) / вышедшие >BANK_REUSE_DAYS назад.
+    Из них пайплайн выбирает по актуальности; пусто — банк пуст / всё в окне."""
     lines = _bank_lines()
     if not lines:
-        return ""
+        return []
     never = [t for (_, t, d) in lines if d is None]
     if never:
-        return random.choice(never)
+        return never
     today = _today()
     aged = [t for (_, t, d) in lines if d and today and (today - d).days >= BANK_REUSE_DAYS]
     if aged:
-        return random.choice(aged)
-    used = [(t, d) for (_, t, d) in lines if d]
-    return min(used, key=lambda x: x[1])[0] if used else lines[0][1]
+        return aged
+    used = sorted(((t, d) for (_, t, d) in lines if d), key=lambda x: x[1])  # самая старая первой
+    return [t for t, _ in used] or [lines[0][1]]
+
+
+def pick_bank_theme() -> str:
+    """ОДНА тема по ротации — СЛУЧАЙНАЯ из доступных. Детерминированный фолбэк, если актуальный
+    выбор (сентимент+бриф) в пайплайне недоступен/упал."""
+    pool = available_bank_themes()
+    return random.choice(pool) if pool else ""
 
 
 def mark_theme_used(theme: str, date_iso: str = "") -> bool:
