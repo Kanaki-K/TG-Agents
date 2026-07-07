@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from core import agent_runtime, analytics, config, llm, scout_tools
+from core import agent_runtime, analytics, config, dedup, llm, scout_tools
 
 AGENT_NAME = "scout"
 
@@ -108,7 +108,13 @@ def _system() -> str:
         "## Реестр источников и тиры (memory/sources.md)\n"
         f"{_read('memory/sources.md')}\n\n"
         "## Сводка по каналу (для дедупа и оценки релевантности)\n"
-        f"{analytics.summary()}\n"
+        f"{analytics.summary()}\n\n"
+        "## Что канал УЖЕ публиковал — НЕ предлагай это повтором (свежие сверху, с датами)\n"
+        "Тема/сущность из этого списка за последние ~2-3 недели = ПОВТОР. Не ставь такое флагман-\n"
+        "кандидатом, даже под «новым углом» — читателю это уже показывали.\n"
+        f"{analytics.topics_digest(limit=40)}\n\n"
+        "## Домены на ПАУЗЕ — выжжены/недавно выходили, НЕ ранжируй как кандидата\n"
+        f"{dedup.paused_note()}\n"
     )
     return llm.build_system(persona, ctx)
 
