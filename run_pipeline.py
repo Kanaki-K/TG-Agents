@@ -4,6 +4,7 @@
     python run_pipeline.py --evergreen    # флагман, слот ВЕЧНОЕ: тема из банка (без Скаута), образовательный
     python run_pipeline.py --scope        # короткий 🔭 «Под прицелом» (аналитич., обложка из первоисточника) → отложка
     python run_pipeline.py --skip-scout   # БЕЗ Скаута: Криейтор берёт ПОСЛЕДНИЙ бриф
+    python run_pipeline.py --no-image     # БЕЗ GPT-обложки (только текст). В /test-режиме включается САМ.
 
 МИКС 2×/нед: один флагман запускай обычно (топикал, свежая тема), второй — с --evergreen (вечная
 из банка). Так канал не «новостник» и не «без актуальности». Вечный слот НЕ гоняет Скаута — дешевле.
@@ -90,9 +91,10 @@ def _run_scout() -> None:
 
 
 def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: list | None = None,
-                 evergreen: bool = False) -> str:
+                 evergreen: bool = False, no_image: bool = False) -> str:
     cfg, model, key, thinking = _agent("creator")
-    tools = list(creator_tools.TOOLS)
+    # no_image (тест/итерация): убираем make_image из инструментов — GPT-обложку не дёргаем вообще.
+    tools = [t for t in creator_tools.TOOLS if not (no_image and t.get("name") == "make_image")]
     if cfg.get("web_search"):
         tools.append(creator_bot.WEB_SEARCH_TOOL)
     try:  # свежий аутбокс обложки — только картинка этого прогона (scope её не делает → отложка текстом)
@@ -106,6 +108,9 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: l
              else "пост по свежему брифу + обложка")
     print(f"✍️ [2/3] Криейтор: {label}...")
     user = creator_bot.COMMANDS[command]
+    if no_image:  # тест/итерация — не трогаем GPT: картинку не делаем, только текст
+        user = ("БЕЗ ОБЛОЖКИ (тест/итерация): make_image НЕ вызывай, картинку не делай — выдай только "
+                "готовый текст поста и сохрани через save_draft.\n\n") + user
     if evergreen:  # СЛОТ «ВЕЧНОЕ»: осознанно НЕ новость — образовательный флагман из банка вечных тем.
         guard = ("СЛОТ: ВЕЧНАЯ ТЕМА (не новость). Игнорируй новостные поводы брифа — сегодня пишем "
                  "образовательный флагман на ВЕЧНУЮ тему из банка.\n")
@@ -169,7 +174,7 @@ def _run_creator_fix(post: str, verdict: str) -> str:
 
 
 def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False,
-              evergreen: bool = False, emit=print) -> str:
+              evergreen: bool = False, no_image: bool = False, emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
 
     emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
@@ -190,6 +195,9 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     _mode = runmode.get()
     if _mode["mode"] == "test":
         out(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
+        no_image = True  # в тесте GPT-обложку НЕ дёргаем (её качество не тестим — экономим)
+    if no_image and not scope:
+        out("🖼 GPT-обложку пропускаю (тест / --no-image): пишем только текст, картинку не трогаем.\n")
     # АКТУАЛЬНОСТЬ ДАННЫХ: выгрузка канала устарела → тянем свежие посты ДО разведки и анти-повтора
     # (иначе сверка «было/не было» врёт на самых недавних постах — там и прячется самый частый дубль).
     out("🗂 [0] Актуальность данных канала (для анти-повтора)...")
@@ -237,7 +245,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, bank, evergreen=evergreen)
+        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, bank,
+                                                            evergreen=evergreen, no_image=no_image)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)
@@ -334,7 +343,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
 
 def main() -> None:
     run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv,
-              draft_only="--draft-only" in sys.argv, evergreen="--evergreen" in sys.argv)
+              draft_only="--draft-only" in sys.argv, evergreen="--evergreen" in sys.argv,
+              no_image="--no-image" in sys.argv)
 
 
 if __name__ == "__main__":
