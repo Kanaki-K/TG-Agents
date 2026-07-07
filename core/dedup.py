@@ -20,15 +20,25 @@
 from __future__ import annotations
 
 import datetime
+import random
+import re
 import time
 
 from core import analytics, config, llm, runmode
 
-BANK_FILE = config.ROOT / "memory" / "flagship_topics.md"  # запасной пул вечных тем (простой список)
+BANK_FILE = config.ROOT / "memory" / "flagship_topics.md"  # пул вечных тем флагмана (список '- тема — угол')
+BANK_REUSE_DAYS = 180  # тема, вышедшая меньше полугода назад, в ротацию НЕ идёт; позже сама возвращается
+# Помеченная строка: «- [вышло ГГГГ-ММ-ДД] тема — угол». Дата = когда тему опубликовали (рециклинг).
+_USED_RE = re.compile(r"^\[вышло\s+(\d{4}-\d{2}-\d{2})\]\s*(.+)$")
 
 
 def bank_topics() -> list[str]:
-    """Вечные темы из простого списка-банка (строки '- …'). Пусто — файла/списка нет."""
+    """Все АКТИВНЫЕ темы банка (строки '- …' без метки [вышло]). Совместимость/обзор."""
+    return [t for (_, t, d) in _bank_lines() if d is None]
+
+
+def _bank_lines() -> list:
+    """Разбор банка: список (сырая_строка, текст_темы, дата_вышло|None). Только строки '- '."""
     try:
         text = BANK_FILE.read_text(encoding="utf-8")
     except Exception:
@@ -36,11 +46,74 @@ def bank_topics() -> list[str]:
     out = []
     for ln in text.splitlines():
         s = ln.strip()
-        if s.startswith("- "):
-            t = s[2:].strip()
-            if t and "[вышло]" not in t.lower():
-                out.append(t)
+        if not s.startswith("- "):
+            continue
+        body = s[2:].strip()
+        m = _USED_RE.match(body)
+        if m:
+            try:
+                d = datetime.date.fromisoformat(m.group(1))
+            except Exception:  # noqa: BLE001 — кривая дата: из ротации вон
+                continue
+            out.append((ln, m.group(2).strip(), d))
+        elif body.lower().startswith("[вышло"):
+            continue  # помечена [вышло] БЕЗ ISO-даты — из ротации исключена (пометь датой для авто-возврата)
+        else:
+            out.append((ln, body, None))
     return out
+
+
+def _today():
+    try:
+        return datetime.date.today()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def pick_bank_theme() -> str:
+    """ОДНА тема из банка по ротации (для 200+ тем: выбор в пайплайне, не в промпте Криейтора).
+    Приоритет — ещё не выходившие (среди них случайная — разнообразие); иначе вышедшие раньше окна
+    рециклинга; в крайнем случае самая старая. Пусто — банк пуст."""
+    lines = _bank_lines()
+    if not lines:
+        return ""
+    never = [t for (_, t, d) in lines if d is None]
+    if never:
+        return random.choice(never)
+    today = _today()
+    aged = [t for (_, t, d) in lines if d and today and (today - d).days >= BANK_REUSE_DAYS]
+    if aged:
+        return random.choice(aged)
+    used = [(t, d) for (_, t, d) in lines if d]
+    return min(used, key=lambda x: x[1])[0] if used else lines[0][1]
+
+
+def mark_theme_used(theme: str, date_iso: str = "") -> bool:
+    """Пометить тему как [вышло ДАТА] в банке (рециклинг: скрыть из ротации на BANK_REUSE_DAYS).
+    Зовётся ТОЛЬКО при реальной публикации (не в draft/test). True — записано."""
+    theme = (theme or "").strip()
+    if not theme:
+        return False
+    if not date_iso:
+        t = _today()
+        date_iso = t.isoformat() if t else ""
+    if not date_iso:
+        return False
+    try:
+        lines = BANK_FILE.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return False
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("- ") and s[2:].strip() == theme:  # активная строка ровно этой темы
+            indent = ln[:len(ln) - len(ln.lstrip())]
+            lines[i] = f"{indent}- [вышло {date_iso}] {theme}"
+            try:
+                BANK_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+                return True
+            except Exception:
+                return False
+    return False
 
 CHANNEL_FRESH_HOURS = 12  # выгрузка свежее этого — повторную тягу не запускаем (бережём время/токены)
 
