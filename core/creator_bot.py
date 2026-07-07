@@ -170,16 +170,39 @@ def _read(rel: str) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
-# Посты-ЭТАЛОНЫ подачи (ИИ-эра пайплайна: #438 «ФРС сменила главу» — первый ИИ-написанный пост,
-# и после него). Владелец считает их подачу хорошей; #445 «доллар» почти не редактировал.
-# Голос/подача переносятся с ПРИМЕРОВ, не с растущего рулбука — держим полный текст в контексте
-# как few-shot. ПРАВИТСЯ РУКАМИ: поменял id — поменял образец, каким должен звучать канал.
-ANCHOR_POSTS = [438, 445, 439]
+# Посты-ЭТАЛОНЫ подачи. Голос переносится с ПРИМЕРОВ, не с растущего рулбука — держим полный текст
+# в контексте как few-shot. Список курирует ВЛАДЕЛЕЦ/АНАЛИТИК в memory/anchor_posts.md (строка
+# «- #НОМЕР»), НЕ код. Файла нет / пусто → фолбэк на ИИ-эру. Грузим до ANCHOR_MAX (контекст беречь).
+# Фолбэк = курированный владельцем набор (уезжает пушем; memory/anchor_posts.md gitignored и к нему
+# не синкается — файл лишь override, когда его создадут у себя). #381 психология, #422 анализ,
+# #417 образовательный, #445 доллар (ИИ-эра, почти не редактировал). Меняем строкой.
+ANCHORS_FILE = config.ROOT / "memory" / "anchor_posts.md"
+ANCHOR_FALLBACK = [381, 422, 417, 445]
+ANCHOR_MAX = 5
+
+
+def _anchor_ids() -> list[int]:
+    ids = []
+    try:
+        for ln in ANCHORS_FILE.read_text(encoding="utf-8").splitlines():
+            s = ln.strip()
+            if s.startswith("- #"):
+                num = ""
+                for ch in s[3:]:
+                    if ch.isdigit():
+                        num += ch
+                    else:
+                        break
+                if num:
+                    ids.append(int(num))
+    except Exception:
+        pass
+    return (ids or ANCHOR_FALLBACK)[:ANCHOR_MAX]
 
 
 def _anchors() -> str:
     parts = []
-    for pid in ANCHOR_POSTS:
+    for pid in _anchor_ids():
         t = analytics.read_post(pid)
         if t and "не найден" not in t:
             parts.append(t)
