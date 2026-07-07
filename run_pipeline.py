@@ -1,8 +1,12 @@
 """Полная цепочка контент-завода ОДНИМ запуском (оркестратор v0 — ручной триггер):
 
-    python run_pipeline.py                # полный прогон: Скаут → Криейтор (флагман) → отложка
+    python run_pipeline.py                # флагман, слот ТОПИКАЛ: Скаут → свежая тема → отложка
+    python run_pipeline.py --evergreen    # флагман, слот ВЕЧНОЕ: тема из банка (без Скаута), образовательный
     python run_pipeline.py --scope        # короткий 🔭 «Под прицелом» (аналитич., обложка из первоисточника) → отложка
     python run_pipeline.py --skip-scout   # БЕЗ Скаута: Криейтор берёт ПОСЛЕДНИЙ бриф
+
+МИКС 2×/нед: один флагман запускай обычно (топикал, свежая тема), второй — с --evergreen (вечная
+из банка). Так канал не «новостник» и не «без актуальности». Вечный слот НЕ гоняет Скаута — дешевле.
 
 Скаут НЕ дёргается впустую: если последний бриф разведки младше SCOUT_FRESH_HOURS (3ч) — прогон берёт
 его, повторный поиск пропускается (--skip-scout форсит пропуск всегда; свежесть и так бережёт кредиты).
@@ -85,7 +89,8 @@ def _run_scout() -> None:
     print((text or "(пусто)").strip()[:700], "\n")
 
 
-def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: list | None = None) -> str:
+def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: list | None = None,
+                 evergreen: bool = False) -> str:
     cfg, model, key, thinking = _agent("creator")
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
@@ -97,10 +102,23 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: l
         pass
     cost.set_context("creator")
     label = ("короткий 🔭 «Под прицелом» (без обложки)" if command == "scope"
+             else "ВЕЧНАЯ тема из банка + обложка" if evergreen
              else "пост по свежему брифу + обложка")
     print(f"✍️ [2/3] Криейтор: {label}...")
     user = creator_bot.COMMANDS[command]
-    if avoid or hint or bank:  # анти-повтор — ОГРАНИЧЕНИЕ («чего не брать»), а НЕ приказ «пиши вот это».
+    if evergreen:  # СЛОТ «ВЕЧНОЕ»: осознанно НЕ новость — образовательный флагман из банка вечных тем.
+        guard = ("СЛОТ: ВЕЧНАЯ ТЕМА (не новость). Игнорируй новостные поводы брифа — сегодня пишем "
+                 "образовательный флагман на ВЕЧНУЮ тему из банка.\n")
+        if avoid:
+            guard += f"НЕ бери домены на паузе: {avoid}.\n"
+        guard += ("Возьми ОДНУ тему из банка (что ещё НЕ выходило — сверь с покрытием канала в контексте):\n"
+                  + "\n".join(f"- {t}" for t in (bank or [])) + "\n"
+                  "ГЛАВНОЕ — ПОДАЧА: раскрой вечную тему с ножевым, контрарным поворотом (эталон «доллар»: "
+                  "факт → неожиданный разворот). Банальный хук-клише («уже поздно», «все говорят», "
+                  "«представьте») — ЗАПРЕЩЁН. Звучи как эталоны подачи в контексте. НАПИШИ ГОТОВЫЙ ПОСТ — "
+                  "текст, не мета-рассуждение. Обязательно сохрани через save_draft.\n\n")
+        user = guard + user
+    elif avoid or hint or bank:  # СЛОТ «ТОПИКАЛ»: свежая тема из брифа, иначе падаем в банк.
         guard = "АНТИ-ПОВТОР (сверено со свежей выгрузкой канала).\n"
         if avoid:
             guard += f"НЕ бери эти направления (уже выходили / домен на паузе): {avoid}.\n"
@@ -150,7 +168,8 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
-def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False, emit=print) -> str:
+def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False,
+              evergreen: bool = False, emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
 
     emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
@@ -164,7 +183,9 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         report.append(s)
 
     cost.reset()  # начинаем замер стоимости всего прогона (Скаут→Криейтор→отложка)
-    kind = "🔭 Под прицелом (короткий)" if scope else "флагман"
+    kind = ("🔭 Под прицелом (короткий)" if scope
+            else "флагман · слот ВЕЧНОЕ (из банка)" if evergreen
+            else "флагман · слот ТОПИКАЛ (свежая тема)")
     out(f"=== Контент-завод: прогон [{kind}] ===\n")
     _mode = runmode.get()
     if _mode["mode"] == "test":
@@ -175,8 +196,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     out(str(dedup.refresh_if_stale()) + "\n")
     age = _latest_brief_age_hours()
     scout_day = datetime.date.today().weekday() in SCOUT_DAYS
-    if skip_scout:
-        out("⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
+    if skip_scout or evergreen:
+        out("⏭ Слот ВЕЧНОЕ: Скаута пропускаю — тема из банка, разведка не нужна (экономим ~$1.2).\n"
+            if evergreen else
+            "⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
     elif age is not None and age < SCOUT_FRESH_HOURS:
         out(f"⏭ Скаута пропускаю: последний бриф свежий ({age:.1f}ч < {SCOUT_FRESH_HOURS}ч) — "
             f"повторная разведка не нужна, берём его.\n")
@@ -214,7 +237,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, bank)
+        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, bank, evergreen=evergreen)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)
@@ -311,7 +334,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
 
 def main() -> None:
     run_cycle(scope="--scope" in sys.argv, skip_scout="--skip-scout" in sys.argv,
-              draft_only="--draft-only" in sys.argv)
+              draft_only="--draft-only" in sys.argv, evergreen="--evergreen" in sys.argv)
 
 
 if __name__ == "__main__":
