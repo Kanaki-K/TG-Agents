@@ -78,15 +78,16 @@ def _agent(name: str):
     return cfg, runmode.resolve(cfg["model"]), config.agent_api_key(cfg), thinking
 
 
-def _run_scout() -> None:
+def _run_scout(scope: bool = False) -> None:
     cfg, model, key, thinking = _agent("scout")
     tools = list(scout_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(scout_bot.WEB_SEARCH_TOOL)
     cost.set_context("scout")
     print("🔍 [1/3] Скаут: разведка трендов...")
-    text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"],
-                        tools, scout_tools.dispatch, key, thinking)
+    # coverage-зрение Скаута — ТОЛЬКО во флагман-прогоне; scope получает пре-сессионного Скаута.
+    text, _ = _threaded(llm.reply, model, scout_bot._system(coverage=not scope), [],
+                        scout_bot.COMMANDS["scan"], tools, scout_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
 
 
@@ -219,22 +220,29 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             out(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч), сегодня день разведки — "
                 f"запускаю свежую.\n")
         try:
-            _run_scout()
+            _run_scout(scope)
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
-    # АНТИ-ПОВТОР (флагман И scope): сверяем направления свежего брифа с уже опубликованным ДО письма —
-    # дешевле поймать дубль на теме, чем после готового поста. Данные уже актуализированы (шаг 0).
-    # ГЕЙТ для обоих (дубль в канал не уйдёт); но ТЕМУ подменяем только флагману — scope сам берёт свой
-    # 🔭-повод из брифа по гейту важности, ему чужая «сильнейшая не-повторная» тема не нужна.
-    # АНТИ-ПОВТОР теперь ДЕТЕРМИНИРОВАННЫЙ (без LLM). Скаут И scope видят покрытие канала
-    # (topics_digest) + активные паузы (paused_note) прямо в своём контексте — повтор/выжженное
-    # отсекается У ИСТОКА, суждением сильной модели. Отдельный слабый Haiku-проход убран: он ловил
-    # хуже, чем агент видит теперь (пропускал x402). Криейтору/scope остаётся жёсткий детерминированный
-    # запрет по паузам — поверх суждения. Все направления повторные → флагман падает в банк (не в стоп).
-    avoid = dedup.paused_note()  # домены на паузе — не брать (детерминированно)
-    hint = ""  # Скаут уже отранжировал бриф; тема-подсказка не нужна
-    if avoid:
-        out("🔁 [Анти-повтор] Детерминированный гейт пауз: " + avoid + "\n")
+    # АНТИ-ПОВТОР — ВЕТКИ РАЗДЕЛЕНЫ (scope и флагман не мешают друг другу):
+    #  • SCOPE — как ДО этой сессии: независимый Haiku-дедуп (repeat_themes + all_repeats-стоп) +
+    #    финальный детерминированный _hits_paused ниже. Эту ветку НЕ трогаем.
+    #  • ФЛАГМАН (доработка сессии) — Криейтор САМ видит покрытие канала (topics_digest в его контексте)
+    #    и берёт тему из банка; отдельный Haiku-проход ему не нужен, avoid/hint пустые.
+    avoid = hint = ""
+    if scope:
+        try:
+            cost.set_context("dedup")  # чтобы анти-повтор логировался под своей меткой, не под чужой
+            verdict = dedup.check(verify.latest_brief(),
+                                  api_key=config.agent_api_key(config.load_agent("creator")))
+            out("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
+            out(str(verdict) + "\n")
+            if dedup.all_repeats(verdict):
+                out("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
+                    "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
+                return "\n".join(report)
+            avoid = dedup.repeat_themes(verdict)
+        except Exception:
+            logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     # Банк вечных тем ВСЕГДА под рукой у флагмана: если бриф исчерпан (всё уже выходило/отрисовано) или
     # домен на паузе — Криейтор берёт тему оттуда и пишет, а не впадает в ступор «какой драфт выбрать».
     bank = dedup.bank_topics() if not scope else []

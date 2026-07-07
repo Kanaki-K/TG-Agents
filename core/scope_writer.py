@@ -18,7 +18,7 @@ import re
 from anthropic import Anthropic
 
 from connectors import source_media
-from core import analytics, config, cost, creator_tools, dedup, llm, runmode, verify
+from core import config, cost, creator_tools, llm, runmode, verify
 
 AGENT_NAME = "creator"            # голос автора тот же — переиспользуем персону Криейтера
 # Письмо scope — Sonnet (короткий формат, Opus тут избыточен: вывод крошечный). Старый риск «Sonnet
@@ -159,12 +159,7 @@ def _system() -> str:
         "## Канон бренда — аудитория и красные линии (memory/brand.md)\n"
         f"{_read('memory/brand.md')}\n\n"
         "## Уроки из правок владельца к КОРОТКИМ постам — ПРИМЕНЯЙ (memory/scope_lessons.md)\n"
-        f"{lessons}\n\n"
-        "## Что канал УЖЕ публиковал — НЕ бери повод-повтор (свежие сверху, с датами)\n"
-        "Тема/сущность из этого списка за последние ~2-3 недели = ПОВТОР, повод не бери даже под новым углом.\n"
-        f"{analytics.topics_digest(limit=40)}\n\n"
-        "## Домены на ПАУЗЕ — выжжены/недавно выходили, повод НЕ бери\n"
-        f"{dedup.paused_note()}\n"
+        f"{lessons}\n"
     )
     return llm.build_system(persona, ctx)
 

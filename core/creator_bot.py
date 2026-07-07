@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from core import agent_runtime, analytics, config, creator_tools, dedup, llm, runmode, scope_writer
+from core import agent_runtime, analytics, config, creator_tools, llm, runmode, scope_writer
 
 AGENT_NAME = "creator"
 
@@ -246,9 +246,7 @@ def _system() -> str:
         f"{analytics.summary()}\n\n"
         "## Что канал УЖЕ публиковал — НЕ повторяй тему (свежие сверху, с датами)\n"
         "Тема/сущность из этого списка за последние ~2-3 недели = ПОВТОР, не бери (касается и вечной темы).\n"
-        f"{analytics.topics_digest(limit=40)}\n\n"
-        "## Домены на ПАУЗЕ — выжжены/недавно выходили, НЕ бери\n"
-        f"{dedup.paused_note()}\n"
+        f"{analytics.topics_digest(limit=40)}\n"
     )
     return llm.build_system(persona, ctx)
 
