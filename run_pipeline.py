@@ -103,9 +103,10 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", bank: l
     except Exception:
         pass
     cost.set_context("creator")
+    _cover = "без обложки" if no_image else "+ обложка"
     label = ("короткий 🔭 «Под прицелом» (без обложки)" if command == "scope"
-             else "ВЕЧНАЯ тема из банка + обложка" if evergreen
-             else "пост по свежему брифу + обложка")
+             else f"ВЕЧНАЯ тема из банка ({_cover})" if evergreen
+             else f"пост по свежему брифу ({_cover})")
     print(f"✍️ [2/3] Криейтор: {label}...")
     user = creator_bot.COMMANDS[command]
     if no_image:  # тест/итерация — не трогаем GPT: картинку не делаем, только текст
