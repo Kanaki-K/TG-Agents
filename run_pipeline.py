@@ -41,6 +41,8 @@ from core import (analytics, config, cost, creator_bot, creator_tools, dedup, ll
 logging.basicConfig(level=logging.INFO)
 
 SCOUT_FRESH_HOURS = 3  # бриф свежее этого — повторную разведку не запускаем (бережём кредиты)
+STALE_ALERT_HOURS = 24  # выгрузка канала старше этого ПОСЛЕ попытки тяги = сборщик молча упал (N-16:
+# вероятно, единая MTProto-сессия мертва) → громкий алерт владельцу, а не тихо на устаревших данных
 # Дни ГЛУБОКОЙ разведки: Пн=0, Вт=1, Чт=3. В остальные дни берём последний бриф из «банка» — мы НЕ
 # новостник (горячка не цель), мануал Скаута + актуальность важнее свежей разведки на каждый пост.
 # Скаут с ~6×/нед → 3×/нед. Если брифа в банке вообще нет — разведка запустится в любой день.
@@ -258,6 +260,25 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     _refresh = str(dedup.refresh_if_stale())
     out(_refresh + "\n")
     panel["данные канала"] = _refresh.splitlines()[0][:70] if _refresh.strip() else "актуальны"
+    # N-16 HEALTH-CHECK: если ПОСЛЕ попытки тяги выгрузка всё ещё протухла — сборщик молча упал (частая
+    # причина: единая MTProto-сессия истекла/забанена, она же на выгрузку+разведку+публикацию). НЕ молчим:
+    # громкий лог + строка в отчёт всегда; уведомление владельцу — best-effort (при мёртвой сессии оно тоже
+    # не дойдёт, но лог/отчёт сработают, а при живой сессии + сбое сбора — дойдёт). Поток НЕ меняем.
+    _age = dedup.data_age_hours()
+    if _age is None or _age >= STALE_ALERT_HOURS:
+        _alert = (f"Данные канала НЕ обновляются ({'выгрузки нет' if _age is None else f'{_age:.0f}ч'} "
+                  f"≥ {STALE_ALERT_HOURS:.0f}ч). Вероятно, MTProto-сессия истекла/забанена — проверь "
+                  f"data/evgeniyp.session (см. docs/OPERATIONS.md). Завод работает на УСТАРЕВШИХ данных.")
+        logging.critical("[health] %s", _alert)
+        out("🚨 " + _alert + "\n")
+        panel["данные канала"] = "🚨 НЕ обновляются — проверь MTProto-сессию"
+        try:
+            _n = config.get_optional("PUBLISH_NOTIFY")
+            if _n:
+                from connectors.telegram_publish import publish as _publish
+                _publish.notify(_n, "🚨 KANAKI-завод: " + _alert)
+        except Exception:
+            logging.exception("[health] уведомление владельцу не отправилось")
     age = _latest_brief_age_hours()
     scout_day = datetime.date.today().weekday() in SCOUT_DAYS
     if skip_scout or evergreen:
