@@ -161,13 +161,15 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
-def _pick_timely_theme(emit=print) -> str:
-    """Тема флагмана по АКТУАЛЬНОСТИ: случайная выборка из банка (разнообразие) → дешёвый выбор самой
-    резонансной по (1) НАСТРОЕНИЮ РЫНКА [обязательно, market_price] + (2) ТЕМАТИКЕ свежего брифа Скаута
-    от scope [бонус]. Фолбэк — случайная тема, если рынок/бриф/модель недоступны."""
+def _pick_timely_theme() -> tuple[str, str, dict]:
+    """Тема флагмана по АКТУАЛЬНОСТИ. Возвращает (тема, ФАКТОР_РЕШЕНИЯ, вход_измеримо).
+
+    Фактор — что именно решило (свежесть/рынок/бриф/случайно): это и есть «повлияла ли аналитика».
+    вход — dict измеримых входов (кандидаты, сколько покрытия учтено, есть ли рынок/бриф) для лог-панели.
+    Фолбэк — случайная тема, если рынок/бриф/модель недоступны (тогда фактор='случайно')."""
     pool = dedup.available_bank_themes()
     if len(pool) <= 1:
-        return pool[0] if pool else ""
+        return (pool[0] if pool else ""), ("без вариантов" if pool else "банк пуст"), {}
     sample = random.sample(pool, min(25, len(pool)))
     try:
         market = market_tools.handle("market_price", {}) or ""
@@ -178,6 +180,9 @@ def _pick_timely_theme(emit=print) -> str:
         coverage = analytics.topics_digest(limit=80) or ""
     except Exception:  # noqa: BLE001
         coverage = ""
+    meas = {"кандидатов": len(sample),
+            "покрытие_учтено": sum(1 for l in coverage.splitlines() if l.strip()),
+            "рынок": bool(market), "бриф": bool(brief)}
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(sample))
     system = (
         "Ты выбираешь ОДНУ тему образовательного флагмана крипто-канала о ДОЛГОСРОЧНОМ инвесторе (DCA). "
@@ -188,7 +193,8 @@ def _pick_timely_theme(emit=print) -> str:
         "2) НАСТРОЕНИЕ РЫНКА: обвал/страх → психология удержания; ATH/жадность → поздний вход/FOMO; "
         "спокойно/боковик → принятие/применение/AI или словарь.\n"
         "3) БРИФ (бонус): горячий домен из брифа → тема своевременнее.\n"
-        "Из оставшихся СВЕЖИХ бери самую резонансную по рынку. Верни ТОЛЬКО номер (одно число), без слов."
+        "Из оставшихся СВЕЖИХ бери самую резонансную по рынку. Ответ СТРОГО в формате `номер | фактор`, "
+        "где фактор — ОДНО слово, что перевесило: свежесть | рынок | бриф. Пример: `7 | свежесть`."
     )
     user = (f"ТЕМЫ:\n{numbered}\n\nЧТО КАНАЛ УЖЕ ПУБЛИКОВАЛ (не повторять ПО СУТИ):\n{coverage}\n\n"
             f"РЫНОК СЕЙЧАС:\n{market or '(нет данных)'}\n\nСВЕЖИЙ БРИФ:\n{brief or '(нет брифа)'}")
@@ -197,14 +203,14 @@ def _pick_timely_theme(emit=print) -> str:
         key = config.agent_api_key(config.load_agent("creator"))
         text, _ = llm.reply(runmode.resolve("claude-sonnet-4-6"), system, [], user, [],
                             lambda _n, _a: "", key, None)
-        nums = re.findall(r"\d+", text or "")
-        if nums and 0 <= int(nums[-1]) - 1 < len(sample):  # последнее число = финальный ответ
-            chosen = sample[int(nums[-1]) - 1]
-            emit(f"🎯 Тема выбрана по свежести+рынку из {len(sample)} кандидатов: {chosen}\n")
-            return chosen
+        raw = (text or "").strip()
+        nums = re.findall(r"\d+", raw.split("|")[0])  # номер — ДО разделителя (фактор может быть без цифр)
+        factor = next((f for f in ("свежесть", "рынок", "бриф") if f in raw.lower()), "актуальность")
+        if nums and 0 <= int(nums[0]) - 1 < len(sample):
+            return sample[int(nums[0]) - 1], factor, meas
     except Exception:  # noqa: BLE001
         logging.exception("Актуальный выбор темы упал — беру случайную из выборки")
-    return random.choice(sample)
+    return random.choice(sample), "случайно", meas
 
 
 def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False,
@@ -216,10 +222,19 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     импорт run_pipeline во избежание циклического импорта: run_pipeline сам импортирует creator_bot).
     """
     report: list[str] = []
+    panel: dict = {}  # измеримые итоги стадий → компактная панель «вход→решение→почему» в конце
 
     def out(s: str = "") -> None:
         emit(s)
         report.append(s)
+
+    def _panel_block() -> str:
+        """Компактная сводка прогона: только измеримое, что на что повлияло."""
+        if not panel:
+            return ""
+        width = max(len(k) for k in panel)
+        rows = [f"  {k.ljust(width)} : {v}" for k, v in panel.items()]
+        return "━━━━━━ ИТОГ (вход → решение → почему) ━━━━━━\n" + "\n".join(rows)
 
     cost.reset()  # начинаем замер стоимости всего прогона (Скаут→Криейтор→отложка)
     if not scope:
@@ -229,6 +244,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             else "флагман (свежая тема)")
     out(f"=== Контент-завод: прогон [{kind}] ===\n")
     _mode = runmode.get()
+    panel["формат"] = kind
+    panel["режим"] = "🧪 тест (дёшево)" if _mode["mode"] == "test" else "боевой"
     if _mode["mode"] == "test":
         out(f"🧪 ТЕСТ-режим: все модели → {_mode['model']} (дёшево, НЕ для прода). /main в боте — боевой.\n")
         no_image = True     # в тесте GPT-обложку НЕ дёргаем (её качество не тестим — экономим)
@@ -238,20 +255,26 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # АКТУАЛЬНОСТЬ ДАННЫХ: выгрузка канала устарела → тянем свежие посты ДО разведки и анти-повтора
     # (иначе сверка «было/не было» врёт на самых недавних постах — там и прячется самый частый дубль).
     out("🗂 [0] Актуальность данных канала (для анти-повтора)...")
-    out(str(dedup.refresh_if_stale()) + "\n")
+    _refresh = str(dedup.refresh_if_stale())
+    out(_refresh + "\n")
+    panel["данные канала"] = _refresh.splitlines()[0][:70] if _refresh.strip() else "актуальны"
     age = _latest_brief_age_hours()
     scout_day = datetime.date.today().weekday() in SCOUT_DAYS
     if skip_scout or evergreen:
+        panel["Скаут"] = "пропущен — вечная тема из банка" if evergreen else "пропущен (--skip-scout)"
         out("⏭ Скаута пропускаю — вечная тема из банка, разведка не нужна.\n"
             if evergreen else
             "⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
     elif age is not None and age < SCOUT_FRESH_HOURS:
+        panel["Скаут"] = f"пропущен — бриф свежий ({age:.1f}ч)"
         out(f"⏭ Скаута пропускаю: последний бриф свежий ({age:.1f}ч < {SCOUT_FRESH_HOURS}ч) — "
             f"повторная разведка не нужна, берём его.\n")
     elif age is not None and not scout_day:
+        panel["Скаут"] = f"пропущен — не день разведки, бриф {age:.1f}ч"
         out(f"⏭ Скаута пропускаю: сегодня не день разведки (глубокий поиск Пн/Вт/Чт) — беру последний "
             f"бриф из банка ({age:.1f}ч). Мы не новостник: мануал Скаута + актуальность важнее горячки.\n")
     else:
+        panel["Скаут"] = "разведка запущена (брифа нет)" if age is None else "разведка запущена (день поиска)"
         if age is None:
             out("🔄 Брифа в банке нет — запускаю разведку (даже вне дня поиска: писать не из чего).\n")
         else:
@@ -275,21 +298,30 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             out("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
             out(str(verdict) + "\n")
             if dedup.all_repeats(verdict):
+                panel["🔁 анти-повтор"] = "СТОП — все направления брифа уже выходили"
                 out("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
                     "канал не уйдёт. Нужна свежая разведка (/scan у Скаута) или новый угол.")
+                out(_panel_block())
                 return "\n".join(report)
             avoid = dedup.repeat_themes(verdict)
+            panel["🔁 анти-повтор"] = f"повтор тем: {avoid}" if avoid else "повторов нет — тема свежая"
         except Exception:
             logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
     # ФЛАГМАН (Модель А): ОДНА тема из банка по РОТАЦИИ — пикер выбирает в пайплайне (не отдаём 200 тем
     # в промпт), пропуская вышедшие <полугода назад. Помечаем [вышло ДАТА] ТОЛЬКО при реальной публикации.
-    theme = ""
+    theme = theme_why = ""
     if not scope:
-        theme = _pick_timely_theme(emit)  # выбор по актуальности (рынок+бриф); фолбэк — случайная
+        theme, theme_why, meas = _pick_timely_theme()
         if not theme:
             out("⚠️ Банк тем пуст — флагману не из чего писать. Пополни memory/flagship_topics.md.\n")
             return "\n".join(report)
-        out(f"🧭 Тема из банка (ротация): {theme}\n")
+        panel["🧭 тема"] = f"«{theme}»  ← {theme_why}"
+        out("🧭 [Тема] вход → решение:")
+        out(f"   ├ кандидатов из банка ..... {meas.get('кандидатов', '—')}")
+        out(f"   ├ покрытие канала учтено .. {meas.get('покрытие_учтено', '—')} постов (свежесть)")
+        out(f"   ├ рынок ................... {'✓ учтён' if meas.get('рынок') else '— нет данных'}")
+        out(f"   ├ бриф Скаута ............. {'✓ учтён' if meas.get('бриф') else '— нет'}")
+        out(f"   └→ РЕШЕНИЕ: «{theme}»   ПОЧЕМУ: {theme_why}\n")
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
@@ -304,8 +336,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     if scope and post:
         _hit = dedup._hits_paused(post)
         if _hit:
+            panel["публикация"] = f"⛔ СТОП — paused-домен «{_hit}»"
             out(f"⛔ scope написал затёртый/paused-домен («{_hit}») — НЕ публикую. Повод обдрочен, лучше "
                 "молчать, чем гнать фастфуд. Список пауз правится в core/dedup.py (PAUSED_DOMAINS).")
+            out(_panel_block())
             out("\n" + cost.summary())
             return "\n".join(report)
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
@@ -317,11 +351,14 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             verdict = verify.verify_post(post, verify.latest_brief(), api_key=ckey)
             out(str(verdict) + "\n")
             if verify.has_issues(verdict):
+                panel["🔎 фактчек 2FA"] = "были замечания → Криейтор исправил"
                 out("🛠 Есть замечания — Криейтор исправляет САМ (без твоей проверки)...")
                 post = _run_creator_fix(post, verdict)
                 out((post or "").strip()[:600] + "\n")
                 out("🔎 Повторный фактчек после правок:")
                 out(str(verify.verify_post(post, verify.latest_brief(), api_key=ckey)) + "\n")
+            else:
+                panel["🔎 фактчек 2FA"] = "чисто — замечаний нет"
         except Exception:
             logging.exception("Фактчек 2FA не удался — пост НЕ блокирую, ставлю как есть")
     out("📝 --- ГОТОВЫЙ ПОСТ ---")
@@ -331,12 +368,16 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # на диске СТАРЫЙ (из архива), и publish_now поставил бы в канал его (был баг: старый флагман ушёл под
     # меткой «короткий»). Нет нового драфта → НИЧЕГО не публикуем и обложку не трогаем.
     if _latest_draft_mtime() <= pre_mtime:
+        panel["публикация"] = "⛔ свежий пост не создан (нет повода) — ничего не ставлю"
         out("\n⛔ Свежего поста в этом прогоне НЕ создано (scope/Криейтор не сохранил драфт — вероятно, "
             "нет подходящего повода). В отложку НИЧЕГО не ставлю — старый драфт из архива в канал не уйдёт.")
+        out(_panel_block())
         out("\n" + cost.summary())
         return "\n".join(report)
     if draft_only:  # тест-режим: драфт готов и напечатан — обложку GPT НЕ генерим и в отложку НЕ ставим
+        panel["публикация"] = "🧪 draft-only — не публикую (смотрим тему/текст)"
         out("\n🧪 draft-only: драфт выше. Обложку GPT НЕ генерирую и в отложку НЕ ставлю (смотрим тему/текст).")
+        out(_panel_block())
         out("\n" + cost.summary())
         return "\n".join(report)
     # ОБЛОЖКА флагмана: 2FA-фикс пересохраняет драфт ПОЗЖЕ make_image — и mtime-гейт publish_now ронял
@@ -361,6 +402,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
                     if ob.exists() else []
             cover_path = have[-1] if have else ""
+            panel["🖼 обложка"] = "GPT-обложка" if cover_path else "нет — уйдёт текстом"
             out(f"🖼 Обложка к публикации: {cover_path}" if cover_path
                 else "⚠️ Обложку получить не удалось — флагман уйдёт ТЕКСТОМ.")
         except Exception:
@@ -376,20 +418,26 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             logging.exception("scope-обложка: не смог подхватить SCOPE_COVER")
             cover_path = ""
         if not cover_path:
+            panel["🖼 обложка"] = "нет подходящей картинки"
+            panel["публикация"] = "⛔ СТОП — без картинки не публикуем"
             out("\n⛔ У 🔭-поста НЕТ подходящей картинки — по правилу «без картинки не публикуем» в отложку "
                 "НЕ ставлю. Драфт сохранён в архиве (добавь картинку вручную или пропусти повод).")
+            out(_panel_block())
             out("\n" + cost.summary())
             return "\n".join(report)
+        panel["🖼 обложка"] = "первоисточник (og:image)"
         out(f"🖼 Обложка выбрана (по смыслу подходит посту): {cover_path}")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
     out(str(_threaded(creator_tools.dispatch, "publish_now",
                       {"kind": "short" if scope else "", "cover": cover_path})))
+    panel["публикация"] = "✅ в отложке канала (проверь и одобри)"
     # РЕЦИКЛИНГ: тема флагмана ушла в канал → метим [вышло ДАТА], пикер не даст её ~полгода, потом вернёт.
     # Только на РЕАЛЬНОЙ публикации (draft-only сюда не доходит — вышел выше), чтобы тест не «съедал» темы.
     if theme and not scope:
         if dedup.mark_theme_used(theme):
             out(f"🧭 Тема помечена [вышло] в банке — вернётся в ротацию через ~{dedup.BANK_REUSE_DAYS//30} мес.")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
+    out(_panel_block())
     out("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $
     return "\n".join(report)
 

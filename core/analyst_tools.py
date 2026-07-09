@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from core import analytics, analytics_tools, config
+from core import analytics, analytics_tools, config, tg_scoring
 
 PLAYBOOK = config.ROOT / "memory" / "format_playbook.md"
 
@@ -35,6 +35,29 @@ TOOLS = [
                 "post_format": {"type": "string",
                                 "description": "фильтр по формату: флагман|обучающий|психология|"
                                                "личный|короткий|медиа|служебное (необязательно)"},
+            },
+        },
+    },
+    {
+        "name": "honest_ranking",
+        "description": "ЧЕСТНЫЙ рейтинг постов (главный для вывода «что реально зашло»). В отличие от "
+                       "top_posts/themes_overview очищает от искажений: (1) ЗРЕЛОСТЬ — свежие посты "
+                       "(<14 дн) в рейтинг не берёт («рано судить», охват ещё не набран); (2) считает "
+                       "качество НА ПРОСМОТР (репост/коммент/реакция на 1k), а не абсолют — так «зашло» "
+                       "не путается с «просто много просмотров». Даёт качество 0-100, охват-перцентиль и "
+                       "ТИР (виральный/резонансный/многолюдный/ровный). Используй его вместо сырого ER, "
+                       "когда судишь качество или советуешь, что усиливать.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "recent_months": {"type": "integer",
+                                  "description": "окно рецентности: считать только по постам за последние N "
+                                                 "месяцев (0 = весь корпус). Бери 3-4, когда важна АКТУАЛЬНАЯ "
+                                                 "картина — стратегия старых постов не равна нынешней."},
+                "format": {"type": "string",
+                           "description": "фильтр по формату: флагман|обучающий|психология|личный|короткий "
+                                          "(необязательно)"},
+                "n": {"type": "integer", "description": "сколько строк (по умолч. 30)"},
             },
         },
     },
@@ -188,6 +211,9 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.top_posts(args.get("metric", "views"),
                                    int(args.get("n", 10)), args.get("content_type", ""),
                                    args.get("post_format", ""))
+    if name == "honest_ranking":
+        return tg_scoring.ranking(int(args.get("recent_months", 0) or 0),
+                                  args.get("format", ""), int(args.get("n", 30) or 30))
     if name == "formats_overview":
         return analytics.formats_overview()
     if name == "by_format":
