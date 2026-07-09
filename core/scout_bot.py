@@ -17,7 +17,7 @@ AGENT_NAME = "scout"
 # Версия 20250305 (без динамической фильтрации) — не использует code-execution/контейнер,
 # поэтому работает в нашем простом цикле без передачи container_id. Версия 20260209 даёт
 # фильтрацию результатов кодом, но требует прокидывать container_id — это под отдельный апгрейд.
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 4}
 
 WELCOME = (
     "Я Скаут команды KANAKI CRYPTO. Ищу тренды, тезисы и авторитетные источники, "
@@ -133,8 +133,8 @@ async def main() -> None:
     # Автопрогоны (/digest + /curate раз в неделю) — только если включены в конфиге.
     # По умолчанию off: бережём токены, всё по запросу. /scan, /digest, /curate работают как команды всегда.
     periodic = [CURATE_PERIODIC, DIGEST_PERIODIC] if cfg.get("auto_schedule") else None
-    # адаптивное мышление — острее суждение (гем-детект, бренд-фит); включается в config.yaml
-    thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
+    # мышление из конфига: 'adaptive' | целое-бюджет (кап на разгон) | off (единый маппинг llm.resolve_thinking)
+    thinking = llm.resolve_thinking(cfg.get("thinking"))
     await agent_runtime.run(
         AGENT_NAME,
         tools_schema=tools,

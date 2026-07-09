@@ -44,6 +44,21 @@ def build_system(persona: str, memory_context: str) -> str:
             f"# Текущая память (контекст этой сессии)\n{memory_context}")
 
 
+def resolve_thinking(val) -> dict | None:
+    """config['thinking'] → конфиг мышления для API. Единый маппинг для всех агентов.
+    - 'adaptive' → адаптивное мышление (модель сама решает глубину; может РАЗДУВАТЬ вывод до потолка);
+    - целое N>0  → ФИКСИРОВАННЫЙ бюджет N токенов: рассуждение есть, но кап на разгон (дешевле adaptive);
+    - иначе (None/false/пусто) → мышление выключено.
+    Расширяемо и обратно-совместимо: старое `thinking: adaptive` работает как раньше."""
+    if val == "adaptive":
+        return {"type": "adaptive"}
+    if isinstance(val, bool):  # bool — подкласс int; `thinking: true` НЕ бюджет
+        return None
+    if isinstance(val, int) and val > 0:
+        return {"type": "enabled", "budget_tokens": val}
+    return None
+
+
 def reply(model: str, system: str, history: list[dict], user_text: str,
           tools_schema: list[dict], dispatch: Callable[[str, dict], str],
           api_key: str | None = None, thinking: dict | None = None) -> tuple[str, list[dict]]:

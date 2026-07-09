@@ -74,7 +74,7 @@ def _threaded(fn, *args):
 
 def _agent(name: str):
     cfg = config.load_agent(name)
-    thinking = {"type": "adaptive"} if cfg.get("thinking") == "adaptive" else None
+    thinking = llm.resolve_thinking(cfg.get("thinking"))  # 'adaptive' | целое-бюджет | off
     # модель резолвим через runmode: /test (или env MODEL_OVERRIDE) делает прогон дешёвым
     return cfg, runmode.resolve(cfg["model"]), config.agent_api_key(cfg), thinking
 
