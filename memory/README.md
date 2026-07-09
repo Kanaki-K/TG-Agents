@@ -13,7 +13,8 @@ This is the shared, human-inspectable memory layer of the agent fleet (see [`doc
 |---|---|---|
 | `brand.md` | Brand canon: niche, voice, value lens | owner |
 | `content_manual.md` | The flagship "bible" — richest writing input | owner |
-| `voice_core.md` | Voice / anti-AI / typography canon | owner |
+| `voice_core.md` | Voice / anti-AI / typography canon — **loaded ONLY by scope** (flagship has its own copy in `content_manual §5/§7`) | owner |
+| `headline_bank.md` | Approved channel headlines — taste reference, **scope-only** | scope (from `channel_posts.json`) |
 | `post_standard.md` | Post standard + formats | Creator (`apply_standard`) |
 | `post_lessons.md` | Lessons learned from owner edits | Creator (`record_lesson`) |
 | `scope_manual.md` / `scope_lessons.md` | Rules & lessons for the 🔭 short format | owner / scope branch |
