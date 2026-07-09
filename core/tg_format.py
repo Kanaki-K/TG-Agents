@@ -16,6 +16,8 @@ import json
 import re
 from pathlib import Path
 
+from core import io_safe
+
 # Карта «обычный эмодзи-дублёр → custom_emoji_id» (собирается
 # connectors/telegram_emoji/collect_ids.py). Если файла нет — кастом не подставляем,
 # рендерим обычные эмодзи как есть (ничего не ломается).
@@ -27,10 +29,7 @@ def _custom_emoji_map() -> dict:
     """Лениво грузим карту кастом-эмодзи (один раз за процесс)."""
     global _emoji_map_cache
     if _emoji_map_cache is None:
-        try:
-            _emoji_map_cache = json.loads(_EMOJI_MAP_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            _emoji_map_cache = {}
+        _emoji_map_cache = io_safe.load_json(_EMOJI_MAP_PATH, {})  # битый файл → {} + INFO-лог (N-10)
     return _emoji_map_cache
 
 

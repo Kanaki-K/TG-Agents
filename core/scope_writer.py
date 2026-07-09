@@ -29,6 +29,10 @@ SCOPE_MODEL = "claude-sonnet-4-6"
 # Vision-гейт обложки из источника — дёшево (Haiku поддерживает картинки): годна ли она как обложка.
 # В /test падает на дешёвую модель через runmode. Один маленький вызов на готовый пост — копейки.
 VISION_MODEL = "claude-haiku-4-5"
+# Кэп размера картинки перед base64-отправкой в vision (N-12): Anthropic режет большие картинки (400),
+# тогда vision молча падает → scope без ОБЯЗАТЕЛЬНОЙ обложки → срыв публикации. source_media уже режет
+# до ~9МБ+ресайз, это страховочная сетка на редкий случай. >4МБ — пропускаем кандидата с warning.
+_MAX_VISION_BYTES = 4_000_000
 # Мышление для scope ВЫКЛЮЧЕНО намеренно (не наследуем adaptive из creator-конфига). Причина: короткому
 # формату (600-900) глубокое мышление избыточно, а adaptive на Sonnet раздувал вывод до потолка MAX_TOKENS
 # и ОБРЕЗАЛ хвост с мета-ссылками обложки [[MEDIA_SRC]] (баг 01.07: пост без картинки → гейт не публиковал) +
@@ -233,6 +237,11 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
     try:
         topic = "\n".join(l for l in post_body.splitlines() if l.strip())[:600]
         anchor = f"Повод про: {subject}\n\n" if subject else ""
+        images = [p for p in images if p.stat().st_size <= _MAX_VISION_BYTES]
+        if not images:
+            logging.warning("scope vision: все кандидаты > %d МБ — обложку не выбираю (уйдём текстом)",
+                            _MAX_VISION_BYTES // 1_000_000)
+            return None
         content: list = []
         for i, p in enumerate(images, 1):
             mt = _IMG_MEDIA_TYPE.get(p.suffix.lower(), "image/jpeg")
@@ -260,6 +269,10 @@ def _vision_ok(img_path, post_body: str, key: str) -> bool:
     """Дёшево (Haiku vision): годна ли картинка источника как обложка 🔭 — релевантна теме и осмысленна
     (не логотип-заглушка/баннер/18+/битый скрин). Ошибка или сомнение → False (пост уйдёт текстом)."""
     try:
+        if img_path.stat().st_size > _MAX_VISION_BYTES:
+            logging.warning("scope vision: обложка %s > %d МБ — не проверяю (уйдём текстом)",
+                            img_path.name, _MAX_VISION_BYTES // 1_000_000)
+            return False
         media_type = _IMG_MEDIA_TYPE.get(img_path.suffix.lower(), "image/jpeg")
         b64 = base64.standard_b64encode(img_path.read_bytes()).decode()
         topic = "\n".join(l for l in post_body.splitlines() if l.strip())[:600]

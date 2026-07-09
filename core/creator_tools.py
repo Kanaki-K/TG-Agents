@@ -27,7 +27,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from connectors.telegram_publish import publish
-from core import analytics, analytics_tools, config, content_plan, market_tools, untrusted
+from core import analytics, analytics_tools, config, content_plan, io_safe, market_tools, untrusted
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -251,7 +251,10 @@ TOOLS = [
 def _md_files(d) -> list:
     if not d.exists():
         return []
-    return sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # только реальные драфты: имя YYYY-MM-DD-*.md (так их пишет _save_draft). Посторонний .md, случайно
+    # попавший в папку, НЕ станет постом и не собьёт гейт «свежий драфт этого прогона» (N-19).
+    return sorted((p for p in d.glob("*.md") if re.match(r"\d{4}-\d{2}-\d{2}-", p.name)),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def _first_heading(text: str) -> str:
@@ -307,12 +310,8 @@ def _emoji_norm(s: str) -> str:
 def _allowed_emoji() -> set:
     global _allowed_emoji_cache
     if _allowed_emoji_cache is None:
-        try:
-            import json
-            data = json.loads((config.ROOT / "data" / "custom_emoji.json").read_text(encoding="utf-8"))
-            _allowed_emoji_cache = {_emoji_norm(k) for k in data}
-        except Exception:
-            _allowed_emoji_cache = set()
+        data = io_safe.load_json(config.ROOT / "data" / "custom_emoji.json", {})
+        _allowed_emoji_cache = {_emoji_norm(k) for k in data}
     return _allowed_emoji_cache
 
 
