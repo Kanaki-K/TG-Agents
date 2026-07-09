@@ -3,11 +3,17 @@ from core import dedup
 
 
 def test_recommended_theme_extracts_quoted():
-    v = ("🆕 «x402» — ново, ни одного поста\n"
-         "РЕКОМЕНДУЮ: «Стейблкоины как рельсы для AI-агентов»\n"
+    v = ("🆕 «BTC-резерв» — ново, ни одного поста\n"
+         "РЕКОМЕНДУЮ: «Биткоин как резерв государств»\n"
          "СТАТУС: ОК")
-    assert dedup.recommended_theme(v) == "Стейблкоины как рельсы для AI-агентов"
+    assert dedup.recommended_theme(v) == "Биткоин как резерв государств"
     assert dedup.all_repeats(v) is False
+
+
+def test_recommended_theme_rejects_paused_domain():
+    # жёсткий стоп (dedup.py:285): рекомендацию по домену на паузе НЕ отдаём (модель любит протащить стейблы/x402)
+    v = "РЕКОМЕНДУЮ: «Стейблкоины как рельсы для AI-агентов»\nСТАТУС: ОК"
+    assert dedup.recommended_theme(v) == ""
 
 
 def test_all_repeats_blocks():
@@ -26,9 +32,10 @@ def test_status_ok_not_blocked():
 
 
 def test_warn_tier_not_blocked():
-    # ⚠️ «та же сущность недавно, угол потенциально иной» — флаг, но НЕ блок выпуска
-    v = ("⚠️ «x402 + Visa + AWS» — была #439 [2026-06-23], бери только радикально иной угол\n"
-         "РЕКОМЕНДУЮ: «x402 как инфра платежей — радикально иной угол + отсылка к #439»\n"
+    # ⚠️ «та же сущность недавно, угол потенциально иной» — флаг, но НЕ блок выпуска.
+    # Тема НЕ-paused, иначе жёсткий стоп срежет рекомендацию в "" (см. test_recommended_theme_rejects_paused_domain)
+    v = ("⚠️ «Майнеры и себестоимость» — была #439 [2026-06-23], бери только радикально иной угол\n"
+         "РЕКОМЕНДУЮ: «Себестоимость майнинга — радикально иной угол + отсылка к #439»\n"
          "СТАТУС: ОК")
     assert dedup.all_repeats(v) is False
     assert "#439" in dedup.recommended_theme(v)
@@ -53,8 +60,9 @@ def test_repeat_themes_extracts_avoid_list():
     assert "новый угол" not in avoid          # 🆕 в список «не брать» не попадает
 
 
-def test_repeat_themes_empty_when_no_repeats():
-    assert dedup.repeat_themes("🆕 «a» — ново\nСТАТУС: ОК") == ""
+def test_repeat_themes_only_paused_note_when_no_repeats():
+    # нет 🔁 → список повторов пуст, но paused_note добавляется ВСЕГДА (детерминированный запрет доменов, dedup.py:304)
+    assert dedup.repeat_themes("🆕 «a» — ново\nСТАТУС: ОК") == dedup.paused_note()
 
 
 def test_empty_brief_soft_ok():
