@@ -61,3 +61,19 @@ def test_empty_brief_soft_ok():
     v = dedup.check("")
     assert dedup.all_repeats(v) is False
     assert dedup.recommended_theme(v) == ""
+
+
+# --- paused-гейт: граница слова (фикс ложных блоков, 09.07) ---
+
+def test_hits_paused_no_false_positive_midword():
+    # РЕГРЕСС: «мика» (пауза MiCA) НЕ должна ловиться внутри «эконоМИКА / динаМИКА» —
+    # был substring-баг, который заворачивал любой макро-пост ПОСЛЕ оплаченной генерации
+    assert dedup._hits_paused("мировая экономика и рыночная динамика") == ""
+    assert dedup._hits_paused("обычный пост про биткоин, ставку ФРС и золото") == ""
+    assert dedup._hits_paused("") == ""
+
+
+def test_hits_paused_stemming_at_word_start():
+    # стемминг сохранён: паузное слово ловится как НАЧАЛО слова (sticky-домены, дата-независимо)
+    assert dedup._hits_paused("стейблкоины как рельсы") == "стейбл"
+    assert dedup._hits_paused("новость про MiCA регуляцию") == "mica"
