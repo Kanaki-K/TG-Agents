@@ -238,14 +238,14 @@ Workflow `reaudit-tg-agents` (4 read-only ревизора + синтез). Об
 изоляция scope↔флагман ПОДТВЕРЖДЕНА в коде), Безопасность **8.5→8**, Качество **8→7.5**, Инж-зрелость **6.5→6**.
 
 ### Новые находки
-- ☐ **N-9 [ops/P1] 13 новых модулей без единого теста** — 3 core (`scope_writer`, `tg_scoring`, `verify`) +
+- ◐ **N-9 [ops/P1] 13 новых модулей без единого теста** — 3 core (`scope_writer`, `tg_scoring`, `verify`) +
   10 `connectors/threads/*`. Критично: `tg_scoring` УЖЕ в проде Аналитика (`analyst_tools.py:214` honest_ranking).
-  **Фикс:** старт с чистых функций — `test_tg_scoring.py` (`enrich`/`_ranker`/тиры, синтетический корпус, без API),
-  затем `_parse_media_subject`; verify/threads следом. Риск правки: средний.
-- ☐ **N-10 [quality/P1] Голый `json.loads(read_text())`** (частичный регресс P1-7) — `analytics.py:37,43,110,244,451`,
-  `memory.py:42` без try/except; битый/пустой файл роняет инструмент. Паттерн защиты в проекте ЕСТЬ
-  (`threads/auth.py:44`), не применён. **Фикс:** `core/io_safe.load_json(path, default)` + замена 6 вызовов
-  (~20 мин, ноль риска логики). Риск: средний.
+  ✅ 09.07: `tests/test_tg_scoring.py` — `_ranker`/`enrich`/зрелость/view_floor/тиры (синтетический корпус, без API).
+  Остаток: `scope_writer._parse_media_subject`, `verify`, `threads` — следом (threads когда пойдёт в прод). Риск: средний.
+- ☑ **N-10 [quality/P1] Голый `json.loads(read_text())`** (частичный регресс P1-7) — ✅ СДЕЛАНО 09.07 —
+  `core/io_safe.load_json(path, default)` (нет/пусто/битый → default, INFO-лог, никогда не бросает; паттерн из
+  `threads/auth.py`). Заменены 6 вызовов в `analytics.py` (topics/formats/posts/stats×2) и `memory.py` (tasks).
+  Поведение на существующем валидном файле идентично; битый/пустой больше не роняет инструмент.
 - ☐ **N-11 [quality/P2] `scope_writer`: широкие `except Exception`** (`:254,:281,:298`) — API 429/таймаут и битый
   файл неразличимы. **Фикс:** разнести `APIError/RateLimit` vs `OSError` разными логами. Риск: низкий.
 - ☐ **N-12 [quality/P2] `_vision_pick`: base64 без кэпа размера** (`scope_writer.py:239`) — многомег-og:image → 400

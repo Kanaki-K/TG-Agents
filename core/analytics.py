@@ -12,6 +12,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from core import io_safe
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 POSTS_JSON = DATA / "channel_posts.json"
@@ -33,15 +35,11 @@ FLAGMAN_MIN_WORDS = 450     # «длинный текст» (порог под �
 
 
 def _load_topics() -> dict:
-    if TOPICS_JSON.exists():
-        return json.loads(TOPICS_JSON.read_text(encoding="utf-8"))
-    return {}
+    return io_safe.load_json(TOPICS_JSON, {})
 
 
 def _load_formats() -> dict:
-    if FORMATS_JSON.exists():
-        return json.loads(FORMATS_JSON.read_text(encoding="utf-8"))
-    return {}
+    return io_safe.load_json(FORMATS_JSON, {})
 
 
 def _save_formats(formats: dict) -> None:
@@ -105,9 +103,7 @@ def set_format(post_id: int, fmt: str) -> str:
 
 
 def _load_posts() -> list[dict]:
-    if not POSTS_JSON.exists():
-        return []
-    raw = json.loads(POSTS_JSON.read_text(encoding="utf-8"))
+    raw = io_safe.load_json(POSTS_JSON, [])
     topics = _load_topics()
     formats = _load_formats()
     posts = []
@@ -241,7 +237,7 @@ def summary() -> str:
            f"реакции {sum(p['reactions'] for p in posts)//n}, "
            f"комменты {sum(p['comments'] for p in posts)//n}"]
     if STATS_JSON.exists():
-        s = json.loads(STATS_JSON.read_text(encoding="utf-8"))
+        s = io_safe.load_json(STATS_JSON, {})
         h = s.get("headline", {})
 
         def line(key, name):
@@ -448,7 +444,7 @@ def audience() -> str:
     """Сводка по аудитории из админ-статистики (источники, языки, часы)."""
     if not STATS_JSON.exists():
         return "Сводной статистики нет (collect_stats не запускался)."
-    s = json.loads(STATS_JSON.read_text(encoding="utf-8"))
+    s = io_safe.load_json(STATS_JSON, {})
     g = s.get("graphs", {})
 
     def totals(name, top=6):

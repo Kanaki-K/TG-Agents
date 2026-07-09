@@ -9,6 +9,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from core import io_safe
+
 ROOT = Path(__file__).resolve().parent.parent
 MEM = ROOT / "memory"
 PROFILE = MEM / "profile.md"
@@ -38,9 +40,7 @@ def remember_fact(fact: str) -> str:
 
 # --- Задачи (живой ТуДу) ---
 def _load_tasks() -> list[dict]:
-    if TASKS_JSON.exists():
-        return json.loads(TASKS_JSON.read_text(encoding="utf-8"))
-    return []
+    return io_safe.load_json(TASKS_JSON, [])
 
 
 def _save_tasks(tasks: list[dict]) -> None:
