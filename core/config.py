@@ -1,6 +1,7 @@
 """Загрузка настроек: секреты из .env + конфиг конкретного агента."""
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -26,18 +27,35 @@ def get_optional(name: str) -> str:
     return (os.getenv(name) or "").strip()
 
 
+_owner_warned = False  # чтобы предупреждение о невалидном OWNER_ID не спамило на каждое сообщение
+
+
 def owner_ids() -> set[int]:
     """Разрешённые Telegram user-id (владелец + при нужде свои боты для bot-to-bot).
 
     Берём из .env OWNER_ID — одно число или несколько через запятую. Пусто = гейт ВЫКЛЮЧЕН
     (бот отвечает всем) — стартовый рантайм об этом громко предупреждает. Узнать свой id: /whoami.
     """
+    global _owner_warned
     raw = (os.getenv("OWNER_ID") or "").strip()
     ids: set[int] = set()
+    dropped: list[str] = []
     for part in raw.replace(";", ",").split(","):
         part = part.strip()
+        if not part:
+            continue
         if part.isdigit():
             ids.add(int(part))
+        else:
+            dropped.append(part)
+    # Тихое открытие бота — реальный риск (N-13): OWNER_ID задан, но весь мусор → ids пусто → гейт молча
+    # выкл. Предупреждаем ОДИН раз за процесс (owner_ids зовётся на каждое сообщение — не спамим).
+    if not _owner_warned and (dropped or (raw and not ids)):
+        if dropped:
+            logging.warning("[owner_ids] OWNER_ID: пропущены нечисловые части %s — проверь настройку", dropped)
+        if raw and not ids:
+            logging.warning("[owner_ids] OWNER_ID задан, но НИ ОДИН id не валиден → гейт ОТКРЫТ всем!")
+        _owner_warned = True
     return ids
 
 
