@@ -34,13 +34,13 @@ The guiding idea is **"brains vs. hands"**: LLM reasoning is cheap and uniform, 
 
 | Agent | Role | Entry point | Model |
 |---|---|---|---|
-| **Personal assistant** | Life assistant + a "living to-do" | `python main.py` | Haiku 4.5 |
 | **Scout** | Trend & source recon (outbound), writes a research brief | `python run_scout.py` | Sonnet 4.6 |
 | **Creator** | Writes posts, generates the cover, `/schedule` queues the post | `python run_creator.py` | Opus 4.8 |
 | **Channel analyst** | Judges content by channel metrics (inbound) | `python run_analyst.py` | Haiku 4.5 |
-| **Developer** | Edits agent personalities through a propose→apply gate | `python run_dev.py` | Opus 4.8 |
 | **Publisher** | Not a bot — the `/schedule` command inside Creator; a userbot posts the file into the channel's native *Scheduled* queue via MTProto | — | — |
 | **Full pipeline** | Scout → Creator → scheduled post, in one command | `python run_pipeline.py` | — |
+
+> The three content agents (Scout, Creator, Analyst) are the whole team. Earlier standalone bots — a personal assistant and a "developer" agent — were removed to keep the focus on the content factory; their code is recoverable from git history.
 
 Each agent is defined by data in `agents/<name>/` (`config.yaml` + `SKILL.md` personality + `README.md`) and implemented by `core/<name>_bot.py` (+ `core/<name>_tools.py`). Adding an agent means filling in parameters — the engine is never touched.
 
@@ -96,7 +96,6 @@ memory/        shared layer: brand.md, post_standard.md, sources.md (canon); bri
 data/          runtime artefacts (git-ignored): sessions, exports, covers, cost log, run mode
 docs/          PLAN.md (strategy), ARCHITECTURE.md (code map), AUDIT.md, scope.md
 run_*.py       entry points (one per agent) + run_pipeline.py + run_cost_report.py
-main.py        entry point for the personal assistant
 tests/         pytest suite
 ```
 

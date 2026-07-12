@@ -35,11 +35,10 @@
 core/         ДВИЖОК + реализация агентов (код, импортируемый)
 agents/       ОПРЕДЕЛЕНИЯ агентов (данные: config.yaml + SKILL.md + README) — папки с дефисами, НЕ пакеты
 connectors/   РУКИ к внешнему миру (Telegram MTProto, RSS/веб, X, ChatGPT-картинки, og:image-обложки, Threads API)
-memory/       ОБЩИЙ СЛОЙ ПАМЯТИ (канон бренда, стандарт, уроки, брифы, драфты, профиль, задачи)
+memory/       ОБЩИЙ СЛОЙ ПАМЯТИ (канон бренда, стандарт, уроки, плейбук, брифы, драфты)
 data/         РАНТАЙМ-артефакты (вне git: сессии, выгрузки, обложки, cost-лог, режим)
 docs/         документация (PLAN, ARCHITECTURE, AUDIT)
 run_*.py      точки входа (по одной на агента) + run_pipeline.py (вся цепь) + run_cost_report.py
-main.py       точка входа Личного ассистента (исторически, не run_assistant.py)
 ```
 
 ---
@@ -48,21 +47,17 @@ main.py       точка входа Личного ассистента (ист�
 
 | Файл | Поднимает | Токен (.env) | Ключ Claude | Модель |
 |---|---|---|---|---|
-| `main.py` | Личный ассистент | `SECRETARY_BOT_TOKEN` | `ANTHROPIC_API_KEY` | haiku-4-5 |
 | `run_scout.py` | Скаут | `SCOUT_BOT_TOKEN` | `SCOUT_ANTHROPIC_KEY`→общий | sonnet-4-6 |
 | `run_creator.py` | Криейтор | `CREATOR_BOT_TOKEN` | `CREATOR_ANTHROPIC_KEY`→общий | opus-4-8 |
 | `run_analyst.py` | Аналитик | `ANALYST_BOT_TOKEN` | `ANALYST_ANTHROPIC_KEY`→общий | haiku-4-5 |
-| `run_dev.py` | Разработчик | `DEVELOPER_BOT_TOKEN` | `DEVELOPER_ANTHROPIC_KEY`→общий | opus-4-8 |
 | `run_pipeline.py` | НЕ бот — вся цепь Скаут→Криейтор→2FA→отложка одной командой; `--scope` → короткая ветка 🔭 (см. [scope.md](scope.md)) | ключи агентов | — | через runmode |
 | `run_cost_report.py` | НЕ бот — отчёт по `data/cost_log.jsonl` (прогоны/дни/цена/кэш) | — | — | — |
 
-**Публикатор** (`agents/publisher/`) — НЕ бот: точки входа и токена нет. Это команда `/schedule` внутри
-Криейтора (детерминированная, без LLM) + коннектор `telegram_publish`. `config.yaml` оставлен как
-документация роли.
+**Публикация** — НЕ отдельная роль: команда `/schedule` внутри Криейтора (детерминированная, без LLM,
+`creator_tools._publish_now`) + коннектор `telegram_publish`. Прежний каталог-оболочка `agents/publisher/`
+удалён (12.07.2026) — это был ghost-роль без раннера; сам механизм публикации не тронут.
 
-> **⚠️ Построено vs подключено** (аудит N-17/N-18 — чтобы не читалось как рабочие фичи):
-> - **Личный ассистент** (`main.py`→`core/bot.py`) — заявлен главным юз-кейсом в CLAUDE.md, но в контент-
->   конвейер НЕ входит; боевой он или прототип — уточняет владелец. Запуск отдельный: `python main.py`.
+> **⚠️ Построено vs подключено** (аудит — чтобы не читалось как рабочие фичи):
 > - **Threads** (`connectors/threads/*`, ~1350 стр) — ПОСТРОЕН, но НИ ОДИН `core/*`/бот его не импортирует
 >   (осознанный задел Фазы 2.3, см. статус вверху). Пока не подключён — не рабочая фича.
 > - **Публикатор** — ghost-роль: код в `creator_tools._publish_now`, отдельного бота/входа нет (см. выше).
@@ -86,9 +81,7 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
 - `tg_format.py` — Markdown ответа → Telegram-HTML (жирный/код/ссылки/списки + кастом-эмодзи).
 
 **Общие слои данных:**
-- `memory.py` — память Личного ассистента (профиль/задачи/журнал).
 - `analytics.py` — метрики канала (читает `data/`); используют Аналитик, Скаут, Криейтор.
-- `workshop.py` — propose→apply правок SKILL.md (только Разработчик; гейт + бэкап + анти-traversal).
 - `content_plan.py` — слоты ритма недели для публикации (Вт/Чт флагман, Пн/Ср/Пт короткий).
 - `verify.py` — независимый 2FA-фактчек поста (Sonnet + web_search + `market_price`) перед постановкой.
 - `dedup.py` — анти-повтор темы: гейт свежести выгрузки канала (старше 12ч → тянет свежие посты) +
@@ -99,9 +92,7 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
 **Реализация агентов (бот + «руки» каждого):**
 | Агент | Бот | Инструменты (`*_tools.py`) → бэкенд |
 |---|---|---|
-| personal-assistant | `bot.py` | `tools.py` → `memory.py` |
 | channel-analyst | `analyst_bot.py` | `analyst_tools.py` → `analytics.py` |
-| developer | `dev_bot.py` | `dev_tools.py` → `workshop.py` |
 | scout | `scout_bot.py` | `scout_tools.py` → `connectors/*` + `analytics.py` |
 | creator | `creator_bot.py` | `creator_tools.py` (~17 инстр.: `make_image`, `publish_now`, `save_draft`, `read_brief`, линтер `_lint`, `record_lesson`…) → `connectors/gpt_image`, `telegram_publish`, `content_plan`, `analytics` |
 
@@ -215,8 +206,7 @@ Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ �
 | `briefs/*.md` ★ (gitignore) | Скаут `save_brief` | Криейтор, verify |
 | `drafts/*.md` ★ (gitignore) | Криейтор `save_draft` | Криейтор, `_publish_now`, verify |
 | `image_prompt.md` (стиль обложки) | владелец | Криейтор `_build_image_prompt` |
-| `profile.md` / `tasks.json` ★ / `journal/` | Личный ассистент | он же / люди |
-| `agents/<name>/SKILL.md` (личность) | **Разработчик** `workshop.apply` (бэкап `.history/`) | этот агент `_system` |
+| `agents/<name>/SKILL.md` (личность) | владелец вручную | этот агент `_system` |
 
 **data/ (вне git — рантайм):**
 | Файл | Писатель | Читатель |
@@ -277,7 +267,7 @@ Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ �
    футер-эмодзи/якорный жирный (ловит линтер `_lint` регэкспами), а для 🔭 — `[[MEDIA_SRC]]` /
    `[[MEDIA_SUBJECT]]` (парсит `scope_writer` регэкспом ДО 2FA-фикса, т.к. фикс мету срезает: сменишь
    формулировку маркера в `scope_writer.TASK` — обложка scope перестанет цепляться).
-5. **Имя папки агента = имя везде** (`config.load_agent`, `data/<name>_owner.txt`, `.history`, workshop).
+5. **Имя папки агента = имя везде** (`config.load_agent`, `data/<name>_owner.txt`, `.history`).
    Переименование = каскад поломок.
 6. **Публикация — ФАЙЛОМ, без URL/хостинга** (выстрадано 20.06): хостинги обложек выкинуты, ломали.
    Не возвращать telegra.ph/превью-ссылки.
@@ -302,7 +292,7 @@ Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ �
 5. `core/<name>_tools.py` — «руки» (схемы инструментов + dispatch).
 
 ### Почему код агентов в core/, а не в agents/<name>/
-Папки агентов с дефисами (`channel-analyst`) = **имя агента** (`config.load_agent`, `.history`, workshop).
+Папки агентов с дефисами (`channel-analyst`) = **имя агента** (`config.load_agent`, `.history`).
 Дефис недопустим в имени Python-пакета — `import agents.channel-analyst` невозможен. Поэтому
 импортируемый код живёт в `core/` по конвенции **`core/<agent>_bot.py` + `core/<agent>_tools.py`**, а в
 `agents/<name>/` — только данные. Решение 15.06.2026: для живого 5-агентного проекта стабильность важнее
