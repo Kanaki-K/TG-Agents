@@ -145,9 +145,11 @@
 - ☑ **P2-11 [security] SSRF-фильтр в fetch_page.** ✅ СДЕЛАНО 23.06.2026 — `_url_blocked_reason` резолвит
   хост и блокирует private/loopback/link-local/reserved (вкл. `169.254.169.254`, `127.0.0.1`); кастомный
   `_SafeRedirect` перепроверяет каждый редирект; покрыто `tests/test_ssrf.py` (5 кейсов).
-- ☐ **P2-12 [ops] CI + линтеры + версия Python.** Нет `pyproject.toml`/ruff/mypy/pre-commit/GitHub Actions
-  (хотя в коде есть `# noqa` — линтер ожидался). **Фикс:** `pyproject.toml` (ruff + ruff format, mypy на
-  `core/`), workflow `ruff check && pytest`, `.python-version` (3.11; код требует 3.10+).
+- ◐ **P2-12 [ops] CI + линтеры + версия Python.** ✅ ЧАСТИЧНО 12.07: GitHub Actions `.github/workflows/tests.yml`
+  — авто-прогон `python -m pytest` (Python 3.13, `requirements.lock`) при каждом push/PR (красный крест = поломка,
+  не запуская руками). `.python-version`=3.13 уже был (N-1). ОСТАЛОСЬ (осознанно отложено): `pyproject.toml` +
+  ruff/mypy — линтер на неотревиженном коде даст шум и красный CI без пользы для non-coder-владельца; вводить
+  постепенно, когда/если будет ценность.
 - ☑ **P2-13 [quality] dispatch как таблица, не if-цепочка.** ✅ СДЕЛАНО 23.06.2026 — общие read-only
   аналитич. инструменты (`channel_summary`/`find_posts`/`by_theme`/`themes_overview`/`by_dimension`/
   `recent_posts`) вынесены в `core/analytics_tools._SHARED` (dict имя→вызов); Скаут/Аналитик/Криейтор зовут
@@ -396,5 +398,7 @@ CI/pyproject, версии схем, кэш regex — по факту фазы/�
   как ACCEPTED (свой subprocess наследует env по умолчанию; урезание опасно, выигрыш нулевой). N-20 был закрыт
   ранее. **Итог: весь панч-лист находок N-* и P1/P2 закрыт либо осознанно принят;** открытым остаётся только
   задел Threads (Ф2, не находка) и над-инженерия, явно отложенная под solo-профиль.
+  Тесты владельца после сессии: **87 зелёных**. Осиротевшие `SECRETARY_BOT_TOKEN`/`DEVELOPER_BOT_TOKEN` в
+  `.env` владелец решил ОСТАВИТЬ намеренно (резерв на возможное возвращение ботов; токены не меняются) — не мусор.
   Владельцу вручную: убрать из `.env.example` осиротевшие `SECRETARY_BOT_TOKEN`/`DEVELOPER_BOT_TOKEN` (хук
   запрещает мне трогать `.env*`).

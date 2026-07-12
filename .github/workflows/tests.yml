@@ -1,0 +1,32 @@
+# CI: гоняет тот же тест-набор, что и владелец локально (python -m pytest), при каждом push/PR.
+# Цель — авто-страховка: красный крест на коммите = что-то сломалось, не запуская руками (AUDIT P2-12).
+# Тесты чистые (без API/сети/секретов), .env не нужен: секреты на уровне модуля читаются только через
+# get_optional (не падает), а get_secret — лениво внутри функций, которые юнит-тесты не дёргают.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            requirements-dev.txt
+
+      - name: Install dependencies (exact lock — как на рабочей машине)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
