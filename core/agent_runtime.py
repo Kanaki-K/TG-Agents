@@ -24,9 +24,9 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, LinkPreviewOptions, Message
 
-from core import config, cost, llm, runmode, tg_format
+from core import config, cost, io_safe, llm, logging_setup, runmode, tg_format
 
-logging.basicConfig(level=logging.INFO)
+logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
 
 # --- Простой планировщик: запускать пресет раз в N дней и слать владельцу в чат ---
@@ -47,12 +47,12 @@ def _write_owner(path, chat_id: int) -> None:
 
 
 def _read_run_date(path):
+    # N-10: битый/пустой файл → default (io_safe логирует INFO), не молчим с трейсбеком.
+    data = io_safe.load_json(path, {})
     try:
-        if path.exists():
-            return date.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["last"])
-    except Exception:
-        pass
-    return None
+        return date.fromisoformat(data["last"]) if data.get("last") else None
+    except (ValueError, TypeError):
+        return None
 
 
 def _write_run_date(path, d: date) -> None:
@@ -273,6 +273,13 @@ async def run(
             "и впиши OWNER_ID=<id> в .env (несколько — через запятую), чтобы закрыть доступ.",
             agent_name)
 
+    def _record_owner_chat(m: Message) -> None:
+        # N-8: чат для ПРОАКТИВНЫХ отчётов пишем ТОЛЬКО подтверждённому владельцу (uid в allowed).
+        # При выключенном гейте (allowed пуст) НЕ записываем первого встречного — иначе еженедельный
+        # отчёт уйдёт случайному человеку, написавшему боту раньше владельца.
+        if allowed and m.from_user.id in allowed:
+            _write_owner(owner_file, m.chat.id)
+
     @dp.message.outer_middleware()
     async def _owner_only(handler, event, data):
         if allowed:
@@ -284,7 +291,7 @@ async def run(
 
     async def _turn(m: Message, user_text: str, cover: str | None = None) -> None:
         uid = m.from_user.id
-        _write_owner(owner_file, m.chat.id)  # запоминаем чат для проактивных (еженедельных) отчётов
+        _record_owner_chat(m)  # запоминаем чат для проактивных (еженедельных) отчётов — только владельца
         # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
         # user-content (400), да и отвечать не на что. Голос/фото — позже.
         if not (user_text or "").strip():
@@ -322,7 +329,7 @@ async def run(
 
     @dp.message(Command("start"))
     async def _start(m: Message) -> None:
-        _write_owner(owner_file, m.chat.id)
+        _record_owner_chat(m)
         await m.answer(f"{welcome}\n\n⚙️ {runmode.banner(model)}")
 
     @dp.message(Command("whoami"))
@@ -335,7 +342,7 @@ async def run(
     # Режим один на всех агентов (data/run_mode.txt), действует со следующего хода без перезапуска.
     @dp.message(Command("test"))
     async def _mode_test(m: Message) -> None:
-        _write_owner(owner_file, m.chat.id)
+        _record_owner_chat(m)
         parts = (m.text or "").split(maxsplit=1)        # /test [haiku|sonnet|<id модели>]
         chosen = runmode.set_test(parts[1] if len(parts) > 1 else "")
         await m.answer(
@@ -344,7 +351,7 @@ async def run(
 
     @dp.message(Command("main"))
     async def _mode_main(m: Message) -> None:
-        _write_owner(owner_file, m.chat.id)
+        _record_owner_chat(m)
         runmode.set_main()
         await m.answer(
             f"🚀 БОЕВОЙ режим для ВСЕХ агентов — модели из config.yaml "
@@ -378,7 +385,7 @@ async def run(
 
         async def handler(m: Message) -> None:
             uid = m.from_user.id
-            _write_owner(owner_file, m.chat.id)
+            _record_owner_chat(m)
             # ТА ЖЕ защита от наложения, что у диалога: /scope, /run, /run_scope идут МИНУТЫ. Без неё
             # параллельные сообщения уходят в LLM-чат отдельными ответами («бот не отвечает / отвечает не то»).
             if uid in busy:

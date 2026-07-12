@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import datetime
+import functools
 import random
 import re
 import time
@@ -175,7 +176,14 @@ def _hits_paused(text: str) -> str:
     динаМИКА / полеМИКА» → ложный стоп на любом макро-посте = впустую потраченная генерация. Ведущая
     \\b оставляет стемминг (стейбл→стейблкоин/стейблы, платёж→платёжный), но режет совпадения В СЕРЕДИНЕ."""
     low = (text or "").lower()
-    return next((d for d in active_paused() if re.search(r"\b" + re.escape(d), low)), "")
+    return next((d for d in active_paused() if _paused_re(d).search(low)), "")
+
+
+@functools.lru_cache(maxsize=256)
+def _paused_re(domain: str):
+    """Скомпилированный «граница-слова» regex домена, кэш на процесс (N-15: не перекомпилировать
+    на каждый вызов _hits_paused — домены на паузе меняются редко, шаблон детерминирован)."""
+    return re.compile(r"\b" + re.escape(domain))
 
 
 def paused_note() -> str:

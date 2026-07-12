@@ -32,9 +32,9 @@ from telethon.errors import MediaCaptionTooLongError, PhotoInvalidDimensionsErro
 from telethon.tl import functions
 
 from connectors.telegram_export.collect import _client
-from core import config, tg_format
+from core import config, logging_setup, tg_format
 
-logging.basicConfig(level=logging.INFO)
+logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
 CAPTION_LIMIT_FREE = 1024      # лимит подписи к фото у обычного аккаунта
 CAPTION_LIMIT_PREMIUM = 2048   # лимит подписи с Telegram Premium

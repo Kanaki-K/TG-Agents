@@ -35,10 +35,10 @@ import sys
 import time
 from pathlib import Path
 
-from core import (analytics, config, cost, creator_bot, creator_tools, dedup, llm, market_tools,
-                  runmode, scope_writer, scout_bot, scout_tools, verify)
+from core import (analytics, config, cost, creator_bot, creator_tools, dedup, llm, logging_setup,
+                  market_tools, runmode, scope_writer, scout_bot, scout_tools, verify)
 
-logging.basicConfig(level=logging.INFO)
+logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
 SCOUT_FRESH_HOURS = 3  # бриф свежее этого — повторную разведку не запускаем (бережём кредиты)
 STALE_ALERT_HOURS = 24  # выгрузка канала старше этого ПОСЛЕ попытки тяги = сборщик молча упал (N-16:
