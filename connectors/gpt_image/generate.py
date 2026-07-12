@@ -133,7 +133,9 @@ def _dump_diagnostics(page) -> None:
     except Exception:
         pass
     try:
-        srcs = page.eval_on_selector_all("main img", "els => els.map(e => e.src)")
+        # N-23: через locator API, без выполнения JS-строки в контексте страницы
+        imgs = page.locator("main img")
+        srcs = [imgs.nth(i).get_attribute("src") or "" for i in range(imgs.count())]
         (OUT_DIR / "debug_imgs.txt").write_text("\n".join(srcs), encoding="utf-8")
     except Exception:
         pass

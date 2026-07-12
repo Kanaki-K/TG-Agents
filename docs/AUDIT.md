@@ -248,8 +248,9 @@ Workflow `reaudit-tg-agents` (4 read-only ревизора + синтез). Об
   `core/io_safe.load_json(path, default)` (нет/пусто/битый → default, INFO-лог, никогда не бросает; паттерн из
   `threads/auth.py`). Заменены 6 вызовов в `analytics.py` (topics/formats/posts/stats×2) и `memory.py` (tasks).
   Поведение на существующем валидном файле идентично; битый/пустой больше не роняет инструмент.
-- ☐ **N-11 [quality/P2] `scope_writer`: широкие `except Exception`** (`:254,:281,:298`) — API 429/таймаут и битый
-  файл неразличимы. **Фикс:** разнести `APIError/RateLimit` vs `OSError` разными логами. Риск: низкий.
+- ☑ **N-11 [quality/P2] `scope_writer`: широкие `except Exception`** — ✅ СДЕЛАНО 12.07 (`_vision_pick`/`_vision_ok`):
+  разнесены `APIError` (транзиент, warning без трейсбека) / `(OSError, ValueError)` (данные, warning) / прочее
+  (`logging.exception` — вероятный баг, но публикацию не роняем). Fetch og:image (:311) и 2FA (:353) — оставлены broad-но-логируемыми (внешний IO/фактчек, fallback безопасен).
 - ☐ **N-12 [quality/P2] `_vision_pick`: base64 без кэпа размера** (`scope_writer.py:239`) — многомег-og:image → 400
   от Anthropic → тихий отвал ОБЯЗАТЕЛЬНОЙ обложки scope. **Фикс:** `st_size > 4МБ` → пропуск кандидата + warning. Риск: средний.
 - ☑ **N-13 [security/P2] `config.owner_ids()` молча отбрасывает невалидные части** — ✅ СДЕЛАНО 09.07 —
@@ -313,16 +314,19 @@ Workflow `full-audit` (`.claude/workflows/full-audit.js`, 8 read-only ревиз
   `_md_files` берёт только `YYYY-MM-DD-*.md` (так пишет `_save_draft`) — посторонний файл не станет постом и не собьёт гейт свежести.
 - ☐ **N-20 [quality/P2] `content_plan.py:19-22` хардкод дней/времени — ручное зеркало post_standard.md** (=хрупкость #3).
   **Фикс (doc-only):** предупреждение-комментарий «держать в синхроне». Парсинг .md — над-инженерия, не сейчас.
-- ☐ **N-21 [security/P2] `analytics.py:429` subprocess получает весь `os.environ`** (секреты) — не эксплойт (свой
-  скрипт), лишняя поверхность. **Фикс:** сузить до ALLOWED_VARS при желании. Не горит.
+- ☑ **N-21 [security/P2] `analytics.py` subprocess получает весь `os.environ`** — ✅ ЗАКРЫТ КАК ACCEPTED 12.07:
+  дочерний процесс наследует окружение ПО УМОЛЧАНИЮ (код строит `env=` лишь чтобы ДОБАВИТЬ UTF-8-флаги —
+  экспозиция та же, что без `env=`); это СВОЙ `refresh.py`, которому секреты (telethon API_ID/HASH, ключи enrich)
+  легитимно нужны. Белый список опасен: пропуск прокси/сертификата/ключа → тихий отвал сборщика → устаревшая
+  аналитика (то, от чего N-16). Выигрыш ~нулевой, риск реальный → не чиним кодом.
 - ☑ (= **N-10**) ещё 3 модуля читали JSON без io_safe/лога — ✅ СДЕЛАНО 12.07 (`42ab4a7`): `agent_runtime._read_run_date`
   переведён на `io_safe.load_json`; `creator_tools:312`/`tg_format:31` уже были на io_safe (проверено).
 - ☑ **N-22 [ops/P2] `core/test_scope_media.py` в core/ вместо tests/** — ✅ СДЕЛАНО 09.07 (`fca648b`): `git mv` в tests/.
 - ☑ (= **P2-9**) история диалога в RAM — ✅ БОЛЬШЕЙ ЧАСТЬЮ МООТ 12.07: главный потребитель (личный ассистент)
   удалён; оставшиеся боты команд-driven / `run_pipeline` one-shot. Персист истории больше не приоритет.
 - (= **N-14**) изоляция защищена на ЧТЕНИЕ, не на запись — доп. дёшево: маркеры `[SCOPE/FLAGSHIP/SHARED]` в шапках общих файлов.
-- ☐ **N-23 [security/P2] `gpt_image` playwright `eval_on_selector_all` — JS в контексте страницы** — бёрнер, не
-  критично. **Фикс:** заменить на locator API. Низкий приоритет.
+- ☑ **N-23 [security/P2] `gpt_image` playwright `eval_on_selector_all` — JS в контексте страницы** — ✅ СДЕЛАНО
+  12.07 (`generate.py:_dump_diagnostics`): заменено на locator API (`page.locator("main img").nth(i).get_attribute`) — без выполнения JS-строки на странице.
 
 ### 🗑 Мусор на удаление
 - `data/result.json` (3.2МБ legacy-экспорт Telegram Desktop, не импортируется, восстановим из git) — засоряет бэкапы
@@ -387,7 +391,10 @@ CI/pyproject, версии схем, кэш regex — по факту фазы/�
   в dedup), **N-10-доп** (io_safe в `_read_run_date`), **N-8** (chat владельца пишется только allowed),
   **N-2** (единый `logging_setup`). Доки синхронизированы (README/ARCHITECTURE/CLAUDE, `4c011ca`). Закрыты
   удалением: **N-18** (ассистент), publisher-ghost-роль; **P2-9** (RAM-история) — большей частью моот.
-  N-4 (.bat) уже был вычищен ранее. ОСТАЛОСЬ по мелочи: N-11 (детализация except в scope_writer),
-  N-20 (комментарий-синхрон content_plan), N-21 (сузить env subprocess), N-23 (playwright locator API).
+  N-4 (.bat) уже был вычищен ранее. Затем добит остаток находок: **N-11** (разнесены except API/IO/прочее в
+  vision `scope_writer`), **N-23** (playwright locator API вместо JS-eval в `gpt_image`), **N-21** — закрыт
+  как ACCEPTED (свой subprocess наследует env по умолчанию; урезание опасно, выигрыш нулевой). N-20 был закрыт
+  ранее. **Итог: весь панч-лист находок N-* и P1/P2 закрыт либо осознанно принят;** открытым остаётся только
+  задел Threads (Ф2, не находка) и над-инженерия, явно отложенная под solo-профиль.
   Владельцу вручную: убрать из `.env.example` осиротевшие `SECRETARY_BOT_TOKEN`/`DEVELOPER_BOT_TOKEN` (хук
   запрещает мне трогать `.env*`).

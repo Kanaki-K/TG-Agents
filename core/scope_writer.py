@@ -15,7 +15,7 @@ import base64
 import logging
 import re
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIError
 
 from connectors import source_media
 from core import config, cost, creator_tools, llm, runmode, verify
@@ -260,8 +260,14 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
         m = re.search(r"\d+", ans)
         idx = int(m.group()) if m else 0
         return images[idx - 1] if 1 <= idx <= len(images) else None
-    except Exception:
-        logging.exception("scope vision-выбор не сработал — картинку НЕ прицепляю (уйдём текстом)")
+    except APIError as e:  # N-11: API-семья (429/таймаут/5xx) — транзиентно, без трейсбека
+        logging.warning("scope vision-выбор: Anthropic API недоступен (%s) — уйдём текстом", type(e).__name__)
+        return None
+    except (OSError, ValueError) as e:  # IO/чтение картинки/декод ответа — данные, не логика
+        logging.warning("scope vision-выбор: картинка/ответ битые (%s) — уйдём текстом", type(e).__name__)
+        return None
+    except Exception:  # неожиданное = вероятный баг: громко, но публикацию НЕ роняем (уйдём текстом)
+        logging.exception("scope vision-выбор: неожиданная ошибка — картинку НЕ прицепляю")
         return None
 
 
@@ -291,8 +297,14 @@ def _vision_ok(img_path, post_body: str, key: str) -> bool:
         cost.record(model, resp.usage)  # учёт расхода (cost-дисциплина): vision-гейт тоже считаем
         ans = "".join(b.text for b in resp.content if b.type == "text").strip().upper()
         return ans.startswith("YES")
-    except Exception:
-        logging.exception("scope vision-гейт не сработал — картинку НЕ прицепляю (уйдём текстом)")
+    except APIError as e:  # N-11: API-семья (429/таймаут/5xx) — транзиентно, без трейсбека
+        logging.warning("scope vision-гейт: Anthropic API недоступен (%s) — уйдём текстом", type(e).__name__)
+        return False
+    except (OSError, ValueError) as e:  # IO/чтение картинки/декод ответа — данные, не логика
+        logging.warning("scope vision-гейт: картинка/ответ битые (%s) — уйдём текстом", type(e).__name__)
+        return False
+    except Exception:  # неожиданное = вероятный баг: громко, но публикацию НЕ роняем (уйдём текстом)
+        logging.exception("scope vision-гейт: неожиданная ошибка — картинку НЕ прицепляю")
         return False
 
 
