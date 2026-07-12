@@ -239,7 +239,7 @@ Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ �
 | `market/` | живая цена/капа (CoinMarketCap, `quotes/latest`) для точной сверки чисел | `COINMARKETCAP_API_KEY` | `market_tools` → Скаут, Криейтор, `verify` (2FA) |
 | `telegram_publish/` | нативная отложка в канал (userbot) | та же MTProto-сессия (`PUBLISH_CHANNEL/NOTIFY`) | `creator_tools._publish_now` |
 | `telegram_emoji/` | сбор id кастом-эмодзи | `EMOJI_BOT_TOKEN`→`CREATOR_BOT_TOKEN` | CLI → `data/custom_emoji.json` |
-| `threads/` ⚠️ **Фаза 2, НЕ подключён к боту** | Threads Graph API (Meta): OAuth+авто-refresh токена (`auth`), сбор постов+метрик (`collect`/`insights`), комменты живые vs self (`replies`), темы (`enrich_topics`), оценка (`scoring`), таблица (`build_table`) зеркалит ТГ, отчёт (`report`). Публикация (веха 2.3) впереди | Threads-токен (seed в `.env` → авто-обновление в `data/threads_token.json`) | пока ТОЛЬКО CLI; аналитик его ещё НЕ читает |
+| `threads/` ⚠️ **Фаза 2, аналитика подключена к Аналитику; публикация — нет** | Threads Graph API (Meta): OAuth+авто-refresh токена (`auth`), сбор постов+метрик (`collect`/`insights`), комменты живые vs self (`replies`), темы (`enrich_topics`), оценка (`scoring`), таблица (`build_table`) зеркалит ТГ, отчёт (`report`). Сбор в одну команду — `refresh_threads.py`. Публикация (веха 2.3) впереди | Threads-токен (seed в `.env` → авто-обновление в `data/threads_token.json`) | `report.build_report`/`find_posts` → инструменты Аналитика `threads_report`/`threads_find` (12.07); публикация ещё нет |
 
 ---
 

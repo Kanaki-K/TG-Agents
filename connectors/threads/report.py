@@ -40,11 +40,26 @@ def _weekday(p: dict):
         return None
 
 
-def main() -> None:
-    if not POSTS_JSON.exists():
-        raise SystemExit("Нет data/threads_posts.json — сначала: python -m connectors.threads.collect")
-    posts = json.loads(POSTS_JSON.read_text(encoding="utf-8"))
-    topics = json.loads(TOPICS_JSON.read_text(encoding="utf-8")) if TOPICS_JSON.exists() else {}
+def _load(posts=None, topics=None):
+    """Данные для отчёта: переданные posts/topics или из data/threads_*.json. (None, {}) — если нет файла."""
+    if posts is None:
+        if not POSTS_JSON.exists():
+            return None, {}
+        posts = json.loads(POSTS_JSON.read_text(encoding="utf-8"))
+    if topics is None:
+        topics = json.loads(TOPICS_JSON.read_text(encoding="utf-8")) if TOPICS_JSON.exists() else {}
+    return posts, topics
+
+
+_NO_DATA = ("Нет данных Threads (data/threads_posts.json пуст или отсутствует). "
+            "Собери командой:  python refresh_threads.py")
+
+
+def build_report(posts=None, topics=None) -> str:
+    """Тот же двухобъективный отчёт, но СТРОКОЙ (для Аналитик-бота и CLI). posts/topics — для тестов."""
+    posts, topics = _load(posts, topics)
+    if not posts:
+        return _NO_DATA
     base = scoring.enrich(posts)
 
     measured = [p for p in posts if (p.get("views") or 0) > 0]
@@ -52,7 +67,8 @@ def main() -> None:
     elig = [p for p in mature if p["views"] >= base["view_floor"]]          # база Качества
     clean = [p for p in elig if not p.get("has_link") and not p.get("has_hashtag")]  # + без душителей
 
-    P = print
+    out: list[str] = []
+    P = out.append
     P("=" * 68)
     P("THREADS — ЖЁСТКИЙ ОТЧЁТ (возраст учтён, качество = на просмотр)")
     P("=" * 68)
@@ -149,6 +165,36 @@ def main() -> None:
     else:
         P("  постов с душителями в тексте не найдено")
     P("\n" + "=" * 68)
+    return "\n".join(out)
+
+
+def find_posts(query: str, n: int = 10, posts=None, topics=None) -> str:
+    """Найти свои Threads-посты по слову/фразе (в тексте или заголовке) → топ по просмотрам с метриками.
+    Для вопросов «как зашёл мой пост про X». posts/topics — для тестов."""
+    posts, topics = _load(posts, topics)
+    if not posts:
+        return _NO_DATA
+    q = (query or "").strip().lower()
+    if not q:
+        return "Пустой запрос — укажи слово или фразу для поиска по постам Threads."
+    scoring.enrich(posts)
+    hits = [p for p in posts
+            if q in (f"{p.get('text', '')} {_title(topics, p)}").lower()]
+    if not hits:
+        return f"По запросу «{query}» постов Threads не найдено."
+    hits.sort(key=lambda p: -(p.get("views") or 0))
+    out = [f"Threads-посты по «{query}» — топ {min(n, len(hits))} из {len(hits)} по просмотрам:"]
+    for p in hits[:n]:
+        qv = p.get("quality")
+        out.append(
+            f"  просм {p.get('views', 0):>6} | люди/1k {p.get('people_per_k') or 0} | "
+            f"ER {p.get('er') or 0}% | Кач {qv if qv is not None else '-'} | "
+            f"{p.get('tier_ru') or ''} | {_title(topics, p)[:50]}")
+    return "\n".join(out)
+
+
+def main() -> None:
+    print(build_report())
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from connectors.threads import report as threads_report
 from core import analytics, analytics_tools, config, tg_scoring, untrusted
 
 PLAYBOOK = config.ROOT / "memory" / "format_playbook.md"
@@ -200,6 +201,30 @@ TOOLS = [
             "required": ["post_id", "format"],
         },
     },
+    {
+        "name": "threads_report",
+        "description": "ПОЛНЫЙ разбор аккаунта THREADS (не Telegram!) — та же честная логика, что и по каналу, "
+                       "но по площадке Threads. Даёт: корпус, ТОП по КАЧЕСТВУ (на просмотр) и по ОХВАТУ "
+                       "(сырые просмотры) отдельными объективами, ложную виральность (self-тред), медиа vs "
+                       "текст, темы по качеству, тайминг по дням, душители охвата (ссылки/хештеги). "
+                       "Используй, когда спрашивают про Threads: «как зашло», «какие темы», «что усиливать». "
+                       "Данные — из последнего сбора (data/threads_*.json); свежесть зависит от refresh_threads.py.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "threads_find",
+        "description": "Найти СВОИ посты в THREADS (не Telegram!) по слову/фразе → топ по просмотрам с "
+                       "метриками (люди/1k, ER, Качество, тир). Используй на вопрос «как зашёл мой пост про X» "
+                       "в Threads.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "слово или фраза для поиска (по тексту/заголовку)"},
+                "n": {"type": "integer", "description": "сколько постов (по умолч. 10)"},
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -232,6 +257,10 @@ def dispatch(name: str, args: dict) -> str:
         return analytics.refresh_metrics(full=True)
     if name == "save_playbook":
         return _save_playbook(args)
+    if name == "threads_report":
+        return threads_report.build_report()
+    if name == "threads_find":
+        return threads_report.find_posts(args["query"], int(args.get("n", 10) or 10))
     return f"Неизвестный инструмент: {name}"
 
 
