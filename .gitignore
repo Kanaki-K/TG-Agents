@@ -21,6 +21,7 @@ memory/**
 # --- Сырые/большие выгрузки — НЕ в git ---
 data/
 exports/
+backups/          # архивы backup.py (P2-14) — локальные, вне git
 
 # --- Python ---
 .venv/

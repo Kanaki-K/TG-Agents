@@ -12,21 +12,31 @@
 | `.env` | все секреты (токены ботов, API-ключи, X-куки, CMC) | завод не стартует; перевыпуск всех ключей |
 | `data/threads_token.json` | Threads-токен (авто-refresh) | доступ к Threads; нужен повторный OAuth-бутстрап (окно refresh 60 дней) |
 | `data/gpt_profile/` | бёрнер-профиль ChatGPT (обложки флагмана) | повторный логин в веб-ChatGPT |
-| `memory/` (живое) | `scope_lessons.md`, `post_lessons.md`, `headline_bank.md`, `x_authors.json`, `tasks.json`, `journal/` | обученность агентов и состояние (gitignored — в репо их НЕТ) |
+| `memory/` (живое) | `scope_lessons.md`, `post_lessons.md`, `headline_bank.md`, `flagship_topics.md`, `x_authors.json`, `briefs/`, `drafts/` | обученность агентов и состояние (gitignored — в репо их НЕТ) |
 
 > `data/x_cookies.json` (если используешь файл вместо .env) — тоже сюда; протухает раз в недели, перевзять из браузера.
 
-## Как бэкапить (PowerShell, Windows)
+## Как бэкапить
 
-Раз в неделю (или после правок памяти) — архив критичного в **офф-машинное** место (облако/внешний диск):
+**Основной способ — одной командой (кросс-платформенно):**
+
+```
+python backup.py "D:\Cloud\tg-agents"     # ← путь к облачной папке / внешнему диску
+```
+
+Создаёт `tg-agents-backup-<дата-время>.zip` со ВСЕМ незаменимым (список — в самом `backup.py`, это единый
+источник правды «живое vs скретч», N-3). Регенерируемый скретч (выгрузки/обложки/таблицы) намеренно НЕ
+включается — пересобирается `refresh.py`. Посмотреть классификацию без архива: `python backup.py --list`.
+Без аргумента архив ложится в `./backups/` (gitignored) — но держи копию ОФФ-машинно (облако/внешний диск).
+
+**Альтернатива (PowerShell, если нет Python под рукой):**
 
 ```powershell
 $stamp = Get-Date -Format "yyyy-MM-dd"
-$dst = "$HOME\Backups\tg-agents"           # ← замени на облачную папку / внешний диск
+$dst = "$HOME\Backups\tg-agents"
 New-Item -ItemType Directory -Force $dst | Out-Null
 Compress-Archive -Path .env, data\evgeniyp.session, data\threads_token.json, data\gpt_profile, memory `
                  -DestinationPath "$dst\tg-agents-$stamp.zip" -Force
-Write-Host "Бэкап: $dst\tg-agents-$stamp.zip"
 ```
 
 Держи 2-3 последних архива. **Проверь восстановление хоть раз** (распакуй в чистую папку, запусти `--draft-only`).
