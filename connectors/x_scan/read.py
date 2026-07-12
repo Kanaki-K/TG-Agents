@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from core import config  # импорт грузит .env (load_dotenv) и даёт доступ к секретам
+from core import config, untrusted  # config грузит .env; untrusted — страж записи в леджер (N-6)
 
 HERE = Path(__file__).resolve().parent
 LEADERS_FILE = HERE / "leaders.yaml"               # семя: курируемый владельцем стартовый ростер
@@ -93,6 +93,9 @@ def update_author(handle: str, track: str = "", tier: str = "", note: str = "") 
         return "Пустой хэндл."
     if tier and tier not in TIERS:
         return f"Неизвестный тир '{tier}'. Допустимо: {', '.join(TIERS)}."
+    framed = untrusted.reject_if_framed(note)  # N-6: заметка не должна тащить обёрнутый твит в леджер
+    if framed:
+        return framed
     ledger = _load_ledger()
     _ensure_seeded(ledger)
     key = next((k for k in ledger if k.lower() == h.lower()), h)

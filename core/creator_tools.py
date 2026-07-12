@@ -713,6 +713,10 @@ def _record_lesson(args: dict, lessons_path: Path = LESSONS) -> str:
     lesson = str(args.get("lesson", "") or "").strip()
     if not lesson:
         return "Пустой урок — нечего записывать."
+    ev_raw = str(args.get("evidence", "") or "").strip()
+    framed = untrusted.reject_if_framed(lesson, ev_raw)  # N-6: не отмывать внешний контент в память
+    if framed:
+        return framed
     rel = f"memory/{lessons_path.name}"
     dup = _lesson_duplicate(lesson, lessons_path)
     if dup and not args.get("confirm_new"):
@@ -726,7 +730,7 @@ def _record_lesson(args: dict, lessons_path: Path = LESSONS) -> str:
         lessons_path.write_text(
             _LESSONS_SEED.get(lessons_path.name, f"# Уроки ({lessons_path.name})\n\n"),
             encoding="utf-8", newline="\n")
-    ev = str(args.get("evidence", "") or "").strip()
+    ev = ev_raw
     line = f"- ({date.today().isoformat()}) {lesson}" + (f" — _из правки: {ev}_" if ev else "") + "\n"
     with open(lessons_path, "a", encoding="utf-8", newline="\n") as f:
         f.write(line)
@@ -738,6 +742,9 @@ def _propose_standard(args: dict) -> str:
     content = str(args.get("content", "") or "").strip()
     if not content:
         return "Пустой стандарт — нечего предлагать."
+    framed = untrusted.reject_if_framed(content)  # N-6: не отмывать внешний контент в стандарт
+    if framed:
+        return framed
     STANDARD_PROPOSED.parent.mkdir(parents=True, exist_ok=True)
     STANDARD_PROPOSED.write_text(content, encoding="utf-8", newline="\n")
     return ("Предложение записано: memory/post_standard.proposed.md (живой стандарт НЕ тронут). "

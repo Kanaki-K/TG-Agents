@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from core import analytics, analytics_tools, config, tg_scoring
+from core import analytics, analytics_tools, config, tg_scoring, untrusted
 
 PLAYBOOK = config.ROOT / "memory" / "format_playbook.md"
 
@@ -239,6 +239,9 @@ def _save_playbook(args: dict) -> str:
     content = str(args.get("content", "") or "").strip()
     if not content:
         return "Пустой плейбук — нечего сохранять."
+    framed = untrusted.reject_if_framed(content)  # N-6: не отмывать внешний контент в плейбук
+    if framed:
+        return framed
     header = f"# Плейбук форматов — KANAKI CRYPTO (обновлён {date.today().isoformat()})\n\n"
     PLAYBOOK.parent.mkdir(parents=True, exist_ok=True)
     PLAYBOOK.write_text(header + content + "\n", encoding="utf-8", newline="\n")
