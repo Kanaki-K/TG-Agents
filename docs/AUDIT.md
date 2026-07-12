@@ -160,9 +160,10 @@
   состояние (`tasks.json`, `post_lessons.md`, `journal/`, `x_authors.json`) не бэкапится; `data/kanaki.session`
   (невосстановимая MTProto-учётка) только локально. **Фикс:** периодический снапшот `memory/` + задокументировать
   backup `data/kanaki.session`; версия схемы в JSON-выгрузках.
-- ☐ **P2-15 [quality] Наблюдаемость.** Только `logging.basicConfig(INFO)`; нет `uid`/`agent_name`/
-  `request_id` в записях → трудно диагностировать «почему бот молчал в 14:05». **Фикс:** контекст в логах
-  `_turn`, `resp._request_id` при сбоях.
+- ☑ **P2-15 [quality] Наблюдаемость.** — ✅ СДЕЛАНО 12.07: `logging_setup` инъектит `[agent/req]` в КАЖДУЮ
+  строку через contextvars + хендлер-фильтр (формат `... name [agent/req]: msg`). `set_agent` — на старте бота
+  и пайплайна; `new_request(uid)` — на каждый ход `_turn`/долгую команду и на запуск пайплайна. Тест
+  `tests/test_logging_setup.py`. Остаток (не срочно): протянуть `req` в этапы `run_pipeline`, `resp._request_id` в лог при API-сбоях.
 
 ---
 

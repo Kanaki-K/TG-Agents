@@ -464,6 +464,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
 
 
 def main() -> None:
+    logging_setup.set_agent("pipeline")   # P2-15: логи прогона помечены; new_request даёт id этого запуска
+    logging_setup.new_request()
     # МОДЕЛЬ А: флагман ВСЕГДА берёт тему из банка (польза) + якорит свежим (актуальность) — новость
     # как ТЕМА это scope, не флагман. Значит любой флагман-прогон = evergreen (Скаута не гоняем → дешевле).
     scope = "--scope" in sys.argv

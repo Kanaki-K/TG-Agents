@@ -253,6 +253,7 @@ async def run(
     thinking: dict | None = None,         # конфиг мышления модели (напр. {"type": "adaptive"})
     media_outbox: Path | None = None,     # файл-аутбокс картинок (агенты с «руками»-рендером); None = нет
 ) -> None:
+    logging_setup.set_agent(agent_name)     # P2-15: все логи этого процесса помечаются именем агента
     agent = config.load_agent(agent_name)
     model = agent["model"]
     api_key = config.agent_api_key(agent)   # свой ключ агента или общий
@@ -291,6 +292,7 @@ async def run(
 
     async def _turn(m: Message, user_text: str, cover: str | None = None) -> None:
         uid = m.from_user.id
+        logging_setup.new_request(str(uid))  # P2-15: пометить логи этого хода коротким id (+uid)
         _record_owner_chat(m)  # запоминаем чат для проактивных (еженедельных) отчётов — только владельца
         # пустой/не-текстовый ввод не шлём в модель: Anthropic отклоняет пустой
         # user-content (400), да и отвечать не на что. Голос/фото — позже.
@@ -385,6 +387,7 @@ async def run(
 
         async def handler(m: Message) -> None:
             uid = m.from_user.id
+            logging_setup.new_request(str(uid))  # P2-15: id запроса для логов долгой команды
             _record_owner_chat(m)
             # ТА ЖЕ защита от наложения, что у диалога: /scope, /run, /run_scope идут МИНУТЫ. Без неё
             # параллельные сообщения уходят в LLM-чат отдельными ответами («бот не отвечает / отвечает не то»).
