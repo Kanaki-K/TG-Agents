@@ -6,7 +6,11 @@ Each agent is a separate Telegram bot running on a single shared *agent engine*.
 
 <sub>Python · [aiogram](https://github.com/aiogram/aiogram) · [Claude API](https://docs.anthropic.com/) · Telegram MTProto (Telethon)</sub>
 
-> **Status:** the content pipeline runs end-to-end (Scout → Creator → scheduled channel post). 5 bots + 1 "bot-less" role (Publisher). See [`docs/AUDIT.md`](docs/AUDIT.md) for the current maturity assessment and backlog.
+[![tests](https://github.com/Kanaki-K/TG-Agents/actions/workflows/tests.yml/badge.svg)](https://github.com/Kanaki-K/TG-Agents/actions/workflows/tests.yml)
+
+> **Status — Phase 1 complete (Telegram: text + images).** The content pipeline runs end-to-end (Scout → Creator → scheduled channel post) and is production-ready: **3 content agents** (Scout · Creator · Analyst) on one shared engine, **100 passing tests**, green CI, one-command backup, and prompt-injection hardening. Remaining Phase-1 work is quality polish of the flagship & scope formats.
+>
+> **Roadmap:** ✅ **Phase 1** — Telegram (text + images) · 🔜 **Phase 2** — Threads (analytics built, wiring next) · **Phase 3** — X/Twitter. See [`docs/AUDIT.md`](docs/AUDIT.md) for the maturity assessment and [`docs/PLAN.md`](docs/PLAN.md) for the roadmap.
 
 ---
 
