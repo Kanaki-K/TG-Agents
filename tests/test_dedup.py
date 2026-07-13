@@ -10,8 +10,10 @@ def test_recommended_theme_extracts_quoted():
     assert dedup.all_repeats(v) is False
 
 
-def test_recommended_theme_rejects_paused_domain():
-    # жёсткий стоп (dedup.py:285): рекомендацию по домену на паузе НЕ отдаём (модель любит протащить стейблы/x402)
+def test_recommended_theme_rejects_paused_domain(monkeypatch):
+    # МЕХАНИЗМ (не продуктовый список): рекомендацию по АКТИВНО-паузному домену не отдаём.
+    # PAUSED_STICKY пуст по умолчанию (опустошён 13.07) — вводим тест-домен и проверяем сам гейт.
+    monkeypatch.setattr(dedup, "PAUSED_STICKY", ["стейбл"])
     v = "РЕКОМЕНДУЮ: «Стейблкоины как рельсы для AI-агентов»\nСТАТУС: ОК"
     assert dedup.recommended_theme(v) == ""
 
@@ -73,15 +75,19 @@ def test_empty_brief_soft_ok():
 
 # --- paused-гейт: граница слова (фикс ложных блоков, 09.07) ---
 
-def test_hits_paused_no_false_positive_midword():
+def test_hits_paused_no_false_positive_midword(monkeypatch):
     # РЕГРЕСС: «мика» (пауза MiCA) НЕ должна ловиться внутри «эконоМИКА / динаМИКА» —
-    # был substring-баг, который заворачивал любой макро-пост ПОСЛЕ оплаченной генерации
+    # был substring-баг, который заворачивал любой макро-пост ПОСЛЕ оплаченной генерации.
+    # Домены вводим тест-списком (прод-список пуст с 13.07) — проверяем границу слова.
+    monkeypatch.setattr(dedup, "PAUSED_STICKY", ["мика", "платёж"])
     assert dedup._hits_paused("мировая экономика и рыночная динамика") == ""
     assert dedup._hits_paused("обычный пост про биткоин, ставку ФРС и золото") == ""
     assert dedup._hits_paused("") == ""
 
 
-def test_hits_paused_stemming_at_word_start():
-    # стемминг сохранён: паузное слово ловится как НАЧАЛО слова (sticky-домены, дата-независимо)
+def test_hits_paused_stemming_at_word_start(monkeypatch):
+    # стемминг сохранён: паузное слово ловится как НАЧАЛО слова (дата-независимо).
+    # Механизм проверяем на тест-домене — не завязываемся на конкретный прод-бан.
+    monkeypatch.setattr(dedup, "PAUSED_STICKY", ["стейбл", "mica"])
     assert dedup._hits_paused("стейблкоины как рельсы") == "стейбл"
     assert dedup._hits_paused("новость про MiCA регуляцию") == "mica"
