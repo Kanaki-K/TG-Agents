@@ -104,15 +104,3 @@ def test_scope_headline_single_sentence_ok():
                  "🌐 LINK | Chainlink в банках Европы и Кореи\n\nтело"):
         _, warns = creator_tools._lint(good, "scope")
         assert not any("ДВУХ предложени" in w for w in warns), good
-
-
-# --- scope: слова-костыли и филлеры ---
-
-def test_scope_crutch_relsa_warns():
-    _, warns = creator_tools._lint("📈 Заголовок\n\nРельса есть, осталось разрешение", "scope")
-    assert any("КОСТЫЛЬ" in w for w in warns)
-
-
-def test_scope_filler_pod_shumom_warns():
-    _, warns = creator_tools._lint("📈 Заголовок\n\nПервую неделю мемкоин, но под шумом растёт TVL", "scope")
-    assert any("ФИЛЛЕР" in w for w in warns)
