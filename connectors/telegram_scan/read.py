@@ -84,3 +84,38 @@ def recent(limit_per_channel: int = 5, channel: str = "", track: str = "") -> li
     if not channels:
         return [{"error": "Список ТГ-каналов пуст (channels.yaml) или нет под фильтр."}]
     return asyncio.run(_collect(channels, max(1, min(limit_per_channel, 15))))
+
+
+def diagnose() -> str:
+    """Диагностика: по КАЖДОМУ каналу — прочитался (сколько сообщений) или ТОЧНАЯ ошибка.
+
+    Скаут схлопывает ошибки в «не прочитаны» — здесь видно правду по каждому каналу отдельно.
+    Запуск: python -m connectors.telegram_scan.read
+    """
+    channels = load_channels()
+    items = asyncio.run(_collect(channels, 3))
+    ok: dict[str, int] = {}
+    errors: dict[str, str] = {}
+    for it in items:
+        ch = it.get("channel", "?")
+        if it.get("error"):
+            errors[ch] = it["error"]
+        else:
+            ok[ch] = ok.get(ch, 0) + 1
+    lines = [f"=== TG-диагностика: {len(channels)} каналов ==="]
+    for c in channels:
+        name = c["name"]
+        if name in errors:
+            lines.append(f"  ❌ {name} [{c['track']}] — {errors[name]}")
+        elif name in ok:
+            lines.append(f"  ✅ {name} [{c['track']}] — прочитано {ok[name]} сообщ.")
+        else:
+            lines.append(f"  ⚠️ {name} [{c['track']}] — 0 сообщений (пусто / только медиа без текста)")
+    live = len(ok)
+    lines.append(f"\nИТОГ: живых {live}/{len(channels)}, с ошибкой {len(errors)}, пустых "
+                 f"{len(channels) - live - len(errors)}.")
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    print(diagnose())
