@@ -4,6 +4,7 @@
     python run_pipeline.py --scope        # 🔭 «Под прицелом» — НОВОСТНОЙ короткий (Скаут+свежесть, обложка из первоисточника)
     python run_pipeline.py --draft-only   # драфт без публикации (тест/итерация)
     python run_pipeline.py --no-image     # БЕЗ GPT-обложки (только текст). В /test-режиме включается САМ.
+    python run_pipeline.py --scope --force-scout  # ПОЛНАЯ разведка принудительно (игнор гейта свежести 3ч и дня разведки) — обкатка/валидация
 
 МОДЕЛЬ А: флагман = ПОЛЬЗА (тема ВСЕГДА из банка, бренд-ядро) + АКТУАЛЬНОСТЬ (Криейтор якорит свежей
 цифрой/примером). Новость как ТЕМА — это scope, не флагман. Флагман Скаута НЕ гоняет → дешевле.
@@ -216,7 +217,8 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
 
 
 def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = False,
-              evergreen: bool = False, no_image: bool = False, emit=print) -> str:
+              evergreen: bool = False, no_image: bool = False, force_scout: bool = False,
+              emit=print) -> str:
     """Полный прогон цепи (свежесть→Скаут→анти-повтор→Криейтор/scope→2FA→отложка). ВОЗВРАЩАЕТ отчёт.
 
     emit — куда слать прогресс по ходу: по умолчанию print (терминал); бот передаёт свой коллектор,
@@ -286,17 +288,23 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         out("⏭ Скаута пропускаю — вечная тема из банка, разведка не нужна.\n"
             if evergreen else
             "⏭ Скаута пропускаю (--skip-scout): Криейтор возьмёт последний бриф.\n")
-    elif age is not None and age < SCOUT_FRESH_HOURS:
+    elif not force_scout and age is not None and age < SCOUT_FRESH_HOURS:
         panel["Скаут"] = f"пропущен — бриф свежий ({age:.1f}ч)"
         out(f"⏭ Скаута пропускаю: последний бриф свежий ({age:.1f}ч < {SCOUT_FRESH_HOURS}ч) — "
             f"повторная разведка не нужна, берём его.\n")
-    elif age is not None and not scout_day:
+    elif not force_scout and age is not None and not scout_day:
         panel["Скаут"] = f"пропущен — не день разведки, бриф {age:.1f}ч"
         out(f"⏭ Скаута пропускаю: сегодня не день разведки (глубокий поиск Пн/Вт/Чт) — беру последний "
             f"бриф из банка ({age:.1f}ч). Мы не новостник: мануал Скаута + актуальность важнее горячки.\n")
     else:
-        panel["Скаут"] = "разведка запущена (брифа нет)" if age is None else "разведка запущена (день поиска)"
-        if age is None:
+        forced = force_scout and age is not None and (age < SCOUT_FRESH_HOURS or not scout_day)
+        panel["Скаут"] = ("разведка ФОРСИРОВАНА (--force-scout)" if forced
+                          else "разведка запущена (брифа нет)" if age is None
+                          else "разведка запущена (день поиска)")
+        if forced:
+            out(f"🔄 --force-scout: запускаю ПОЛНУЮ разведку принудительно — игнорирую гейт свежести "
+                f"(бриф {age:.1f}ч) и гейт «дня разведки». Обкатка источников/watermark/воронки.\n")
+        elif age is None:
             out("🔄 Брифа в банке нет — запускаю разведку (даже вне дня поиска: писать не из чего).\n")
         else:
             out(f"🔄 Последний бриф старше {SCOUT_FRESH_HOURS}ч ({age:.1f}ч), сегодня день разведки — "
@@ -471,7 +479,8 @@ def main() -> None:
     scope = "--scope" in sys.argv
     run_cycle(scope=scope, skip_scout="--skip-scout" in sys.argv,
               draft_only="--draft-only" in sys.argv, evergreen=not scope,
-              no_image="--no-image" in sys.argv)
+              no_image="--no-image" in sys.argv,
+              force_scout="--force-scout" in sys.argv)
 
 
 if __name__ == "__main__":
