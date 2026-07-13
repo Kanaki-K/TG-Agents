@@ -79,3 +79,40 @@ def test_good_headline_no_metaphor_warn():
     _, warns = creator_tools._lint(
         "💸 20% майнеров в убытке. Это поломка или уборка?\n\nтело", "flagship")
     assert not any("глагол-метафора" in w for w in warns)
+
+
+# --- scope: заголовок = ОДИН крючок (манифест §1) ---
+
+def test_scope_headline_two_sentences_statement_tail_warns():
+    # утверждение + приколка = ДВА предложения → ругаем
+    _, warns = creator_tools._lint(
+        "📈 Robinhood запустил блокчейн для акций. Пришли мемы\n\nтело поста", "scope")
+    assert any("ДВУХ предложени" in w for w in warns)
+
+
+def test_scope_headline_statement_plus_question_warns():
+    # «утверждение. вопрос?» ТОЖЕ два предложения → ругаем (владелец 13.07: ровно ОДНО предложение)
+    _, warns = creator_tools._lint(
+        "💸 700 млрд$ домой каждый год. Банк или крипта?\n\nтело поста", "scope")
+    assert any("ДВУХ предложени" in w for w in warns)
+
+
+def test_scope_headline_single_sentence_ok():
+    # одно утверждение — ок; и одиночный вопрос — ок; тег-рубрика «🌐 LINK | …» не считается
+    for good in ("📈 Robinhood построил блокчейн для акций\n\nтело",
+                 "❓ Кто пришёл на блокчейн первым?\n\nтело",
+                 "🌐 LINK | Chainlink в банках Европы и Кореи\n\nтело"):
+        _, warns = creator_tools._lint(good, "scope")
+        assert not any("ДВУХ предложени" in w for w in warns), good
+
+
+# --- scope: слова-костыли и филлеры ---
+
+def test_scope_crutch_relsa_warns():
+    _, warns = creator_tools._lint("📈 Заголовок\n\nРельса есть, осталось разрешение", "scope")
+    assert any("КОСТЫЛЬ" in w for w in warns)
+
+
+def test_scope_filler_pod_shumom_warns():
+    _, warns = creator_tools._lint("📈 Заголовок\n\nПервую неделю мемкоин, но под шумом растёт TVL", "scope")
+    assert any("ФИЛЛЕР" in w for w in warns)
