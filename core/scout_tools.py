@@ -17,7 +17,7 @@ from datetime import date
 from connectors.telegram_scan import read as tg_read
 from connectors.web_sources import feeds
 from connectors.x_scan import read as x_read
-from core import analytics_tools, config, market_tools, scout_seen, untrusted
+from core import analytics_tools, config, market_tools, scout_funnel, scout_seen, untrusted
 
 PENDING = config.ROOT / "memory" / "sources.pending.md"
 PENDING_X = config.ROOT / "memory" / "x_leaders.pending.md"
@@ -373,6 +373,7 @@ def dispatch(name: str, args: dict) -> str:
             items, "channel",
             lambda it: f"{it.get('channel')}#{it.get('id')}" if it.get("id") is not None
             else f"{it.get('channel')}|{it.get('date')}|{(it.get('text') or '')[:40]}")
+        items = scout_funnel.sift(items)  # дешёвый отсев мусора/дублей/офф-ниши (Haiku), если вал большой
         return _render_tg(items)
     if name == "scan_x":
         items = x_read.recent(int(args.get("limit_per_account", 6)),
@@ -381,6 +382,7 @@ def dispatch(name: str, args: dict) -> str:
         items = scout_seen.filter_new(
             items, "handle",
             lambda it: it.get("url") or f"{it.get('handle')}|{(it.get('text') or '')[:60]}")
+        items = scout_funnel.sift(items)  # отсев emoji-спама/промо/дублей до Sonnet (Haiku)
         return _render_x(items)
     if name == "fetch_url":
         return untrusted.wrap(feeds.fetch_page(args["url"]), f"страница {args['url']}")
