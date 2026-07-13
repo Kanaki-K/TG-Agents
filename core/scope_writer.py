@@ -133,6 +133,8 @@ FIX = (
     "— ⚠️ конфликт → поставь значение ИЗ БРИФА дословно (НЕ округляй в меньшую сторону; при нужде сверь "
     "web_search). 2FA придрался к ВЕРНОМУ числу (совпадает с брифом, претензия лишь к «тиру источника») — НЕ трогай;\n"
     "— ❓ не подтверждено → убери цифру/утверждение ИЛИ смягчи, БЕЗ выдуманной точной цифры;\n"
+    "— ⚠️ ТЕМП (свежесть/подача) → выведи свежий повод и его дату на ПЕРВЫЙ план, дай сигнал «сейчас»; "
+    "старые годы/события оставь ТОЛЬКО как явную аналогию-сравнение, не как то, о чём пост;\n"
     "— ✅ не трогай.\n\nПОСТ:\n{post}\n\nВЕРДИКТ ФАКТЧЕКА:\n{verdict}\n\n"
     "Внеси правки, вызови save_draft(kind='scope') с ФИНАЛОМ, выведи ТОЛЬКО финальный пост (без меты)."
 )
@@ -357,9 +359,10 @@ def write(theme: str = "", avoid: str = "") -> str:
     media_subj = _parse_media_subject(post)   # якорь-сущности повода для vision (тоже до 2FA)
     # 2FA обязателен (цифры — красная линия). Свой фактчек на Sonnet, правки — своей же моделью/контекстом.
     try:
-        verdict = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=key)
+        verdict = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=key,
+                                     scope=True)  # +темпоральная свежесть: новостной повод не устарел
         if verify.has_issues(verdict):
-            logging.info("scope 2FA: есть замечания — правлю фактами")
+            logging.info("scope 2FA: есть замечания — правлю фактами/свежестью")
             fixed = _turn(FIX.format(post=post.split("[[SPLIT]]")[0], verdict=verdict), model, key, thinking)
             post = fixed or post
     except Exception:
