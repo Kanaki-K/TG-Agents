@@ -10,14 +10,6 @@ def test_recommended_theme_extracts_quoted():
     assert dedup.all_repeats(v) is False
 
 
-def test_recommended_theme_rejects_paused_domain(monkeypatch):
-    # МЕХАНИЗМ (не продуктовый список): рекомендацию по АКТИВНО-паузному домену не отдаём.
-    # PAUSED_STICKY пуст по умолчанию (опустошён 13.07) — вводим тест-домен и проверяем сам гейт.
-    monkeypatch.setattr(dedup, "PAUSED_STICKY", ["стейбл"])
-    v = "РЕКОМЕНДУЮ: «Стейблкоины как рельсы для AI-агентов»\nСТАТУС: ОК"
-    assert dedup.recommended_theme(v) == ""
-
-
 def test_all_repeats_blocks():
     v = ("🔁 «x402» — было #441 [2026-06-23]\n"
          "🔁 «ETF-приток» — было #438 [2026-06-19]\n"
@@ -33,21 +25,12 @@ def test_status_ok_not_blocked():
     assert dedup.recommended_theme(v) == "b как новый угол"
 
 
-def test_warn_tier_not_blocked():
-    # ⚠️ «та же сущность недавно, угол потенциально иной» — флаг, но НЕ блок выпуска.
-    # Тема НЕ-paused, иначе жёсткий стоп срежет рекомендацию в "" (см. test_recommended_theme_rejects_paused_domain)
-    v = ("⚠️ «Майнеры и себестоимость» — была #439 [2026-06-23], бери только радикально иной угол\n"
-         "РЕКОМЕНДУЮ: «Себестоимость майнинга — радикально иной угол + отсылка к #439»\n"
-         "СТАТУС: ОК")
-    assert dedup.all_repeats(v) is False
-    assert "#439" in dedup.recommended_theme(v)
-
-
 def test_fallback_without_status_line():
-    # модель не дала строку СТАТУС — фолбэк по значкам 🆕/⚠️/🔁
+    # модель не дала строку СТАТУС — фолбэк по значкам. Схема БИНАРНАЯ 🆕/🔁 (13.07): только 🆕 разблокирует.
     assert dedup.all_repeats("🔁 «a» — было\n🔁 «b» — было") is True
     assert dedup.all_repeats("🆕 «a» — ново\n🔁 «b» — было") is False
-    assert dedup.all_repeats("⚠️ «a» — недавно была\n🔁 «b» — было") is False
+    # ⚠️ выпилен из схемы: стрей-⚠️ БОЛЬШЕ НЕ спасает от блока (раньше считался «ок»)
+    assert dedup.all_repeats("⚠️ «a» — было\n🔁 «b» — было") is True
     assert dedup.all_repeats("") is False
 
 
@@ -62,32 +45,12 @@ def test_repeat_themes_extracts_avoid_list():
     assert "новый угол" not in avoid          # 🆕 в список «не брать» не попадает
 
 
-def test_repeat_themes_only_paused_note_when_no_repeats():
-    # нет 🔁 → список повторов пуст, но paused_note добавляется ВСЕГДА (детерминированный запрет доменов, dedup.py:304)
-    assert dedup.repeat_themes("🆕 «a» — ново\nСТАТУС: ОК") == dedup.paused_note()
+def test_repeat_themes_empty_when_no_repeats():
+    # нет 🔁 → список повторов пуст (после выпила paused-note слоя 13.07)
+    assert dedup.repeat_themes("🆕 «a» — ново\nСТАТУС: ОК") == ""
 
 
 def test_empty_brief_soft_ok():
     v = dedup.check("")
     assert dedup.all_repeats(v) is False
     assert dedup.recommended_theme(v) == ""
-
-
-# --- paused-гейт: граница слова (фикс ложных блоков, 09.07) ---
-
-def test_hits_paused_no_false_positive_midword(monkeypatch):
-    # РЕГРЕСС: «мика» (пауза MiCA) НЕ должна ловиться внутри «эконоМИКА / динаМИКА» —
-    # был substring-баг, который заворачивал любой макро-пост ПОСЛЕ оплаченной генерации.
-    # Домены вводим тест-списком (прод-список пуст с 13.07) — проверяем границу слова.
-    monkeypatch.setattr(dedup, "PAUSED_STICKY", ["мика", "платёж"])
-    assert dedup._hits_paused("мировая экономика и рыночная динамика") == ""
-    assert dedup._hits_paused("обычный пост про биткоин, ставку ФРС и золото") == ""
-    assert dedup._hits_paused("") == ""
-
-
-def test_hits_paused_stemming_at_word_start(monkeypatch):
-    # стемминг сохранён: паузное слово ловится как НАЧАЛО слова (дата-независимо).
-    # Механизм проверяем на тест-домене — не завязываемся на конкретный прод-бан.
-    monkeypatch.setattr(dedup, "PAUSED_STICKY", ["стейбл", "mica"])
-    assert dedup._hits_paused("стейблкоины как рельсы") == "стейбл"
-    assert dedup._hits_paused("новость про MiCA регуляцию") == "mica"

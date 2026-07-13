@@ -135,7 +135,7 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: 
     return text or ""
 
 
-def _run_scope(avoid: str = "") -> str:
+def _run_scope(avoid: str = "", recommend: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
     гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится."""
@@ -146,7 +146,7 @@ def _run_scope(avoid: str = "") -> str:
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
-    text = _threaded(scope_writer.write, "", avoid)
+    text = _threaded(scope_writer.write, "", avoid, recommend)
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
 
@@ -314,11 +314,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
     # АНТИ-ПОВТОР — ВЕТКИ РАЗДЕЛЕНЫ (scope и флагман не мешают друг другу):
-    #  • SCOPE — как ДО этой сессии: независимый Haiku-дедуп (repeat_themes + all_repeats-стоп) +
-    #    финальный детерминированный _hits_paused ниже. Эту ветку НЕ трогаем.
-    #  • ФЛАГМАН (доработка сессии) — Криейтор САМ видит покрытие канала (topics_digest в его контексте)
-    #    и берёт тему из банка; отдельный Haiku-проход ему не нужен, avoid/hint пустые.
-    avoid = hint = ""
+    #  • SCOPE — независимый дедуп (Sonnet): фейл-закрыто до генерации + пост-сверка после (all_repeats-стоп).
+    #  • ФЛАГМАН — Криейтор САМ видит покрытие канала (topics_digest в его контексте) и берёт тему из банка;
+    #    отдельный дедуп-проход ему не нужен, avoid/hint пустые.
+    avoid = hint = scope_rec = ""
     if scope:
         try:
             cost.set_context("dedup")  # чтобы анти-повтор логировался под своей меткой, не под чужой
@@ -326,6 +325,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                                   api_key=config.agent_api_key(config.load_agent("creator")))
             out("🔁 [Анти-повтор] Сверка тем брифа с уже опубликованным (свежая выгрузка):")
             out(str(verdict) + "\n")
+            if dedup.failed(verdict):        # сам вызов сорвался → ФЕЙЛ-ЗАКРЫТО (без сверки не пишем)
+                raise RuntimeError("анти-повтор вернул сбой")
             if dedup.all_repeats(verdict):
                 panel["🔁 анти-повтор"] = "СТОП — все направления брифа уже выходили"
                 out("⛔ Все направления брифа — повторы уже вышедших постов. Пост НЕ делаю — дубль в "
@@ -333,9 +334,18 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 out(_panel_block())
                 return "\n".join(report)
             avoid = dedup.repeat_themes(verdict)
+            scope_rec = dedup.recommended_theme(verdict)  # СВЕЖАЯ 🆕-рекомендация — ориентир скоупу (не рельса)
             panel["🔁 анти-повтор"] = f"повтор тем: {avoid}" if avoid else "повторов нет — тема свежая"
+            if scope_rec:
+                panel["🧭 рекоменд."] = scope_rec
         except Exception:
-            logging.exception("Анти-повтор не сработал — не блокирую, тему дальше берём из брифа сами")
+            # ФЕЙЛ-ЗАКРЫТО (scope): анти-повтор упал → НЕ публикуем. Раньше «не блокировали» и писали
+            # вслепую — а это ровно риск дубля, ради которого дедуп и существует. Пропуск дешевле дубля.
+            logging.exception("Анти-повтор упал — фейл-закрыто: пропускаю прогон")
+            panel["🔁 анти-повтор"] = "⛔ СБОЙ — не публикую (фейл-закрыто)"
+            out("⛔ Анти-повтор упал — НЕ публикую этот прогон: без сверки риск дубля. Повтори позже.")
+            out(_panel_block())
+            return "\n".join(report)
     # ФЛАГМАН (Модель А): ОДНА тема из банка по РОТАЦИИ — пикер выбирает в пайплайне (не отдаём 200 тем
     # в промпт), пропуская вышедшие <полугода назад. Помечаем [вышло ДАТА] ТОЛЬКО при реальной публикации.
     theme = theme_why = ""
@@ -354,23 +364,27 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid) if scope else _run_creator("post", avoid, hint, theme,
+        post = _run_scope(avoid, scope_rec) if scope else _run_creator("post", avoid, hint, theme,
                                                             evergreen=evergreen, no_image=no_image)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
         return "\n".join(report)
-    # ЖЁСТКИЙ СТОП scope (детерминированно, как у флагмана): scope сам себя не ловит — если написал повод
-    # из paused/затёртого домена (x402/стейблы/смена-рук/Strategy…), код заворачивает. В канал не идёт:
-    # лучше молчать, чем фастфуд-новость по обдроченной теме. Список пауз — core/dedup.py PAUSED_DOMAINS.
     if scope and post:
-        _hit = dedup._hits_paused(post)
-        if _hit:
-            panel["публикация"] = f"⛔ СТОП — paused-домен «{_hit}»"
-            out(f"⛔ scope написал затёртый/paused-домен («{_hit}») — НЕ публикую. Повод обдрочен, лучше "
-                "молчать, чем гнать фастфуд. Список пауз правится в core/dedup.py (PAUSED_DOMAINS).")
-            out(_panel_block())
-            out("\n" + cost.summary())
-            return "\n".join(report)
+        # ПОСТ-СВЕРКА (writer-wander): дедуп проверял КАНДИДАТОВ брифа, а писатель мог свернуть на свою
+        # тему. Прогоняем ИТОГОВЫЙ пост по окну канала ещё раз — повторяет свежий пост → заворачиваем.
+        # Вторичная сеть (осн. сверка уже прошла до генерации) → фейл-ОТКРЫТО: сбой не роняет публикацию.
+        try:
+            pv = dedup.check(post.split("[[SPLIT]]")[0],
+                             api_key=config.agent_api_key(config.load_agent("creator")))
+            if not dedup.failed(pv) and dedup.all_repeats(pv):
+                panel["публикация"] = "⛔ СТОП — итоговый пост повторяет канал (пост-сверка)"
+                out("⛔ Пост-сверка: итоговый пост повторяет свежий пост канала — НЕ публикую "
+                    "(писатель ушёл от согласованной темы):\n" + str(pv))
+                out(_panel_block())
+                out("\n" + cost.summary())
+                return "\n".join(report)
+        except Exception:
+            logging.exception("Пост-сверка scope упала — пропускаю её (осн. сверка до генерации уже прошла)")
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
     # 2FA уже прошёл внутри его ветки — здесь его НЕ дублируем.
     if post and not scope:

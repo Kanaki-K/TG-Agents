@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from core import io_safe
@@ -362,17 +362,21 @@ def find_posts(query: str, n: int = 8) -> str:
     return f"Найдено {len(hits)} (по «{query}»):\n" + "\n".join(_fmt_row(p, "views") for p in hits)
 
 
-def topics_digest(limit: int = 0) -> str:
-    """Компактная сводка тем ВСЕХ постов (id, дата, тема, заголовок, суть) — свежие сверху.
+def topics_digest(limit: int = 0, weeks: int = 0) -> str:
+    """Компактная сводка тем постов (id, дата, тема, заголовок, суть) — свежие сверху.
 
     Готовый материал для анти-повтора (core/dedup): по строке на пост, недавние первыми (свежий
-    повтор заметнее всего). limit>0 — только N последних. Источник тем — post_topics.json (его
-    наполняет Аналитик через enrich_topics); даты берём из channel_posts.json.
+    повтор заметнее всего). limit>0 — только N последних. weeks>0 — только окно последних N недель
+    (по ДАТЕ): анти-повтору сверять надо со СВЕЖИМ, а не с 372 постами истории (в простыне модель
+    топит нужный пост). Источник тем — post_topics.json (наполняет Аналитик); даты — channel_posts.json.
     """
     posts = [p for p in _load_posts() if p.get("dt")]
     if not posts:
         return "(данных по постам нет — сначала собери выгрузку канала)"
     posts.sort(key=lambda p: p["dt"], reverse=True)
+    if weeks > 0:                          # окно свежести: сверяем только с недавним (дата решает, не угол)
+        cutoff = posts[0]["dt"] - timedelta(weeks=weeks)
+        posts = [p for p in posts if p["dt"] >= cutoff]
     if limit > 0:
         posts = posts[:limit]
     lines = []
