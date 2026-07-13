@@ -226,9 +226,24 @@ TOOLS = [
 ]
 
 
+def _all_errors_banner(items: list[dict], what: str) -> str:
+    """Громкий сигнал, когда источник упал ЦЕЛИКОМ (все записи — ошибки). Пусто — есть живые записи.
+
+    Иначе «X ослеп / RSS лёг» тонет среди строк и Скаут может не заметить → бриф без сигнала,
+    а владелец не в курсе. Явный баннер = Скаут обязан сообщить владельцу (см. SKILL)."""
+    if not items or any(isinstance(it, dict) and not it.get("error") for it in items):
+        return ""
+    errs = "\n".join(f"⚠ {it.get('name') or it.get('channel') or it.get('handle') or '?'}: "
+                     f"{it.get('error')}" for it in items if isinstance(it, dict))
+    return (f"🛑 ИСТОЧНИК НЕДОСТУПЕН — весь {what} вернул только ошибки. Вероятно, сессия/доступ "
+            f"протух. СООБЩИ ВЛАДЕЛЬЦУ и не выдавай отсутствие сигнала за «тихий день»:\n{errs}")
+
+
 def _render(items: list[dict]) -> str:
     if not items:
         return "Свежих записей не найдено."
+    if banner := _all_errors_banner(items, "RSS-скан"):
+        return banner
     out = []
     for it in items:
         if it.get("error"):
@@ -248,6 +263,8 @@ def _render(items: list[dict]) -> str:
 def _render_tg(items: list[dict]) -> str:
     if not items:
         return "Свежих сообщений в ТГ-каналах не найдено."
+    if banner := _all_errors_banner(items, "ТГ-скан"):
+        return banner
     out = []
     for it in items:
         if it.get("error"):
@@ -265,6 +282,8 @@ def _render_tg(items: list[dict]) -> str:
 def _render_x(items: list[dict]) -> str:
     if not items:
         return "Свежих твитов у лидеров X не найдено."
+    if banner := _all_errors_banner(items, "X-скан"):
+        return banner
     out = []
     for it in items:
         if it.get("error"):
