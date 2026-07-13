@@ -1,14 +1,44 @@
-# RSS-фиды Тир-2 по трекам (проверены WebFetch). Референс-ядро, не закрытый список:
-# Скаут калибруется на нём и ищет глубже сам. Подробности/тиры — в memory/sources.md.
+# RSS-фиды по трекам. Референс-ядро, не закрытый список: Скаут калибруется на нём и
+# ищет глубже сам. Подробности/тиры — в memory/sources.md.
+#
+# ЯДРО (Тир-2, проверены WebFetch) — медленная мысль/тезисы. НЕ трогать без причины.
+# РАСШИРЕНИЕ (быстрые новости / ресёрч / первоисточники) — добавлено для широты и свежести.
+#   Эти URL НЕ провалидированы в контейнере (нет сети) — проверь первым прогоном refresh:
+#   битый фид не роняет скан, только строка «⚠ фид не прочитан» (feeds.py изолирует сбой).
+#   Что не читается — правь URL или удаляй.
 crypto:
+  # — ядро: тезис/макро/ончейн (медленное, глубокое) —
   - name: Lyn Alden
     url: https://www.lynalden.com/feed/
   - name: Arthur Hayes
     url: https://cryptohayes.substack.com/feed
   - name: Glassnode Research
     url: https://research.glassnode.com/rss/
+  # — расширение: быстрые новости (событие дня, эффект «первым увидел») —
+  - name: The Block
+    url: https://www.theblock.co/rss.xml
+  - name: Decrypt
+    url: https://decrypt.co/feed
+  - name: CoinDesk
+    url: https://www.coindesk.com/arc/outboundfeeds/rss/
+  - name: Blockworks
+    url: https://blockworks.co/feed
+  # — расширение: тезис/ресёрч (угол, не пересказ) —
+  - name: Bankless
+    url: https://www.bankless.com/rss/feed
+  - name: The Defiant
+    url: https://thedefiant.io/api/feed
+  # — расширение: первоисточники (анонсы раньше пересказчиков) —
+  - name: a16z crypto
+    url: https://a16zcrypto.com/feed/
+  - name: Ethereum Foundation
+    url: https://blog.ethereum.org/en/feed.xml
 ai:
+  # — ядро —
   - name: Stratechery (Ben Thompson)
     url: https://stratechery.com/feed/
   - name: Import AI (Jack Clark)
     url: https://importai.substack.com/feed
+  # — расширение: инфра/капекс AI (крипто-мост: энергия→ликвидность, агенты→платежи) —
+  - name: SemiAnalysis
+    url: https://www.semianalysis.com/feed
