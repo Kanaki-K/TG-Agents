@@ -55,6 +55,7 @@ async def _collect(channels: list[dict], limit: int) -> list[dict]:
                     items.append({
                         "channel": name,
                         "track": track,
+                        "id": getattr(msg, "id", None),  # стабильная идентичность для watermark Скаута
                         "date": msg.date.strftime("%Y-%m-%d %H:%M") if msg.date else "",
                         "text": text[:400],
                     })
