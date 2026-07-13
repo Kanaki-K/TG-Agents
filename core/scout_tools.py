@@ -373,6 +373,20 @@ def _propose_source(args: dict) -> str:
             "Покажи владельцу и дождись одобрения, прежде чем считать его доверенным источником.")
 
 
+def _real(items: list[dict]) -> list[dict]:
+    return [it for it in items if isinstance(it, dict) and not it.get("error")]
+
+
+def _fresh_or_note(raw: list[dict], filtered: list[dict], render_fn, what: str) -> str:
+    """Если сырьё БЫЛО, но watermark всё отсеял (уже видели) — это НЕ сбой доступа, а «нового нет».
+    Без этого Скаут читает пустоту как «источник упал / проверь токены» и поднимает ложную тревогу."""
+    if _real(raw) and not _real(filtered):
+        return (f"✅ {what}: источник прочитан, НО новых записей с прошлой разведки нет — watermark "
+                f"отсеял уже виденное. Это НЕ сбой доступа и НЕ «тихий рынок»: просто с прошлого брифа "
+                f"свежего у этих источников не появилось. Токены/сессию проверять НЕ нужно.")
+    return render_fn(filtered)
+
+
 def dispatch(name: str, args: dict) -> str:
     shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
     if shared is not None:
@@ -381,28 +395,28 @@ def dispatch(name: str, args: dict) -> str:
     if priced is not None:
         return priced
     if name == "scan_sources":
-        items = feeds.fetch_recent(int(args.get("per_source", 4)),
-                                   args.get("source", ""), args.get("track", ""))
-        items = scout_seen.filter_new(items, "name", lambda it: it.get("link") or it.get("title"))
-        return _render(items)
+        raw = feeds.fetch_recent(int(args.get("per_source", 4)),
+                                 args.get("source", ""), args.get("track", ""))
+        items = scout_seen.filter_new(raw, "name", lambda it: it.get("link") or it.get("title"))
+        return _fresh_or_note(raw, items, _render, "RSS-скан")
     if name == "scan_telegram":
-        items = tg_read.recent(int(args.get("limit_per_channel", 5)),
-                               args.get("channel", ""), args.get("track", ""))
+        raw = tg_read.recent(int(args.get("limit_per_channel", 5)),
+                             args.get("channel", ""), args.get("track", ""))
         items = scout_seen.filter_new(
-            items, "channel",
+            raw, "channel",
             lambda it: f"{it.get('channel')}#{it.get('id')}" if it.get("id") is not None
             else f"{it.get('channel')}|{it.get('date')}|{(it.get('text') or '')[:40]}")
         items = scout_funnel.sift(items)  # дешёвый отсев мусора/дублей/офф-ниши (Haiku), если вал большой
-        return _render_tg(items)
+        return _fresh_or_note(raw, items, _render_tg, "ТГ-скан")
     if name == "scan_x":
-        items = x_read.recent(int(args.get("limit_per_account", 6)),
-                              args.get("handle", ""), args.get("track", ""),
-                              int(args.get("max_accounts", 12)), args.get("tier", ""))
+        raw = x_read.recent(int(args.get("limit_per_account", 6)),
+                            args.get("handle", ""), args.get("track", ""),
+                            int(args.get("max_accounts", 12)), args.get("tier", ""))
         items = scout_seen.filter_new(
-            items, "handle",
+            raw, "handle",
             lambda it: it.get("url") or f"{it.get('handle')}|{(it.get('text') or '')[:60]}")
         items = scout_funnel.sift(items)  # отсев emoji-спама/промо/дублей до Sonnet (Haiku)
-        return _render_x(items)
+        return _fresh_or_note(raw, items, _render_x, "X-скан")
     if name == "fetch_url":
         return untrusted.wrap(feeds.fetch_page(args["url"]), f"страница {args['url']}")
     if name == "save_brief":
