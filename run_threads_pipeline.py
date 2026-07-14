@@ -12,16 +12,9 @@
 """
 import logging
 
-from core import (config, cost, dedup, flagship_journal, logging_setup, runmode, threads_creator,
-                  threads_dedup)
+from core import cost, flagship_journal, logging_setup, runmode, threads_creator
 
 logging_setup.setup()
-
-
-def _candidate(src: dict) -> str:
-    """Тема+первые строки вышедшего флагмана — то, что анти-повтор сверяет с историей Threads."""
-    head = "\n".join(l.strip() for l in (src.get("text") or "").splitlines() if l.strip())[:400]
-    return f"{src.get('theme') or ''}\n{head}".strip()
 
 
 def run_threads_cycle(hint: str = "", emit=print) -> str:
@@ -48,23 +41,9 @@ def run_threads_cycle(hint: str = "", emit=print) -> str:
         return "\n".join(report)
 
     out(f"🧵 Источник: флагман от {src.get('date', '?')} — «{src.get('theme') or '(без темы)'}»")
-
-    # АНТИ-ПОВТОР (зеркало ТГ-дедупа, но по истории Threads). Режим ревью → фейл-ОТКРЫТО: предупреждаем,
-    # но серию всё равно готовим — публикует владелец руками, он и решает (для авто-публикации/новостного
-    # формата позже поднимем до фейл-закрыто, как у scope). Свежий флагман почти всегда 🆕.
-    try:
-        key = config.agent_api_key(config.load_agent("creator"))
-        verdict = threads_dedup.check(_candidate(src), api_key=key)
-        out("🔁 [Анти-повтор] Сверка с историей Threads (окно свежести):")
-        out(str(verdict))
-        if not dedup.failed(verdict) and dedup.all_repeats(verdict):
-            out("⚠️ Похоже, этот тезис уже был в Threads — возможен ДУБЛЬ. Серию соберу, но перед "
-                "постановкой в отложку реши сам, не повтор ли это.\n")
-        else:
-            out("")
-    except Exception:
-        logging.exception("Threads анти-повтор упал — не блокирую (ревью-режим), продолжаю")
-
+    # Анти-повтор/домен/ориентир на мини-флагмане НЕ нужны: флагман уже прошёл все гейты (Скаут,
+    # антиповтор темы, пикер, 2FA) ДО создания — мы его лишь дистиллируем. Эта машинерия — для Формата 2
+    # (он originates контент), модули threads_dedup/orientation_digest ждут его, к мини-флагману не привязаны.
     out("✍️ Дистиллирую в мини-серию Threads (Sonnet, свой контекст — без Скаута/2FA/обложки)...\n")
     try:
         series = threads_creator.write(hint)
