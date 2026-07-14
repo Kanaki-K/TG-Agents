@@ -1,25 +1,33 @@
-"""🧵 Threads-пайплайн (мини-флагман) — Фаза 1: дистилляция вышедшего ТГ-флагмана в серию НА РЕВЬЮ.
+"""🧵 Threads-пайплайн (мини-флагман) — Фаза 1: дистилляция вышедшего ТГ-флагмана в серию постов.
 
-    python run_threads_pipeline.py     # дистиллировать последний вышедший флагман → серия в терминал/чат
+    python run_threads_pipeline.py                 # дистилляция → серия в ОТЛОЖКУ тестового ТГ-канала
+    python run_threads_pipeline.py --review-only   # только показать серию, в отложку НЕ ставить
 
-Фаза 1 НЕ публикует в Threads: выдаёт серию постов на проверку (в ТГ-бота командой /run_threads с
-пометкой [THREADS]). Отложку в Threads владелец ставит РУКАМИ в приложении (нативная отложка есть).
-Публикация через API — веха E, отдельно.
+ОБКАТКА (Фаза 1): серию кладём в нативную «Отложенную» очередь ТЕСТОВОГО ТГ-канала — ТЕМ ЖЕ механизмом,
+что флагман/скоуп (telegram_publish, MTProto, слот content_plan) — чтобы увидеть посты живьём. Это НЕ
+живая публикация: очередь на проверку, владелец смотрит/удаляет в «Отложенных». Реальная публикация в
+Threads (веха E) — отдельно; пока в само Threads владелец ставит отложку руками в приложении.
 
 Скаут в этой ветке НЕ участвует: мини-флагман ничего не разведывает — он дистиллирует уже готовый,
-уже прошедший 2FA флагман (вход — core.flagship_journal). Второй Threads-формат (аналог scope) —
-позже, отдельной веткой. Изоляция от ТГ-мира: общий только нейтральный слой (config/llm/cost).
+уже прошедший 2FA флагман (вход — core.flagship_journal). Анти-повтор/домен/ориентир — не нужны (флагман
+выверен до создания), это машинерия Формата 2. Изоляция от ТГ-мира: общий только нейтральный слой.
 """
 import logging
+import sys
+from datetime import timedelta
 
-from core import cost, flagship_journal, logging_setup, runmode, threads_creator
+from connectors.telegram_publish import publish as tg_publish
+from core import config, content_plan, cost, flagship_journal, logging_setup, runmode, threads_creator
 
 logging_setup.setup()
 
+THREADS_SERIES_GAP_MIN = 10   # разнос постов серии по времени, чтобы легли ОТДЕЛЬНЫМИ отложенными
 
-def run_threads_cycle(hint: str = "", emit=print) -> str:
-    """Полный прогон мини-флагмана: журнал → дистилляция → серия на ревью. ВОЗВРАЩАЕТ отчёт.
 
+def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
+    """Полный прогон мини-флагмана: журнал → дистилляция → серия → ОТЛОЖКА тестового ТГ-канала. Отчёт.
+
+    publish=False (или --review-only / тест-режим) — только показать серию, в отложку не ставить.
     emit — куда слать прогресс (print в терминал; бот передаёт свой коллектор, чтобы вернуть в чат)."""
     report: list[str] = []
 
@@ -64,13 +72,39 @@ def run_threads_cycle(hint: str = "", emit=print) -> str:
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    out(f"📝 --- МИНИ-ФЛАГМАН · {len(posts)} пост(а) на ревью [THREADS] ---\n")
+    out(f"📝 --- МИНИ-ФЛАГМАН · {len(posts)} пост(а) [THREADS] ---\n")
     for i, p in enumerate(posts, 1):
         over = "  ⚠️ >500" if len(p) > 500 else ""
         out(f"🧵 [THREADS {i}/{len(posts)}]  ({len(p)} симв.{over})")
         out(p)
         out("")
-    out("=== Готово. Проверь серию; понравилось — поставь в отложку Threads руками (приложение). ===")
+
+    # ОБКАТКА: серию — в ОТЛОЖКУ тестового ТГ-канала (тем же механизмом, что флагман/скоуп). НЕ живая
+    # публикация: очередь на проверку. В тест-режиме (дешёвая модель) и при --review-only — не ставим.
+    if not publish or _mode["mode"] == "test":
+        why = "тест-режим" if _mode["mode"] == "test" else "review-only"
+        out(f"🧪 В отложку НЕ ставлю ({why}) — серия выше на проверку.")
+        out("\n" + cost.summary())
+        return "\n".join(report)
+    channel = config.get_optional("PUBLISH_CHANNEL")
+    if not channel:
+        out("⚠️ PUBLISH_CHANNEL не задан в .env — публиковать некуда, серия осталась на ревью выше.")
+        out("\n" + cost.summary())
+        return "\n".join(report)
+    out(f"\n🗓 Ставлю серию в ОТЛОЖКУ канала «{channel}» (обкатка; это НЕ живая публикация)...")
+    base = content_plan.next_slot("short")   # якорь-слот как у короткого; посты серии разнесём по времени
+    ok = 0
+    for i, p in enumerate(posts):
+        when = base + timedelta(minutes=THREADS_SERIES_GAP_MIN * i)
+        body = f"🧵 [THREADS · мини-флагман {i + 1}/{len(posts)}]\n\n{p}"
+        res = tg_publish.publish(channel, body, None, when)
+        if res.get("ok"):
+            ok += 1
+            out(f"  ✅ пост {i + 1}/{len(posts)} → {content_plan.human(when)} ({res.get('mode', '?')})")
+        else:
+            out(f"  ❌ пост {i + 1}/{len(posts)}: {res.get('error', '?')}")
+    out(f"🗓 В отложке канала: {ok}/{len(posts)} постов. Проверь/удали в нативных «Отложенных» (это тест).")
+    out("Для реального Threads — ставь отложку руками в приложении (веха E: авто-публикация — позже).")
     out("\n" + cost.summary())
     return "\n".join(report)
 
@@ -78,7 +112,7 @@ def run_threads_cycle(hint: str = "", emit=print) -> str:
 def main() -> None:
     logging_setup.set_agent("threads-pipeline")
     logging_setup.new_request()
-    run_threads_cycle()
+    run_threads_cycle(publish="--review-only" not in sys.argv)
 
 
 if __name__ == "__main__":
