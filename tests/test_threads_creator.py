@@ -41,3 +41,21 @@ def test_pipeline_stops_on_empty_journal(tmp_path, monkeypatch):
     out = rtp.run_threads_cycle(emit=lambda *_: None)           # emit-заглушка: без вывода в терминал
     low = out.lower()
     assert "журнал" in low and "пуст" in low                    # штатный отказ, не падение/не вызов API
+
+
+def test_orientation_low_data_fallback():
+    from connectors.threads import report
+    assert "мануал" in report.orientation_digest(posts=[], topics={}).lower()   # нет данных → на мануал
+
+
+def test_orientation_populated():
+    from connectors.threads import report
+    # 5 зрелых чистых постов (июнь) + 1 свежий (июль) задаёт «сейчас» → июньские mature (age ~30д)
+    posts = [{"id": i, "date": "2026-06-01T10:00:00", "views": 300, "likes": 10,
+              "people_count": 3, "people_replies": 4, "reposts": 2, "has_media": i <= 3}
+             for i in range(1, 6)]
+    posts.append({"id": 99, "date": "2026-07-01T10:00:00", "views": 100})
+    topics = {str(i): {"title": f"Пост {i}", "theme": "личное", "summary": "s"} for i in range(1, 6)}
+    d = report.orientation_digest(posts=posts, topics=topics)
+    assert "личное" in d                                        # тема с n>=5 попала в ориентир
+    assert "медиа" in d.lower()                                 # есть и медиа, и текст → строка сравнения

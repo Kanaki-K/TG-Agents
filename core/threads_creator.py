@@ -15,6 +15,7 @@ import logging
 import re
 from datetime import date
 
+from connectors.threads import report as threads_report
 from core import config, flagship_journal, llm, runmode
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
@@ -22,6 +23,7 @@ THREADS_MODEL = "claude-sonnet-4-6"       # короткий формат — Op
 THREADS_THINKING = None                   # короткому дистилляту глубокое мышление не нужно (дёшево)
 
 THREADS_DRAFTS_DIR = config.ROOT / "memory" / "threads_drafts"  # ОТДЕЛЬНО от ТГ-драфтов (изоляция)
+THREADS_LESSONS = config.ROOT / "memory" / "threads_lessons.md"  # уроки из правок владельца (петля)
 POST_SEP = "[[POST]]"                      # разделитель постов серии в выводе модели
 
 
@@ -36,6 +38,12 @@ def _system() -> str:
     он переносится с эталонов (threads_flagman_anchors), а не с ТГ-мозгов. Изоляция форматов."""
     persona = config.load_agent(AGENT_NAME)["persona"]
     anchors = _read("memory/threads_flagman_anchors.md") or "(эталонов пока нет — держись мануала)"
+    try:
+        orientation = threads_report.orientation_digest()
+    except Exception:
+        logging.exception("threads_creator: ориентир недоступен — пишу без него")
+        orientation = "(ориентир недоступен — держись мануала и эталонов)"
+    lessons = _read("memory/threads_lessons.md") or "(пока пусто — учусь на твоих правках Threads-серий)"
     ctx = (
         "## 🧵 ТЫ ДЕЛАЕШЬ МИНИ-ФЛАГМАН ДЛЯ THREADS\n"
         "ОТДЕЛЬНЫЙ формат. Правила ТГ-флагмана (антитеза на весь пост, 2800–4096 знаков, разделы 💡/💭, "
@@ -47,9 +55,13 @@ def _system() -> str:
         "Полный текст дистилляций владельца. Голос и приём нарезки переноси ОТСЮДА (как флагман с "
         "anchor_posts): payoff первой строкой, строки-биты, регистр «Вы», лишнее за борт.\n"
         f"{anchors}\n\n"
+        "## 📊 ОРИЕНТИР по твоим данным Threads — учитывай как РЕКОМЕНДАЦИЮ (не рельса, голос не подчиняем метрике)\n"
+        f"{orientation}\n\n"
         "## Канон бренда — аудитория и КРАСНЫЕ ЛИНИИ (memory/brand.md)\n"
         "Соблюдай красные линии: BTC не проигравший, без политоты/России/торговых сигналов.\n"
-        f"{_read('memory/brand.md')}\n"
+        f"{_read('memory/brand.md')}\n\n"
+        "## Уроки из ТВОИХ правок Threads-серий — ПРИМЕНЯЙ (memory/threads_lessons.md)\n"
+        f"{lessons}\n"
     )
     return llm.build_system(persona, ctx)
 
@@ -101,3 +113,83 @@ def write(hint: str = "") -> str:
     if text:
         _save(text, src)
     return text
+
+
+# --- Петля обучения на ПРАВКАХ владельца (token-независимо: учимся на редактуре, не на метриках) ---
+RECORD_THREADS_LESSON_TOOL = {
+    "name": "record_threads_lesson",
+    "description": "Усвоить УРОК из правки владельца к Threads-серии — добавить в memory/threads_lessons.md "
+                   "(грузится тебе к каждой дистилляции, ОТДЕЛЬНО от ТГ-уроков). Только устойчивые "
+                   "переносимые правила, не разовую косметику; один вызов — один урок. ПЕРЕД записью "
+                   "сверься: правило уже в мануале/эталонах/уроках — НЕ дублируй. После записи отчитайся.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "lesson": {"type": "string", "description": "устойчивое правило на будущее, одной фразой"},
+            "evidence": {"type": "string", "description": "что в правке навело (коротко, необязательно)"},
+        },
+        "required": ["lesson"],
+    },
+}
+
+
+def _record_lesson(lesson: str, evidence: str = "") -> str:
+    """Дописать урок в memory/threads_lessons.md с простым анти-дублем (не пишем, если уже есть)."""
+    lesson = (lesson or "").strip()
+    if not lesson:
+        return "пустой урок — не записал"
+    try:
+        existing = THREADS_LESSONS.read_text(encoding="utf-8") if THREADS_LESSONS.exists() else ""
+        if lesson.lower() in existing.lower():
+            return "похоже, такой урок уже есть — не дублирую"
+        THREADS_LESSONS.parent.mkdir(parents=True, exist_ok=True)
+        with THREADS_LESSONS.open("a", encoding="utf-8") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write(f"- {lesson}" + (f"  _(повод: {evidence.strip()})_" if evidence.strip() else "") + "\n")
+        return f"усвоил: {lesson}"
+    except Exception:
+        logging.exception("threads_creator: не смог записать урок")
+        return "не смог записать урок (см. лог)"
+
+
+def _dispatch(name: str, args: dict) -> str:
+    if name == "record_threads_lesson":
+        return _record_lesson(args.get("lesson", ""), args.get("evidence", ""))
+    return ""
+
+
+def _latest_threads_draft() -> str:
+    """Текст самой свежей Threads-серии из своего архива (для сравнения с финалом владельца)."""
+    try:
+        files = sorted(THREADS_DRAFTS_DIR.glob("*.md"), key=lambda p: -p.stat().st_mtime)
+        return files[0].read_text(encoding="utf-8") if files else ""
+    except Exception:
+        return ""
+
+
+FEEDBACK = (
+    "ОБУЧЕНИЕ НА ПРАВКЕ (Threads мини-флагман). Владелец прислал свой ФИНАЛЬНЫЙ отредактированный "
+    "вариант Threads-серии. 1) Сравни свой драфт ↔ финал: что владелец вырезал/добавил/переформулировал, "
+    "как сдвинул нарезку/длину/тон/крючок/концовку/число постов. 2) Выдели УСТОЙЧИВЫЕ переносимые правила "
+    "(а не разовую косметику под эту тему) и запиши КАЖДОЕ через record_threads_lesson (один вызов — один "
+    "урок), при возможности с коротким evidence. Правило, которое уже в мануале/эталонах — НЕ дублируй. "
+    "3) Отчитайся 2-4 строки «усвоил: …» — что изменю в будущих сериях. Правок мало / косметика — так и "
+    "скажи, урок не плоди ради записи.\n\nТВОЙ ДРАФТ:\n{draft}\n\nФИНАЛ ВЛАДЕЛЬЦА:\n{final}"
+)
+
+
+def write_feedback(final_text: str) -> str:
+    """Петля обучения мини-флагмана: сравнить свою серию с финалом владельца → устойчивые уроки в
+    memory/threads_lessons.md. Token-НЕзависимо (учимся на правках, не на метриках — метрики-петля
+    оживёт после пере-засева токена, когда collect подтянет метрики новых постов)."""
+    final_text = (final_text or "").strip()
+    if not final_text:
+        return "Пришли отредактированный финал Threads-серии в том же сообщении после команды."
+    cfg = config.load_agent(AGENT_NAME)
+    key = config.agent_api_key(cfg)
+    model = runmode.resolve(THREADS_MODEL)
+    draft = _latest_threads_draft() or "(своего драфта не нашёл — опирайся на эталоны/мануал при сравнении)"
+    text, _ = llm.reply(model, _system(), [], FEEDBACK.format(draft=draft, final=final_text),
+                        [RECORD_THREADS_LESSON_TOOL], _dispatch, key, THREADS_THINKING)
+    return text or "(пусто)"

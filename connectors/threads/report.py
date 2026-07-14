@@ -194,6 +194,40 @@ def find_posts(query: str, n: int = 10, posts=None, topics=None) -> str:
     return "\n".join(out)
 
 
+def orientation_digest(posts=None, topics=None, max_themes=4, max_posts=5) -> str:
+    """Компактный ОРИЕНТИР «что заходит на Threads» для Криейтора (НЕ полный build_report). На зрелых
+    чистых постах: сигнал медиа, топ-темы по Качеству, несколько зашедших постов. Это РЕКОМЕНДАЦИЯ
+    (владелец в контуре), НЕ правило — голос/вкус метрике не подчиняем (Goodhart). posts/topics — тесты."""
+    posts, topics = _load(posts, topics)
+    if not posts:
+        return "(данных Threads пока нет — ориентируйся на мануал и эталоны)"
+    scoring.enrich(posts)
+    mature = [p for p in posts if p.get("mature") and (p.get("views") or 0) > 0]
+    clean = [p for p in mature if not p.get("has_link") and not p.get("has_hashtag")]
+    if len(clean) < 5:
+        return "(зрелых чистых постов Threads мало — ориентируйся на мануал и эталоны)"
+    out = ["Ориентир «что заходит на Threads» (по ТВОИМ данным; рекомендация, не правило — "
+           "голос не подчиняем метрике):"]
+    med = [p for p in clean if p.get("has_media")]
+    txt = [p for p in clean if not p.get("has_media")]
+    if med and txt:
+        mv, tv = _avg([p["views"] for p in med]), _avg([p["views"] for p in txt])
+        out.append(f"- медиа vs текст: с медиа ср.просм {int(mv)} vs без {int(tv)} (x{round(mv / max(tv, 1), 1)})")
+    by_theme: dict[str, list] = {}
+    for p in clean:
+        by_theme.setdefault(topics.get(str(p.get("id", "")), {}).get("theme", "?"), []).append(p)
+    rows = [(th, a) for th, a in by_theme.items() if len(a) >= 5]
+    rows.sort(key=lambda x: -_avg([p.get("quality") or 0 for p in x[1]]))
+    if rows:
+        out.append("- темы по Качеству (сильные сверху): "
+                   + "; ".join(f"{th} ({round(_avg([p.get('quality') or 0 for p in a]))})" for th, a in rows[:max_themes]))
+    top = sorted([p for p in clean if p.get("quality") is not None], key=lambda p: -(p.get("quality") or 0))[:max_posts]
+    if top:
+        out.append("- заходило (заголовок · тир): "
+                   + "; ".join(f"{_title(topics, p)[:38]} · {p.get('tier_ru') or ''}" for p in top))
+    return "\n".join(out)
+
+
 def main() -> None:
     print(build_report())
 

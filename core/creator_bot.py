@@ -34,7 +34,8 @@ WELCOME = (
     "кредиты): /run — флагман (процесс 1); /run_scope — короткий 🔭 (процесс 2). В отличие от /post и /scope "
     "(только генерят) — эти гонят всю цепь и САМИ ставят в «Отложенные».\n"
     "🧵 /run_threads — мини-флагман для Threads: дистиллирую ПОСЛЕДНИЙ вышедший флагман в серию 1–4 "
-    "постов НА РЕВЬЮ (не публикую — отложку в Threads ставишь руками в приложении).\n"
+    "постов НА РЕВЬЮ (не публикую — отложку в Threads ставишь руками в приложении); /run_threads_feedback "
+    "<твой финал> — усвою урок из твоей правки серии (учусь с первых постов).\n"
     "Цифры не выдумываю — чего нет в материале, помечу [ПРОВЕРИТЬ]. Готовый пост ставлю в отложенные "
     "по /schedule — финальный контроль у тебя в «Отложенных» канала."
 )
@@ -371,6 +372,17 @@ def _run_pipeline_threads() -> str:
     return run_threads_cycle()
 
 
+def _run_threads_feedback(final_text: str = "") -> str:
+    """🧵 Петля обучения мини-флагмана: пришли отредактированный финал Threads-серии В ТОМ ЖЕ сообщении —
+    сравню со своей серией и усвою устойчивый урок (memory/threads_lessons.md, отдельно от ТГ). Учится с
+    первых постов на твоих правках (метрики-петля — позже, после пере-засева токена Threads)."""
+    if not (final_text or "").strip():
+        return ("Пришли свой отредактированный финал Threads-серии после команды:\n"
+                "/run_threads_feedback <твой финал> — сравню со своей серией и усвою урок.")
+    from core import threads_creator
+    return threads_creator.write_feedback(final_text)
+
+
 async def main() -> None:
     cfg = config.load_agent(AGENT_NAME)
     # адаптивное мышление — острее композиция и точнее соблюдение красных линий; включается в config.yaml
@@ -392,7 +404,9 @@ async def main() -> None:
                          # ПОЛНЫЙ цикл из бота (Скаут→анти-повтор→2FA→отложка): 1 — флагман, 2 — короткий
                          "run": _run_pipeline_flagship, "run_scope": _run_pipeline_scope,
                          # 🧵 мини-флагман Threads: дистилляция вышедшего флагмана в серию НА РЕВЬЮ (без публикации)
-                         "run_threads": _run_pipeline_threads},
+                         "run_threads": _run_pipeline_threads,
+                         # 🧵 петля обучения мини-флагмана на правках владельца (учит threads_lessons.md)
+                         "run_threads_feedback": _run_threads_feedback},
         # авто-2FA СРАЗУ после генерации поста (на каждом /post и /light; в тест-режиме пропускается)
         post_hooks={"post": _post_2fa, "light": _post_2fa},
         thinking=thinking,
