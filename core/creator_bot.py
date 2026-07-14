@@ -33,6 +33,8 @@ WELCOME = (
     "🚀 ПОЛНЫЙ ЦИКЛ одной командой (Скаут → анти-повтор → пост → 2FA → отложка, идёт пару минут, тратит "
     "кредиты): /run — флагман (процесс 1); /run_scope — короткий 🔭 (процесс 2). В отличие от /post и /scope "
     "(только генерят) — эти гонят всю цепь и САМИ ставят в «Отложенные».\n"
+    "🧵 /run_threads — мини-флагман для Threads: дистиллирую ПОСЛЕДНИЙ вышедший флагман в серию 1–4 "
+    "постов НА РЕВЬЮ (не публикую — отложку в Threads ставишь руками в приложении).\n"
     "Цифры не выдумываю — чего нет в материале, помечу [ПРОВЕРИТЬ]. Готовый пост ставлю в отложенные "
     "по /schedule — финальный контроль у тебя в «Отложенных» канала."
 )
@@ -361,6 +363,14 @@ def _run_pipeline_scope() -> str:
     return run_cycle(scope=True)
 
 
+def _run_pipeline_threads() -> str:
+    """🧵 МИНИ-ФЛАГМАН для Threads: дистиллировать ПОСЛЕДНИЙ вышедший ТГ-флагман в серию из 1–4 постов
+    НА РЕВЬЮ (Фаза 1 — БЕЗ публикации). Серию проверяешь и ставишь в отложку Threads РУКАМИ (приложение).
+    Тратит немного кредитов (одна Sonnet-дистилляция, без Скаута/2FA). = `python run_threads_pipeline.py`."""
+    from run_threads_pipeline import run_threads_cycle
+    return run_threads_cycle()
+
+
 async def main() -> None:
     cfg = config.load_agent(AGENT_NAME)
     # адаптивное мышление — острее композиция и точнее соблюдение красных линий; включается в config.yaml
@@ -380,7 +390,9 @@ async def main() -> None:
         command_actions={"schedule": _schedule, "verify": _verify, "scope": _scope,
                          "scope_feedback": _scope_feedback,
                          # ПОЛНЫЙ цикл из бота (Скаут→анти-повтор→2FA→отложка): 1 — флагман, 2 — короткий
-                         "run": _run_pipeline_flagship, "run_scope": _run_pipeline_scope},
+                         "run": _run_pipeline_flagship, "run_scope": _run_pipeline_scope,
+                         # 🧵 мини-флагман Threads: дистилляция вышедшего флагмана в серию НА РЕВЬЮ (без публикации)
+                         "run_threads": _run_pipeline_threads},
         # авто-2FA СРАЗУ после генерации поста (на каждом /post и /light; в тест-режиме пропускается)
         post_hooks={"post": _post_2fa, "light": _post_2fa},
         thinking=thinking,

@@ -19,7 +19,8 @@
   1.5) Анти-повтор (флагман) — сверяет направления брифа с историей канала: повтор → берёт другую
      тему; ВСЕ повторы → пост не делает (дубль в канал не уйдёт);
   2) Криейтор — утверждённая НЕ-повторная тема: пост + обложка (make_image), сохраняет драфт;
-  3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление на @Kanaki_K.
+  3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление на @Kanaki_K;
+     вышедший флагман пишется в журнал (flagship_journal) — вход мини-флагмана Threads.
 Дальше проверяешь готовый пост в нативных «Отложенных» канала.
 
 llm.reply каждого агента гоняется в ОТДЕЛЬНОМ потоке (как в боте через asyncio.to_thread): так
@@ -36,8 +37,8 @@ import sys
 import time
 from pathlib import Path
 
-from core import (analytics, config, cost, creator_bot, creator_tools, dedup, llm, logging_setup,
-                  market_tools, runmode, scope_writer, scout_bot, scout_tools, verify)
+from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
+                  logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
@@ -477,6 +478,11 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # РЕЦИКЛИНГ: тема флагмана ушла в канал → метим [вышло ДАТА], пикер не даст её ~полгода, потом вернёт.
     # Только на РЕАЛЬНОЙ публикации (draft-only сюда не доходит — вышел выше), чтобы тест не «съедал» темы.
     if theme and not scope:
+        # МОСТ В THREADS: вышедший флагман (полный текст + тема) → журнал вышедших. Отсюда мини-флагман
+        # (run_threads_pipeline) берёт его и дистиллирует в Threads-серию. Только боевая публикация —
+        # draft-only/тест сюда не доходят (вышли выше), журнал тестами не засоряется.
+        flagship_journal.record(post, theme)
+        out("🧵 Флагман записан в журнал вышедших — доступен мини-флагману Threads (run_threads_pipeline).")
         if dedup.mark_theme_used(theme):
             out(f"🧭 Тема помечена [вышло] в банке — вернётся в ротацию через ~{dedup.BANK_REUSE_DAYS//30} мес.")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
