@@ -174,9 +174,20 @@ def collect_posts(limit: int, old: dict[str, dict] | None = None) -> list[dict]:
     # Метрики — только там, где они реально могут измениться.
     skeleton = [_merge_post(p, {}) for p in posts]
     fresh = [s for s in skeleton if _needs_metrics(s, old)]
-    print(f"Тяну метрики по {len(fresh)} постам из {len(posts)} "
-          f"(остальные старше {_METRICS_FRESH_DAYS} дн — их цифры уже не растут).")
-    metrics = insights.metrics_for([s["id"] for s in fresh])
+    ids = [s["id"] for s in fresh]
+
+    # Добор «долгов»: посты, по которым метрики так и не собрались (сбой/бюджет кончился). Лента их
+    # уже не отдаст — они старше окна watermark, — но id у нас есть, и insights принимает id напрямую.
+    # Без этого добора недобранный пост завис бы с нулями НАВСЕГДА: watermark его не вернёт.
+    debt = [pid for pid, p in old.items()
+            if pid not in ids and (p.get("metrics_error") or p.get("metrics_stale"))]
+    if debt:
+        print(f"Добираю метрики по {len(debt)} постам, недособранным в прошлые разы.")
+        ids += debt
+
+    print(f"Тяну метрики по {len(ids)} постам "
+          f"(посты старше {_METRICS_FRESH_DAYS} дн не трогаем — их цифры уже не растут).")
+    metrics = insights.metrics_for(ids)
     rows = [_row_for(p, metrics, old) for p in posts]
     errs = sum(1 for r in rows if r["metrics_error"])
     if errs:
