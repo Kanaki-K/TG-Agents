@@ -98,7 +98,7 @@ def check(candidate: str, api_key: str | None = None, model: str | None = None) 
     if not candidate:
         return "(кандидата нет — нечего сверять)\nРЕКОМЕНДУЮ: «»\nСТАТУС: ОК"
     dg = digest()
-    mdl = model or runmode.resolve("claude-sonnet-4-6")
+    mdl = model or runmode.resolve("claude-sonnet-4-6", ceiling="claude-sonnet-4-6")
     user = (f"ПОСТ-КАНДИДАТ (будущий пост Threads):\n{candidate}\n\n"
             f"НЕДАВНИЕ ПОСТЫ THREADS за {WINDOW_WEEKS} нед (дата | заголовок | тема — суть, свежие "
             f"сверху):\n{dg}\n\n"

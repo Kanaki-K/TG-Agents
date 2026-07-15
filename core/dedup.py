@@ -208,7 +208,8 @@ def check(brief: str, api_key: str | None = None, model: str | None = None) -> s
     digest = analytics.topics_digest(weeks=DEDUP_WINDOW_WEEKS)  # только окно свежести, не 372 поста истории
     # Sonnet, не Haiku: «перечитай и сравни тезис» — это РАССУЖДЕНИЕ, на нём Haiku протаскивал старьё
     # «новым углом». Одна вызов на прогон — цена ерунда против дубля в канал. Вернуть на Haiku — тут одной строкой.
-    mdl = model or runmode.resolve("claude-sonnet-4-6")
+    # ceiling: судья-дедуп механический — дороже Sonnet ему не нужно (утечка override, аудит 15.07)
+    mdl = model or runmode.resolve("claude-sonnet-4-6", ceiling="claude-sonnet-4-6")
     user = (f"НАПРАВЛЕНИЯ ИЗ СВЕЖЕГО БРИФА СКАУТА (кандидаты на пост):\n{brief}\n\n"
             f"УЖЕ ОПУБЛИКОВАНО НА КАНАЛЕ за последние {DEDUP_WINDOW_WEEKS} нед (тема+заголовок+суть, "
             f"свежие сверху):\n{digest}\n\n"

@@ -61,12 +61,15 @@ def resolve_thinking(val) -> dict | None:
 
 def reply(model: str, system: str, history: list[dict], user_text: str,
           tools_schema: list[dict], dispatch: Callable[[str, dict], str],
-          api_key: str | None = None, thinking: dict | None = None) -> tuple[str, list[dict]]:
+          api_key: str | None = None, thinking: dict | None = None,
+          cache_system: bool = True) -> tuple[str, list[dict]]:
     """Один проход диалога с агентным циклом инструментов.
 
     tools_schema/dispatch — набор «рук» конкретного агента (память, аналитика, ...).
     api_key — свой ключ агента (если None, берётся общий ANTHROPIC_API_KEY).
     thinking — конфиг мышления (напр. {"type": "adaptive"}); None = выключено.
+    cache_system=False — для ONE-SHOT вызовов без инструментов и повторов (threads_creator):
+    запись 1h-кэша стоит 2× входа, и без единого перечтения это чистое УДОРОЖАНИЕ (аудит 15.07).
     Возвращает (текст ответа, обновлённую history).
     """
     client = _client(api_key)
@@ -98,7 +101,9 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
             # 2-й…N-й прогон ЧИТАЮТ системный за ~0.1× вместо холодной записи каждый раз. На 5m TTL
             # кэш протухал между прогонами (cache-read падал до ~10%, см. run_cost_report). Запись 1h
             # дороже (2× против 1.25×), но окупается уже со 2-3 прогона в час — типичный режим работы.
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            # cache_system=False — one-shot без перечтений: кэш там только удорожает (см. докстроку).
+            system=([{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+                    if cache_system else [{"type": "text", "text": system}]),
             tools=tools_schema,
             messages=messages,
         )

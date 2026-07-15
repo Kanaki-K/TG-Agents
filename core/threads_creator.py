@@ -15,7 +15,7 @@ import logging
 import re
 from datetime import date
 
-from core import config, flagship_journal, llm, runmode
+from core import config, cost, flagship_journal, llm, runmode
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
 THREADS_MODEL = "claude-sonnet-4-6"       # короткий формат — Opus избыточен (как у scope); /test → Haiku
@@ -102,11 +102,14 @@ def write(hint: str = "") -> str:
                 "флагман в ТГ (он запишется в журнал), потом запускай мини-флагман.")
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
-    model = runmode.resolve(THREADS_MODEL)
+    model = runmode.resolve(THREADS_MODEL, ceiling=THREADS_MODEL)
     task = TASK.format(flagship=src["text"])
     if hint:
         task += f"\n\nПОЖЕЛАНИЕ ВЛАДЕЛЬЦА: {hint}"
-    text, _ = llm.reply(model, _system(), [], task, [], lambda _n, _a: "", key, THREADS_THINKING)
+    cost.set_context("threads")  # иначе расход пишется who='?' — аудит 15.07 не смог его атрибутировать
+    # one-shot без инструментов → кэш системы не окупается (запись 1h = 2× без перечтений)
+    text, _ = llm.reply(model, _system(), [], task, [], lambda _n, _a: "", key, THREADS_THINKING,
+                        cache_system=False)
     text = (text or "").strip()
     if text:
         _save(text, src)
@@ -186,8 +189,10 @@ def write_feedback(final_text: str) -> str:
         return "Пришли отредактированный финал Threads-серии в том же сообщении после команды."
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
-    model = runmode.resolve(THREADS_MODEL)
+    model = runmode.resolve(THREADS_MODEL, ceiling=THREADS_MODEL)
     draft = _latest_threads_draft() or "(своего драфта не нашёл — опирайся на эталоны/мануал при сравнении)"
+    cost.set_context("threads")
+    # здесь кэш ОСТАВЛЕН: есть инструмент (запись урока) → несколько API-раундов перечитывают систему
     text, _ = llm.reply(model, _system(), [], FEEDBACK.format(draft=draft, final=final_text),
                         [RECORD_THREADS_LESSON_TOOL], _dispatch, key, THREADS_THINKING)
     return text or "(пусто)"

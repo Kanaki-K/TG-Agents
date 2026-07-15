@@ -48,7 +48,11 @@ TEMPORAL_CHECK = (
 # модели (проверено). Экономия идёт по ДРУГОЙ оси: thinking ВЫКЛ (см. verify_post) — выход был дороже
 # самой модели. В /test всё падает на Haiku через runmode.resolve автоматически — отдельная константа не нужна.
 # Серверный веб-поиск — ТОЛЬКО фолбэк для цифры, которой нет в брифе. Кап низкий: без «х2 скаутинга».
-VERIFY_WEB = {"type": "web_search_20250305", "name": "web_search", "max_uses": 3}
+# max_uses=1 (было 3): промпт и так велит искать «в крайнем случае», но модель крутила ~6.3
+# API-раунда на чек (аудит расходов 15.07, verify = 20% всех трат). Кэп принуждает к заявленному
+# намерению. Непроверенное честно помечается ❓ «проверь вручную» — владелец видит в отложке;
+# если ❓ участились — вернуть 2, НЕ переписывать промпт и НЕ менять Sonnet (решение владельца).
+VERIFY_WEB = {"type": "web_search_20250305", "name": "web_search", "max_uses": 1}
 
 VERIFIER_SYSTEM = (
     "Ты — НЕЗАВИСИМЫЙ фактчекер канала KANAKI CRYPTO (роль «2FA»). Ты НЕ писал этот пост. Задача — "
@@ -122,7 +126,8 @@ def verify_post(post: str, brief: str = "", api_key: str | None = None, model: s
     post = (post or "").split("[[SPLIT]]")[0].strip()  # только сам пост, без меты-заметки
     if not post:
         return "(нечего проверять — пустой пост)"
-    mdl = model or runmode.resolve("claude-sonnet-4-6")
+    # ceiling: 2FA — механическая роль, override/тест могут только удешевить её, не удорожить
+    mdl = model or runmode.resolve("claude-sonnet-4-6", ceiling="claude-sonnet-4-6")
     cost.set_context("verify")
     today = _today_iso() or "(дата недоступна)"
     temporal = TEMPORAL_CHECK.format(today=today) if scope else ""
