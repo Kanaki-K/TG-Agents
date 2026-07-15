@@ -29,11 +29,19 @@ API_HOST = "https://graph.threads.net"
 API_VERSION = "v1.0"
 GRAPH = f"{API_HOST}/{API_VERSION}"
 
-# Дефолтный Python-urllib/3.x в UA — прямая машинная подпись, с ней мы и ходили 14.07.
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
+# ЧЕСТНЫЙ UA: мы автоматика и не скрываем этого.
+#
+# Здесь стоял подставной Chrome — попытка не выглядеть машиной. Снято 15.07.2026, и вот почему.
+# Мы — first-party клиент: читаем СВОЙ аккаунт по токену, который Meta сама и выдала. Нам нечего
+# прятать, а притворяясь браузером, мы бы из законного использования API сделали ровно то, что
+# Платформенные условия запрещают прямым текстом: «anything to circumvent, bypass, or override
+# any technological measures that Meta uses to control or limit access». Подставной UA не защищал
+# аккаунт — он создавал нарушение там, где его не было.
+#
+# Замедляться, чтобы не грузить чужой API, — законно. Притворяться человеком, чтобы не спалиться,
+# — нет. Разница в намерении, и она должна быть видна в коде. Опознавательный UA = мы готовы
+# показать Meta этот файл целиком.
+USER_AGENT = "tg-agents/1.0 (first-party Threads client; own-account analytics)"
 
 
 class ThreadsError(RuntimeError):
