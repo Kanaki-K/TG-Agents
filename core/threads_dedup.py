@@ -19,10 +19,9 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 
-from core import config, llm, runmode
+from core import config, io_safe, llm, runmode
 
 POSTS_JSON = config.ROOT / "data" / "threads_posts.json"
 TOPICS_JSON = config.ROOT / "data" / "threads_topics.json"
@@ -54,8 +53,10 @@ THREADS_DEDUP_SYSTEM = (
 
 
 def _load() -> tuple[list, dict]:
-    posts = json.loads(POSTS_JSON.read_text(encoding="utf-8")) if POSTS_JSON.exists() else []
-    topics = json.loads(TOPICS_JSON.read_text(encoding="utf-8")) if TOPICS_JSON.exists() else {}
+    # io_safe: битый/пустой threads_posts.json не должен ронять сверку трейсбеком —
+    # digest() честно скажет «нет выгрузки», check() отработает мягким СТАТУС: ОК.
+    posts = io_safe.load_json(POSTS_JSON, [])
+    topics = io_safe.load_json(TOPICS_JSON, {})
     return posts, topics
 
 

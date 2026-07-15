@@ -16,12 +16,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import urllib.parse
 from pathlib import Path
 
 from connectors.threads import _api
 from core import config
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[2]
 TOKEN_FILE = ROOT / "data" / "threads_token.json"
@@ -125,8 +128,12 @@ def valid_token() -> str:
             tok = _save_token(fresh["access_token"], tok["user_id"],
                               fresh.get("expires_in", 60 * _DAY),
                               obtained_at=tok.get("obtained_at"))
-        except _api.ThreadsError:
-            pass  # не смогли обновить сейчас — старый ещё валиден, попробуем позже
+        except _api.ThreadsError as e:
+            # Старый токен ещё валиден, попробуем позже — но МОЛЧАТЬ нельзя: если refresh
+            # ломается системно (ротация APP_SECRET, отзыв прав), без этого лога первый
+            # сигнал придёт только на 60-й день, когда токен уже мёртв.
+            log.warning("Не смог обновить токен Threads (осталось %.0f дн, попробую при "
+                        "следующем запуске): %s", left / _DAY, e)
     return tok["access_token"]
 
 
