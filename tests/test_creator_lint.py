@@ -104,3 +104,24 @@ def test_scope_headline_single_sentence_ok():
                  "🌐 LINK | Chainlink в банках Европы и Кореи\n\nтело"):
         _, warns = creator_tools._lint(good, "scope")
         assert not any("ДВУХ предложени" in w for w in warns), good
+
+
+# --- утечка англоязычного источника в русский текст (сессия 15.07, CLARITY) ---
+
+def test_latin_person_name_warns():
+    # «Trump задекларировал 1.4 млрд$» — владелец правил на «Трамп» (баг 15.07)
+    _, warns = creator_tools._lint("⚠️ Заголовок\n\nTrump задекларировал 1.4 млрд$ за 2025", "scope")
+    assert any("ЛАТИНИЦЕЙ" in w and "Трамп" in w for w in warns)
+
+
+def test_latin_brand_name_is_fine():
+    # бренды латиницей — норма канала (эталоны §8.1: Chainlink, SpaceX, Visa, BlackRock)
+    _, warns = creator_tools._lint(
+        "🌐 Заголовок\n\nChainlink подключился к Pangea. SpaceX держит 18 тысяч BTC", "scope")
+    assert not any("ЛАТИНИЦЕЙ" in w for w in warns)
+
+
+def test_recess_calque_warns():
+    # «до рецесса» — калька с recess прямо из источника; владелец правил на «до перерыва»
+    _, warns = creator_tools._lint("⚠️ Заголовок\n\nСенат вернулся, до рецесса 3 недели", "scope")
+    assert any("рецесс" in w for w in warns)
