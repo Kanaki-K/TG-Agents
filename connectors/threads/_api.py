@@ -66,9 +66,10 @@ def _endpoint(url: str) -> str:
 
 
 def _open(url: str, data: bytes | None = None, *, token: str | None = None,
-          timeout: int = 20) -> dict:
+          timeout: int = 20, write: bool = False) -> dict:
     ep = _endpoint(url)
-    t0 = _guard.before(ep)  # пауза/бюджет/стоп-кран. Кинет ThreadsBlocked — запроса не будет.
+    # пауза/бюджет/стоп-кран (для write — свои, строже). Кинет ThreadsBlocked — запроса не будет.
+    t0 = _guard.before(ep, write=write)
 
     req = urllib.request.Request(url, data=data)  # data != None → POST
     req.add_header("Accept", "application/json")
@@ -81,22 +82,22 @@ def _open(url: str, data: bytes | None = None, *, token: str | None = None,
             # Расход квоты ГЛАЗАМИ Meta. getattr — заголовков может не быть; их отсутствие
             # не повод ронять сбор.
             usage = _guard.usage_from_headers(getattr(r, "headers", None))
-        _guard.after(ep, t0, status=200, usage=usage)
+        _guard.after(ep, t0, status=200, usage=usage, write=write)
         _guard.check_usage(usage)  # ≥80% → стоп САМИ, не дожидаясь отказа
         return body
     except urllib.error.HTTPError as e:
         detail, code = _extract_error(e.read())
-        _guard.after(ep, t0, status=e.code, error=detail or str(e.reason))
+        _guard.after(ep, t0, status=e.code, error=detail or str(e.reason), write=write)
         # Троттлинг → гасим весь прогон и уходим остывать (внутри кинет ThreadsBlocked).
         _guard.trip(e.code, code, detail or str(e.reason))
         raise ThreadsError(f"Threads API {e.code}: {detail or e.reason}") from e
     except urllib.error.URLError as e:
-        _guard.after(ep, t0, status=None, error=str(e.reason))
+        _guard.after(ep, t0, status=None, error=str(e.reason), write=write)
         raise ThreadsError(f"Сеть недоступна: {e.reason}") from e
     except ThreadsBlocked:
         raise  # защита сработала после отправки — наверх как есть, это не сбой сети
     except Exception as e:  # noqa: BLE001
-        _guard.after(ep, t0, status=None, error=f"{type(e).__name__}: {e}")
+        _guard.after(ep, t0, status=None, error=f"{type(e).__name__}: {e}", write=write)
         raise ThreadsError(f"Сбой запроса к Threads: {type(e).__name__}: {e}") from e
 
 
@@ -115,8 +116,14 @@ def get(path: str, params: dict | None = None, *, token: str | None = None,
 
 def post(path: str, params: dict, *, token: str | None = None,
          versioned: bool = True) -> dict:
-    """POST (form-encoded) к graph-эндпоинту — публикация/обмен токена."""
+    """POST (form-encoded) к graph-эндпоинту — публикация/обмен токена.
+
+    Versioned POST = ЗАПИСЬ в аккаунт (пост/ответ/удаление) → полоса записи _guard (второй
+    стоп-кран, свои бюджеты). OAuth-обмены (versioned=False) — не запись контента: они идут
+    полосой чтения, иначе закрытая запись ломала бы авто-refresh токена.
+    """
     q = {k: v for k, v in params.items() if v not in (None, "")}
     base = GRAPH if versioned else API_HOST
     url = f"{base}/{path.lstrip('/')}"
-    return _open(url, data=urllib.parse.urlencode(q).encode("utf-8"), token=token)
+    return _open(url, data=urllib.parse.urlencode(q).encode("utf-8"), token=token,
+                 write=versioned)

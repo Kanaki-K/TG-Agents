@@ -50,6 +50,11 @@ _DATA = Path(__file__).resolve().parents[2] / "data"
 # где она уже не нужна, и отсутствовала бы там, где нужна. Инверсия делает состояние по умолчанию
 # безопасным: не подумал — никуда не пошёл.
 UNLOCK_FILE = _DATA / "threads_unlocked"
+# ВТОРОЙ стоп-кран — только для ЗАПИСИ (пост/ответ/удаление). Чтение и запись развязаны
+# намеренно: аналитика своего аккаунта — рутина, а каждая запись — публичное действие с
+# последствиями. Ключи поворачиваются отдельно и каждый со своей причиной: открыл чтение —
+# запись НЕ открылась «заодно». Для записи нужны ОБА ключа.
+WRITE_UNLOCK_FILE = _DATA / "threads_write_unlocked"
 # Предохранитель: ставится автоматом при троттлинге, внутри — до какого времени молчим.
 COOLDOWN_FILE = _DATA / "threads_cooldown"
 # Журнал: строка на каждый запрос. Он же источник дневного счётчика.
@@ -72,6 +77,17 @@ BREATHER_SECONDS = (30.0, 120.0)
 RUN_BUDGET = int(os.getenv("THREADS_RUN_BUDGET", "60"))    # запросов за один прогон
 DAY_BUDGET = int(os.getenv("THREADS_DAY_BUDGET", "150"))   # запросов за скользящие 24ч
 
+# --- Полоса ЗАПИСИ: строже чтения на порядок. ---
+# Лимиты Meta на запись: 250 постов + 1000 ответов / 24ч (threads_publishing_limit). Наши
+# потолки — ~1-2% от них: стратегия «меньше, но качественнее» зашита ЧИСЛОМ, а не пожеланием.
+# Один пост = 2 write-запроса (контейнер + publish), т.е. 24/сутки ≈ 12 публикаций максимум.
+WRITE_RUN_BUDGET = int(os.getenv("THREADS_WRITE_RUN_BUDGET", "10"))   # за прогон (≈5 публикаций)
+WRITE_DAY_BUDGET = int(os.getenv("THREADS_WRITE_DAY_BUDGET", "24"))   # за скользящие 24ч
+# Темп записи заметно медленнее чтения: публикации не должны идти очередью. Меряем от
+# ПРОШЛОЙ ЗАПИСИ (чтение между записями паузу записи не сбрасывает).
+WRITE_GAP_MIN = float(os.getenv("THREADS_WRITE_GAP_MIN", "30.0"))
+WRITE_GAP_MAX = float(os.getenv("THREADS_WRITE_GAP_MAX", "75.0"))
+
 # --- Квота глазами Meta (заголовок x-app-usage, проценты 0-100). ---
 # Тормозим САМИ на 80%, не дожидаясь лимита: 100% — это уже отказ и отметка в их системе.
 USAGE_WARN_PERCENT = float(os.getenv("THREADS_USAGE_WARN", "50"))
@@ -83,8 +99,10 @@ THROTTLE_CODES = {4, 17, 32, 613, 80001}
 COOLDOWN_HOURS = float(os.getenv("THREADS_COOLDOWN_HOURS", "6"))
 
 _run_count = 0          # запросов в этом процессе
+_write_run_count = 0    # из них — записей (пост/ответ/удаление)
 _next_breather = random.randint(*BREATHER_EVERY)
 _last_call_at = 0.0
+_last_write_at = 0.0
 
 
 class ThreadsBlocked(RuntimeError):
@@ -106,12 +124,18 @@ def _now() -> float:
 # полезную работу, которую якобы делал ночной режим.
 
 
-def frozen_reason() -> str:
-    """Почему сейчас нельзя в сеть. Пустая строка = можно."""
+def frozen_reason(write: bool = False) -> str:
+    """Почему сейчас нельзя в сеть. Пустая строка = можно. write=True — проверка ОБОИХ ключей."""
     if not UNLOCK_FILE.exists():
         return (
             f"сеть Threads закрыта (нет файла {UNLOCK_FILE.name}). Это состояние ПО УМОЛЧАНИЮ "
             f"после проверки аккаунта 14.07.2026. Открыть осознанно: threads_unlock('причина')"
+        )
+    if write and not WRITE_UNLOCK_FILE.exists():
+        return (
+            f"ЗАПИСЬ в Threads закрыта (нет файла {WRITE_UNLOCK_FILE.name}). Чтение открыто, но "
+            f"запись — отдельный ключ: каждый пост/ответ — публичное действие. "
+            f"Открыть осознанно: _guard.unlock_write('причина')"
         )
     if COOLDOWN_FILE.exists():
         try:
@@ -141,13 +165,36 @@ def unlock(reason: str) -> None:
 
 
 def lock() -> None:
-    """Закрыть сеть Threads обратно."""
+    """Закрыть сеть Threads обратно (запись закрывается автоматически — ей нужны оба ключа)."""
     UNLOCK_FILE.unlink(missing_ok=True)
     log.warning("Сеть Threads закрыта.")
 
 
-def _calls_last_24h() -> int:
-    """Сколько запросов ушло за скользящие сутки — считаем по журналу."""
+def unlock_write(reason: str) -> None:
+    """Открыть ЗАПИСЬ в Threads (второй ключ; без открытого чтения записи всё равно не будет).
+
+    Тот же принцип, что unlock(): причина обязательна и остаётся в файле — «кто и зачем открыл»
+    видно глазами без раскопок. Закрыл чтение — запись фактически тоже встала.
+    """
+    if not (reason or "").strip():
+        raise ValueError("Открывать запись в Threads без указанной причины нельзя.")
+    WRITE_UNLOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    WRITE_UNLOCK_FILE.write_text(f"{stamp}\n{reason.strip()}\n", encoding="utf-8")
+    log.warning("ЗАПИСЬ в Threads ОТКРЫТА: %s", reason.strip())
+
+
+def lock_write() -> None:
+    """Закрыть запись в Threads (чтение не трогает)."""
+    WRITE_UNLOCK_FILE.unlink(missing_ok=True)
+    log.warning("Запись в Threads закрыта.")
+
+
+def _calls_last_24h(kind: str | None = None) -> int:
+    """Сколько запросов ушло за скользящие сутки — считаем по журналу.
+
+    kind='write' — только записи (пост/ответ/удаление); None — все подряд.
+    """
     if not LOG_FILE.exists():
         return 0
     cutoff = _now() - 86400
@@ -156,7 +203,8 @@ def _calls_last_24h() -> int:
         with LOG_FILE.open(encoding="utf-8") as f:
             for line in f:
                 try:
-                    if json.loads(line).get("at", 0) >= cutoff:
+                    row = json.loads(line)
+                    if row.get("at", 0) >= cutoff and (kind is None or row.get("kind") == kind):
                         n += 1
                 except json.JSONDecodeError:
                     continue  # битая строка журнала не повод падать
@@ -176,14 +224,15 @@ def _journal(**row) -> None:
         log.warning("Не смог записать журнал Threads API: %s", e)
 
 
-def before(endpoint: str) -> float:
+def before(endpoint: str, *, write: bool = False) -> float:
     """Вызывается ПЕРЕД каждым запросом. Либо выдерживает паузу, либо бьёт по рукам.
 
+    write=True — запись (пост/ответ/удаление): свой стоп-кран, свои бюджеты, свой темп.
     Возвращает t0 для замера длительности. Кидает ThreadsBlocked — тогда запроса НЕ будет.
     """
-    global _run_count, _next_breather, _last_call_at
+    global _run_count, _write_run_count, _next_breather, _last_call_at
 
-    reason = frozen_reason()
+    reason = frozen_reason(write)
     if reason:
         raise ThreadsBlocked(f"Запрос к Threads не отправлен: {reason}")
 
@@ -197,6 +246,17 @@ def before(endpoint: str) -> float:
         raise ThreadsBlocked(
             f"Дневной бюджет исчерпан ({day}/{DAY_BUDGET} запросов за сутки). Ждём."
         )
+    if write:
+        if _write_run_count >= WRITE_RUN_BUDGET:
+            raise ThreadsBlocked(
+                f"Бюджет ЗАПИСИ за прогон исчерпан ({WRITE_RUN_BUDGET}). «Меньше, но качественнее» "
+                f"— остальное завтра или следующим осознанным прогоном."
+            )
+        wday = _calls_last_24h("write")
+        if wday >= WRITE_DAY_BUDGET:
+            raise ThreadsBlocked(
+                f"Дневной бюджет ЗАПИСИ исчерпан ({wday}/{WRITE_DAY_BUDGET} за сутки). Ждём."
+            )
 
     # Пауза отсчитывается от КОНЦА прошлого запроса: сеть уже съела часть времени.
     gap = random.uniform(GAP_MIN, GAP_MAX)
@@ -204,23 +264,32 @@ def before(endpoint: str) -> float:
         gap = random.uniform(*BREATHER_SECONDS)
         _next_breather = _run_count + random.randint(*BREATHER_EVERY)
         log.info("Threads: пауза %.0fс после %d запросов (не долбим лентой)", gap, _run_count)
-    waited = gap - (_now() - _last_call_at)
+    wait_until = _last_call_at + gap
+    if write and _last_write_at:
+        # Темп записи меряем от прошлой ЗАПИСИ: чтение между записями паузу не сбрасывает.
+        wait_until = max(wait_until, _last_write_at + random.uniform(WRITE_GAP_MIN, WRITE_GAP_MAX))
+    waited = wait_until - _now()
     if waited > 0:
         time.sleep(waited)
 
     _run_count += 1
+    if write:
+        _write_run_count += 1
     return _now()
 
 
 def after(endpoint: str, t0: float, *, status: int | None, error: str = "",
-          usage: dict | None = None) -> None:
+          usage: dict | None = None, write: bool = False) -> None:
     """Вызывается ПОСЛЕ запроса (успех или ошибка) — пишет журнал."""
-    global _last_call_at
+    global _last_call_at, _last_write_at
     _last_call_at = _now()
+    if write:
+        _last_write_at = _last_call_at
     _journal(
         at=round(_last_call_at, 3),
         iso=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         endpoint=endpoint,
+        kind="write" if write else None,   # запись/чтение: по этому полю считается write-бюджет
         status=status,
         ms=int((_last_call_at - t0) * 1000),
         error=error or None,
@@ -322,5 +391,9 @@ def stats() -> dict:
         "за сутки": _calls_last_24h(),
         "бюджет прогона": RUN_BUDGET,
         "бюджет суток": DAY_BUDGET,
-        "блокировка": frozen_reason() or "нет",
+        "записей за прогон": _write_run_count,
+        "записей за сутки": _calls_last_24h("write"),
+        "бюджет записи (прогон/сутки)": f"{WRITE_RUN_BUDGET}/{WRITE_DAY_BUDGET}",
+        "блокировка чтения": frozen_reason() or "нет",
+        "блокировка записи": frozen_reason(write=True) or "нет",
     }
