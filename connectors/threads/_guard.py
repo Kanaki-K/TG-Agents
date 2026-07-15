@@ -51,6 +51,11 @@ BREATHER_SECONDS = (20.0, 75.0)
 RUN_BUDGET = int(os.getenv("THREADS_RUN_BUDGET", "120"))   # запросов за один прогон
 DAY_BUDGET = int(os.getenv("THREADS_DAY_BUDGET", "300"))   # запросов за скользящие 24ч
 
+# --- Квота глазами Meta (заголовок x-app-usage, проценты 0-100). ---
+# Тормозим САМИ на 80%, не дожидаясь лимита: 100% — это уже отказ и отметка в их системе.
+USAGE_WARN_PERCENT = float(os.getenv("THREADS_USAGE_WARN", "50"))
+USAGE_STOP_PERCENT = float(os.getenv("THREADS_USAGE_STOP", "80"))
+
 # --- Предохранитель. Коды Meta, означающие «ты слишком частый». ---
 # 4/17/32 — application/user/page request limit; 613 — calls per second; 80001 — Threads-specific.
 THROTTLE_CODES = {4, 17, 32, 613, 80001}
@@ -179,7 +184,8 @@ def before(endpoint: str) -> float:
     return _now()
 
 
-def after(endpoint: str, t0: float, *, status: int | None, error: str = "") -> None:
+def after(endpoint: str, t0: float, *, status: int | None, error: str = "",
+          usage: dict | None = None) -> None:
     """Вызывается ПОСЛЕ запроса (успех или ошибка) — пишет журнал."""
     global _last_call_at
     _last_call_at = _now()
@@ -191,7 +197,73 @@ def after(endpoint: str, t0: float, *, status: int | None, error: str = "") -> N
         ms=int((_last_call_at - t0) * 1000),
         error=error or None,
         run_no=_run_count,
+        usage=usage or None,          # x-app-usage: сколько квоты сожгли ПО МНЕНИЮ META
     )
+
+
+def usage_from_headers(headers) -> dict:
+    """Разобрать x-app-usage / x-business-use-case-usage — расход квоты ГЛАЗАМИ META.
+
+    Meta сама пишет в заголовке каждого ответа, сколько процентов лимита мы сожгли
+    (call_count/total_cputime/total_time, 0-100). Мы эти заголовки просто выбрасывали и гадали
+    о квоте по косвенным признакам. Теперь это прямой сигнал — единственный честный.
+    """
+    out: dict = {}
+    if not headers:
+        return out
+    for name in ("x-app-usage", "x-business-use-case-usage"):
+        try:
+            raw = headers.get(name)
+        except AttributeError:
+            return out
+        if not raw:
+            continue
+        try:
+            out[name] = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            out[name] = raw  # формат мог измениться — сохраняем как есть, лучше сырое, чем ничего
+    return out
+
+
+def _peak_percent(usage: dict) -> float:
+    """Худший из процентов расхода. Именно худший: упрёмся в любой из лимитов — тормознут всё."""
+    worst = 0.0
+    app = usage.get("x-app-usage")
+    if isinstance(app, dict):
+        for k in ("call_count", "total_cputime", "total_time"):
+            try:
+                worst = max(worst, float(app.get(k) or 0))
+            except (TypeError, ValueError):
+                continue
+    buc = usage.get("x-business-use-case-usage")
+    if isinstance(buc, dict):
+        for entries in buc.values():
+            for e in entries if isinstance(entries, list) else []:
+                for k in ("call_count", "total_cputime", "total_time"):
+                    try:
+                        worst = max(worst, float((e or {}).get(k) or 0))
+                    except (TypeError, ValueError):
+                        continue
+    return worst
+
+
+def check_usage(usage: dict) -> None:
+    """Упреждающий тормоз по квоте Meta. Дешевле остановиться самим, чем словить лимит."""
+    if not usage:
+        return
+    pct = _peak_percent(usage)
+    if pct >= USAGE_STOP_PERCENT:
+        until = _now() + COOLDOWN_HOURS * 3600
+        try:
+            COOLDOWN_FILE.write_text(str(until), encoding="utf-8")
+        except OSError:
+            pass
+        raise ThreadsBlocked(
+            f"Квота Meta израсходована на {pct:.0f}% (порог {USAGE_STOP_PERCENT}%). Останавливаемся "
+            f"САМИ, не дожидаясь лимита. Данные на диске целы, продолжим позже."
+        )
+    if pct >= USAGE_WARN_PERCENT:
+        log.warning("Threads: квота Meta израсходована на %.0f%% — притормаживаем", pct)
 
 
 def trip(status: int | None, meta_code: int | None, detail: str) -> None:

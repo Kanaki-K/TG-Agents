@@ -70,7 +70,11 @@ def _open(url: str, data: bytes | None = None, *, token: str | None = None,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — хост фиксирован
             body = json.loads(r.read().decode("utf-8"))
-        _guard.after(ep, t0, status=200)
+            # Расход квоты ГЛАЗАМИ Meta. getattr — заголовков может не быть; их отсутствие
+            # не повод ронять сбор.
+            usage = _guard.usage_from_headers(getattr(r, "headers", None))
+        _guard.after(ep, t0, status=200, usage=usage)
+        _guard.check_usage(usage)  # ≥80% → стоп САМИ, не дожидаясь отказа
         return body
     except urllib.error.HTTPError as e:
         detail, code = _extract_error(e.read())

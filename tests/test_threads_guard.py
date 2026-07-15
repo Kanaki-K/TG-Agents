@@ -30,8 +30,9 @@ def sandbox(tmp_path, monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, headers: dict | None = None):
         self._body = body
+        self.headers = headers if headers is not None else {}
 
     def read(self):
         return self._body
@@ -237,6 +238,58 @@ def test_journal_records_failures_too(sandbox, monkeypatch):
         _api.get("me", {"fields": "id"}, token="TOK")
     row = json.loads(_guard.LOG_FILE.read_text(encoding="utf-8").strip())
     assert row["status"] is None and row["error"]
+
+
+# --- Квота глазами Meta (x-app-usage) -----------------------------------------------
+# Реальная квота Threads API = 4800 * показы за 24ч, минимум показов 10 → пол квоты 48 000
+# запросов в сутки. Наши бюджеты (120/прогон, 300/сутки) на порядки ниже — они про аккуратность,
+# а не про лимит Meta. Но проценты из заголовка — единственный честный сигнал, и мы их слушаем.
+
+def test_usage_parsed_from_headers(sandbox, monkeypatch):
+    _guard.unlock("тест")
+
+    usage = {"x-app-usage": json.dumps({"call_count": 3, "total_cputime": 1, "total_time": 2})}
+    monkeypatch.setattr(_api.urllib.request, "urlopen",
+                        lambda req, timeout=None: _FakeResponse(b'{"id": "42"}', usage))
+    _api.get("me", {"fields": "id"}, token="TOK")
+    row = json.loads(_guard.LOG_FILE.read_text(encoding="utf-8").strip())
+    assert row["usage"]["x-app-usage"]["call_count"] == 3, "расход квоты не попал в журнал"
+
+
+def test_high_usage_stops_run_before_limit(sandbox, monkeypatch):
+    """На 80% тормозим САМИ: 100% — это уже отказ и отметка в системе Meta."""
+    _guard.unlock("тест")
+
+    hot = {"x-app-usage": json.dumps({"call_count": 85, "total_cputime": 10, "total_time": 12})}
+    monkeypatch.setattr(_api.urllib.request, "urlopen",
+                        lambda req, timeout=None: _FakeResponse(b'{"id": "42"}', hot))
+    with pytest.raises(_guard.ThreadsBlocked, match="Квота Meta"):
+        _api.get("me", {"fields": "id"}, token="TOK")
+    assert _guard.COOLDOWN_FILE.exists()
+
+
+def test_peak_percent_takes_worst_metric():
+    """Упрёмся в ЛЮБОЙ из лимитов — тормознут всё, поэтому смотрим на худший."""
+    usage = {"x-app-usage": {"call_count": 5, "total_cputime": 91, "total_time": 3}}
+    assert _guard._peak_percent(usage) == 91
+
+
+def test_missing_usage_headers_are_harmless(sandbox, monkeypatch):
+    """Заголовков может не быть вовсе — это не повод падать или блокировать."""
+    _guard.unlock("тест")
+
+    class _NoHeaders:
+        def read(self):
+            return json.dumps({"id": "42"}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(_api.urllib.request, "urlopen", lambda req, timeout=None: _NoHeaders())
+    assert _api.get("me", {"fields": "id"}, token="TOK") == {"id": "42"}
 
 
 def _io_bytes(b: bytes):
