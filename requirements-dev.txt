@@ -4,3 +4,6 @@
 # NB: keep this file ASCII-only - pip reads it in the OS locale codec (cp1251 on RU Windows),
 # so Cyrillic/UTF-8 comments without a BOM cause UnicodeDecodeError on install.
 pytest>=8.0,<9
+# CVE scan of installed deps (audit 2026-07-15: transitive js2py via twikit has a known RCE).
+# Non-blocking step in CI; run locally with:  python -m pip_audit
+pip-audit>=2.7,<3

@@ -30,3 +30,12 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+      # CVE-скан зависимостей (аудит 15.07: транзитивный js2py через twikit несёт известный
+      # sandbox-escape CVE-2024-28397). НЕ роняет сборку — сигнал, а не шлагбаум: править пины
+      # решает владелец. Смотрим лог шага при жёлтой отметке.
+      - name: Audit dependencies for known CVEs (non-blocking)
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          python -m pip_audit -r requirements.lock --desc
