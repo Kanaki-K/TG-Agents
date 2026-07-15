@@ -53,7 +53,7 @@ run_*.py      точки входа (по одной на агента) + run_pi
 | `run_creator.py` | Криейтор | `CREATOR_BOT_TOKEN` | `CREATOR_ANTHROPIC_KEY`→общий | opus-4-8 |
 | `run_analyst.py` | Аналитик | `ANALYST_BOT_TOKEN` | `ANALYST_ANTHROPIC_KEY`→общий | haiku-4-5 |
 | `run_pipeline.py` | НЕ бот — вся цепь Скаут→Криейтор→2FA→отложка одной командой; `--scope` → короткая ветка 🔭 (см. [scope.md](scope.md)); вышедший флагман пишет в журнал (`flagship_journal`) | ключи агентов | — | через runmode |
-| `run_threads_pipeline.py` | НЕ бот — 🧵 мини-флагман Threads: дистилляция последнего ВЫШЕДШЕГО флагмана в серию 1-4 постов → отложка ТГ-канала на ревью (`THREADS_TEST_CHANNEL`, иначе боевой с предупреждением); то же — команда `/run_threads` у Криейтора | ключ Криейтора | — | sonnet через runmode |
+| `run_threads_pipeline.py` | НЕ бот — 🧵 мини-флагман Threads: дистилляция последнего ВЫШЕДШЕГО флагмана в серию 1-4 постов → отложка ТГ-канала на ревью (`THREADS_TEST_CHANNEL`, иначе общий `PUBLISH_CHANNEL` завода — сейчас у владельца это ТЕСТОВЫЙ канал); то же — команда `/run_threads` у Криейтора | ключ Криейтора | — | sonnet через runmode |
 | `refresh.py` / `refresh_threads.py` | НЕ боты — обновление аналитики ТГ / Threads одной командой (сбор→обогащение→таблица); Threads-сбор идёт под защитой `_guard` | MTProto / Threads-токен | — | — |
 | `run_cost_report.py` | НЕ бот — отчёт по `data/cost_log.jsonl` (прогоны/дни/цена/кэш) | — | — | — |
 
