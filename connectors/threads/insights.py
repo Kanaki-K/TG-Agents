@@ -45,11 +45,19 @@ def media_insights(media_id: str) -> dict:
 
 
 def metrics_for(media_ids: list[str]) -> dict[str, dict]:
-    """Метрики для набора постов: {media_id: {метрики}}. Ошибка по одному не роняет остальные."""
+    """Метрики для набора постов: {media_id: {метрики}}. Ошибка по ОДНОМУ не роняет остальные.
+
+    Но ThreadsBlocked (защита: троттлинг/бюджет/закрытая сеть) НЕ ловим — он обязан пробить цикл
+    наверх. Раньше здесь было `except ThreadsError` на всё: при лимите цикл 500 раз подряд получал
+    отказ, 500 раз его проглатывал и шёл дальше — то есть ускорялся ровно тогда, когда надо было
+    остановиться. Кто зовёт — сохраняет то, что успел (см. collect._merge_keep).
+    """
     result: dict[str, dict] = {}
     for mid in media_ids:
         try:
             result[mid] = media_insights(mid)
+        except _api.ThreadsBlocked:
+            raise
         except _api.ThreadsError as e:
             result[mid] = {"error": str(e)}
     return result
