@@ -5,11 +5,13 @@
 Полное «зачем» и стратегия — в [PLAN.md](PLAN.md). Контекст для Claude Code — в [../CLAUDE.md](../CLAUDE.md).
 Зрелость и панч-лист фиксов — в [AUDIT.md](AUDIT.md).
 
-> Статус на 2026-07-02: завод работает end-to-end (Скаут→Криейтор→Публикатор). 5 ботов + 1 «бот-без-бота»
-> (Публикатор). Общая зрелость 7/10.
-> **Фаза 2 (Threads):** коннектор `connectors/threads/` построен (аналитика зеркалит ТГ, веха 2.2) — но
-> ПОКА не подключён ни к одному боту (аналитик его ещё не читает; ни один `core/*` его не импортирует).
-> Публикация в Threads (веха 2.3) — впереди. Детали — [PLAN.md](PLAN.md).
+> Статус на 2026-07-15: завод работает end-to-end (Скаут→Криейтор→Публикация). **3 бота** — Скаут,
+> Криейтор, Аналитик (ассистент/developer/publisher удалены 12.07 ради фокуса) + CLI-конвейеры.
+> Общая зрелость 7.4/10 ([AUDIT.md](AUDIT.md)).
+> **Фаза 2 (Threads): аналитика ПОДКЛЮЧЕНА** — Аналитик читает площадку инструментами
+> `threads_report`/`threads_find` (с 12.07); контентная ветка «мини-флагман» ЖИВЁТ (`/run_threads` у
+> Криейтора / `run_threads_pipeline.py`, с 14.07). НЕ подключена только живая публикация В САМ Threads
+> (веха 2.3/E) — пока владелец ставит отложку руками в приложении. Детали — [PLAN.md](PLAN.md).
 
 ---
 
@@ -50,7 +52,9 @@ run_*.py      точки входа (по одной на агента) + run_pi
 | `run_scout.py` | Скаут | `SCOUT_BOT_TOKEN` | `SCOUT_ANTHROPIC_KEY`→общий | sonnet-4-6 |
 | `run_creator.py` | Криейтор | `CREATOR_BOT_TOKEN` | `CREATOR_ANTHROPIC_KEY`→общий | opus-4-8 |
 | `run_analyst.py` | Аналитик | `ANALYST_BOT_TOKEN` | `ANALYST_ANTHROPIC_KEY`→общий | haiku-4-5 |
-| `run_pipeline.py` | НЕ бот — вся цепь Скаут→Криейтор→2FA→отложка одной командой; `--scope` → короткая ветка 🔭 (см. [scope.md](scope.md)) | ключи агентов | — | через runmode |
+| `run_pipeline.py` | НЕ бот — вся цепь Скаут→Криейтор→2FA→отложка одной командой; `--scope` → короткая ветка 🔭 (см. [scope.md](scope.md)); вышедший флагман пишет в журнал (`flagship_journal`) | ключи агентов | — | через runmode |
+| `run_threads_pipeline.py` | НЕ бот — 🧵 мини-флагман Threads: дистилляция последнего ВЫШЕДШЕГО флагмана в серию 1-4 постов → отложка ТГ-канала на ревью (`THREADS_TEST_CHANNEL`, иначе боевой с предупреждением); то же — команда `/run_threads` у Криейтора | ключ Криейтора | — | sonnet через runmode |
+| `refresh.py` / `refresh_threads.py` | НЕ боты — обновление аналитики ТГ / Threads одной командой (сбор→обогащение→таблица); Threads-сбор идёт под защитой `_guard` | MTProto / Threads-токен | — | — |
 | `run_cost_report.py` | НЕ бот — отчёт по `data/cost_log.jsonl` (прогоны/дни/цена/кэш) | — | — | — |
 
 **Публикация** — НЕ отдельная роль: команда `/schedule` внутри Криейтора (детерминированная, без LLM,
@@ -58,8 +62,10 @@ run_*.py      точки входа (по одной на агента) + run_pi
 удалён (12.07.2026) — это был ghost-роль без раннера; сам механизм публикации не тронут.
 
 > **⚠️ Построено vs подключено** (аудит — чтобы не читалось как рабочие фичи):
-> - **Threads** (`connectors/threads/*`, ~1350 стр) — ПОСТРОЕН, но НИ ОДИН `core/*`/бот его не импортирует
->   (осознанный задел Фазы 2.3, см. статус вверху). Пока не подключён — не рабочая фича.
+> - **Threads-аналитика и мини-флагман — ПОДКЛЮЧЕНЫ и работают** (см. статус вверху). Не подключена
+>   только живая публикация в сам Threads (веха 2.3/E) — отложку туда владелец ставит руками.
+> - **`threads_dedup` + `orientation_digest`** — построены и покрыты тестами, но НИКЕМ не вызываются:
+>   осознанный задел «Формата 2» (Threads-контент со своей разведкой). Не достраивать вперёд нужды.
 > - **Публикатор** — ghost-роль: код в `creator_tools._publish_now`, отдельного бота/входа нет (см. выше).
 
 ---
@@ -88,6 +94,12 @@ Per-agent файлы лежат в `core/` вынужденно (см. §8 «П�
   независимая сверка направлений брифа со сводкой тем `analytics.topics_digest()` (🆕/⚠️/🔁) ДО письма.
 - `analytics_tools.py` / `market_tools.py` — общие dispatch-слои инструментов: read-only аналитика и
   живая цена `market_price` (→ `connectors/market`). Переиспользуют Скаут/Криейтор/Аналитик/2FA одинаково.
+- `flagship_journal.py` — журнал ВЫШЕДШИХ флагманов (`data/published_flagships.jsonl`, append-only,
+  в бэкапе): пишет `run_pipeline` ПОСЛЕ постановки отложки, читает `threads_creator` (вход дистилляции).
+- `io_safe.py` — чтение JSON, которое никогда не бросает (битый файл → default + INFO-лог); горячий
+  путь аналитики и шин.
+- `tg_scoring.py` — честный скоринг постов ТГ (зрелость+rate+тиры) → инструмент Аналитика `honest_ranking`.
+- `untrusted.py` — обёртка недоверенного внешнего текста (RSS/X/чужие каналы) против prompt-injection.
 
 **Реализация агентов (бот + «руки» каждого):**
 | Агент | Бот | Инструменты (`*_tools.py`) → бэкенд |
@@ -110,31 +122,40 @@ vision-выбор (`_vision_pick`, `VISION_MODEL`=haiku) берёт подход
 (`data/scope_last_cover.txt`); нет годной → пост уходит текстом. Переиспользует персону/руки Криейтера,
 токена/бота своего нет. Запуск: `run_pipeline.py --scope` или команда-действие `/scope`. Подробно — [scope.md](scope.md).
 
+**Ветка `threads_creator.py` (🧵 мини-флагман Threads, НЕ отдельный агент):** дистиллирует последний
+ВЫШЕДШИЙ ТГ-флагман (вход — `flagship_journal.latest()`) в серию 1-4 коротких постов Threads. Свой
+`_system()` (`threads_manual.md` + `threads_flagman_anchors.md` + `threads_lessons.md` + `brand.md` —
+ТГ-мануалы НЕ грузит: голос Threads ≠ голос ТГ, доказано данными 434 постов). Без Скаута/анти-повтора/
+2FA/обложки — флагман прошёл все гейты ДО публикации, мы его лишь режем. Петля обучения:
+`/run_threads_feedback <финал>` → `write_feedback` → урок в `threads_lessons.md` (анти-дубль). Серия
+идёт в отложку ТГ-канала НА РЕВЬЮ (это обкатка, не публикация); в сам Threads — руками (веха E).
+
 ---
 
-## 4.1 Две контентные ветки на одном ядре (флагман ↔ scope)
+## 4.1 Контентные ветки на одном ядре (флагман ↔ scope ↔ 🧵threads)
 
-**Не две архитектуры, а ОДНО ядро → N контентных инструментов.** Флагман и scope — первые два; Threads/
-Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ ядре (та же инверсия зависимостей, §1). Разделение
-проходит по слою **ремесла/контента**, и держится оно тем, **какие файлы памяти грузит каждая ветка** —
-а НЕ дублированием кода. Правка одной ветки не трогает другую именно потому, что её файлы вторая не читает.
+**Не три архитектуры, а ОДНО ядро → N контентных инструментов.** Флагман и scope — первые два,
+мини-флагман Threads — третий (добавлен 14.07 по тому же паттерну, ядро не тронуто); Twitter по
+роадмапу = №4 (та же инверсия зависимостей, §1). Разделение проходит по слою **ремесла/контента**,
+и держится оно тем, **какие файлы памяти грузит каждая ветка** — а НЕ дублированием кода. Правка
+одной ветки не трогает другую именно потому, что её файлы вторая не читает.
 
-**Раздельно (ветки НЕ грузят файлы друг друга):**
-| | Флагман (`creator_bot`/`_run_creator`) | Scope (`scope_writer`/`_run_scope`) |
-|---|---|---|
-| Мануал | `content_manual.md` | `scope_manual.md` |
-| Уроки | `post_lessons.md` (`record_lesson`) | `scope_lessons.md` (`record_scope_lesson`) |
-| Голос | копия правил в `content_manual §5/§7` | `voice_core.md` |
-| Выбор темы | банк+якорь (`_pick_timely_theme`, сентимент→банк) | горячий повод из брифа + гейт свежести |
-| Эталоны | `anchor_posts.md`, `flagship_topics.md` | `headline_bank.md` |
-| Обложка | GPT `make_image` (`connectors/gpt_image`) | og:image первоисточника (`connectors/source_media`) |
-| Модель/мышление | opus / adaptive | sonnet / бюджет (`SCOPE_THINKING`) |
+**Раздельно (ветки НЕ грузят файлы друг друга; страж — `tests/test_isolation_scope_flagship.py`):**
+| | Флагман (`creator_bot`/`_run_creator`) | Scope (`scope_writer`/`_run_scope`) | 🧵 Threads (`threads_creator`) |
+|---|---|---|---|
+| Мануал | `content_manual.md` | `scope_manual.md` | `threads_manual.md` |
+| Уроки | `post_lessons.md` (`record_lesson`) | `scope_lessons.md` (`record_scope_lesson`) | `threads_lessons.md` (`/run_threads_feedback`) |
+| Голос | копия правил в `content_manual §5/§7` | `voice_core.md` | эталоны в `threads_flagman_anchors.md` |
+| Выбор темы | банк+якорь (`_pick_timely_theme`, сентимент→банк) | горячий повод из брифа + гейт свежести | НЕ выбирает — дистиллирует последний вышедший флагман (`flagship_journal`) |
+| Эталоны | `anchor_posts.md`, `flagship_topics.md` | `headline_bank.md` | `threads_flagman_anchors.md` |
+| Обложка | GPT `make_image` (`connectors/gpt_image`) | og:image первоисточника (`connectors/source_media`) | нет (текстовая серия) |
+| Модель/мышление | opus / adaptive | sonnet / бюджет (`SCOPE_THINKING`) | sonnet / без мышления |
 
 **Общее (одно ядро — «нейтральная сантехника»):** движок (`llm`, `agent_runtime`, `config`, `cost`,
 `runmode`); руки (`creator_tools` — scope переиспользует их минус `make_image`; линтер `_lint` с параметром
-`kind`); **Скаут** (общий инструмент разведки: scope им живёт, флагман минимально — у него банк+сентимент);
-`verify` (2FA); `dedup` (модуль общий, функции ветко-специфичны); `brand.md`; Публикатор; выгрузка канала;
-`market_price`.
+`kind`); **Скаут** (общий инструмент разведки: scope им живёт, флагман минимально — у него банк+сентимент,
+🧵 threads НЕ пользуется вовсе); `verify` (2FA); `dedup` (модуль общий, функции ветко-специфичны);
+`brand.md` (грузят все ТРИ ветки — правка бьёт по всем); Публикатор; выгрузка канала; `market_price`.
 
 **⚠️ Где изоляция РВЁТСЯ — общие МУТАБЕЛЬНЫЕ поверхности.** Изоляция держится на договорённости, не на
 коде — ничто технически не мешает протечь. Правка этих файлов бьёт по ОБЕИМ веткам (или молча по «не той»):
@@ -206,14 +227,21 @@ Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ �
 | `briefs/*.md` ★ (gitignore) | Скаут `save_brief` | Криейтор, verify |
 | `drafts/*.md` ★ (gitignore) | Криейтор `save_draft` | Криейтор, `_publish_now`, verify |
 | `image_prompt.md` (стиль обложки) | владелец | Криейтор `_build_image_prompt` |
+| `threads_manual.md` (мануал мини-флагмана 🧵: правила дистилляции/нарезки) | владелец | `threads_creator` (`_system`) |
+| `threads_flagman_anchors.md` (эталоны голоса и нарезки Threads) | владелец | `threads_creator` (`_system`) |
+| `threads_lessons.md` (уроки из правок серий, отдельно от ТГ) | Криейтор `/run_threads_feedback` (анти-дубль) | `threads_creator` (`_system`) |
+| `threads_drafts/*.md` ★ (gitignore, архив серий) | `threads_creator` | владелец (ревью) |
 | `agents/<name>/SKILL.md` (личность) | владелец вручную | этот агент `_system` |
 
 **data/ (вне git — рантайм):**
 | Файл | Писатель | Читатель |
 |---|---|---|
 | `channel_posts.json` / `channel_stats.json` / `post_topics.json` / `post_formats.json` | `telegram_export/*` + Аналитик | `analytics.py` |
-| `threads_posts.json` / `threads_stats.json` / `threads_topics.json` / `threads_analytics.{csv,xlsx}` ⚠️ Фаза 2 | `connectors/threads/*` (CLI) | пока НИКТО в рантайме (аналитик-бот ещё не читает) — только отчёт `threads/report` |
-| `threads_token.json` (авто-refresh, невосстановим без OAuth-бутстрапа) | `threads/auth.py` | весь `connectors/threads/*` |
+| `threads_posts.json` / `threads_stats.json` / `threads_topics.json` / `threads_analytics.{csv,xlsx}` | `connectors/threads/*` (`refresh_threads.py`) | **Аналитик** (`threads_report`/`threads_find`, с 12.07); `threads_dedup` (задел Формата 2) |
+| `threads_token.json` (авто-refresh, невосстановим без OAuth-бутстрапа; в бэкапе) | `threads/auth.py` | весь `connectors/threads/*` |
+| `published_flagships.jsonl` ★ журнал ВЫШЕДШИХ флагманов (append-only, датированная история; в бэкапе) | `flagship_journal.record` (из `run_pipeline` после отложки) | `threads_creator` (вход дистилляции) |
+| `threads_unlocked` (стоп-кран: НЕТ файла = сеть Threads ЗАКРЫТА) / `threads_cooldown` / `threads_api_log.jsonl` (журнал каждого запроса) | владелец (unlock) / `threads/_guard` | `_guard` перед КАЖДЫМ запросом; см. OPERATIONS.md |
+| `threads_my_replies.json` (корпус живого голоса, 4966 реплик) + `psychotype_notes.md` / `threads_psychotype.md` (выжимка/аватар; всё в бэкапе) | разовый дамп 14.07 / ручная LLM-выжимка | владелец, будущие голосовые работы |
 | `custom_emoji.json` | `telegram_emoji/collect_ids.py` | `tg_format`, `creator_tools._lint` |
 | `creator_last_cover.txt` ★ / `creator_pending_media.txt` ★ | `creator_tools.make_image` | `_publish_now` (обложку цепляет, ТОЛЬКО если она свежее драфта — иначе чужая «из резерва») / `agent_runtime` |
 | `scope_last_cover.txt` ★ (`SCOPE_COVER`) + `source_media/scope_*.jpg` | `scope_writer._attach_media` (og:image + vision-выбор) | `_publish_now` (обложка 🔭 из первоисточника; пусто → scope уходит текстом) |
@@ -277,10 +305,19 @@ Twitter по роадмапу = инструменты №3-4 на ТОМ ЖЕ �
 8. **Threads-токен — окно refresh 60 дней** (`threads/auth.py`): долгоживущий токен обновляется в окне
    «старше 24ч и младше 60д». Пропустил окно — доступ отваливается, нужен повторный OAuth-бутстрап.
    `data/threads_token.json` без бэкапа. (Актуально, когда коннектор подключат к боту — веха 2.3.)
-9. **Изоляция веток флагман/scope — по договорённости, не по коду** (§4.1). Правка общего МУТАБЕЛЬНОГО
-   файла (`voice_core.md` — scope-only!, `verify.py`, `brand.md`, `_lint`, `dedup.py`, глоб.
-   `llm.MAX_TOKENS`/`resolve_thinking`) бьёт по обеим веткам или молча по «не той». Модель/мышление —
-   per-agent через `config.yaml`, не глобально. Урок/подача/обложка формата — в файл СВОЕЙ ветки.
+9. **Изоляция веток флагман/scope/threads — статический тест + договорённость** (§4.1;
+   `tests/test_isolation_scope_flagship.py` ловит протечку `_read`-ов). Правка общего МУТАБЕЛЬНОГО
+   файла (`voice_core.md` — scope-only!, `verify.py`, `brand.md` — грузят все ТРИ ветки, `_lint`,
+   `dedup.py`, глоб. `llm.MAX_TOKENS`/`resolve_thinking`) бьёт по всем веткам или молча по «не той».
+   Модель/мышление — per-agent через `config.yaml`, не глобально. Урок/подача — в файл СВОЕЙ ветки.
+10. **`flagship_journal` — продюсер-шина Threads-ветки**: `run_pipeline` пишет вышедший флагман в
+    `data/published_flagships.jsonl` ПОСЛЕ постановки отложки (fail-open: сбой записи публикацию не
+    роняет, но мини-флагман молча останется без свежего входа). Формат записи менять синхронно с
+    `threads_creator`.
+11. **Threads: сеть закрыта ПО УМОЛЧАНИЮ** (`threads/_guard` — единственный вход перед сетью, обойти
+    нельзя): нет `data/threads_unlocked` → любой запрос = отказ. Бюджеты прогона/суток, темп, чтение
+    квоты `x-app-usage`, стоп на первом признаке лимита + cooldown. «Threads молчит» → сначала смотри
+    сюда (рунбук — OPERATIONS.md), потом в код.
 
 ---
 
