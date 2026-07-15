@@ -15,8 +15,11 @@ from core import agent_runtime, analytics, config, creator_tools, llm, runmode, 
 
 AGENT_NAME = "creator"
 
-# Серверный веб-поиск Anthropic — для ФАКТЧЕКА цифр/дат/цен перед выдачей (его выполняет Claude).
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 6}
+# Серверный веб-поиск Anthropic — свежие цифры/даты/цены под тему (его выполняет Claude).
+# max_uses=2 (было 6, аудит расходов 15.07, решение владельца): флагман живёт от банка ВЕЧНЫХ
+# тем (Модель А, 07.07) — поиск ему приправа, не основа; свежий повод = работа scope. Точечно
+# подтянуть цифру можно, крутить 6 Opus-раундов поиска — нет. Ошибки цифр страхует 2FA (verify).
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
 
 WELCOME = (
     "Я Криейтор KANAKI CRYPTO. Пишу посты в твоём голосе по стандарту канала — материал беру прямо "
