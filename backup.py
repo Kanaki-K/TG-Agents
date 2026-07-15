@@ -32,6 +32,12 @@ IRREPLACEABLE = [
     "data/scout_owner.txt",              # чаты владельца для проактивных отчётов
     "data/creator_owner.txt",
     "data/channel-analyst_owner.txt",
+    "data/published_flagships.jsonl",    # журнал ВЫШЕДШИХ флагманов — вход Threads-дистиллятора;
+                                         # датированная история (драфты эфемерны, а этот — нет)
+    "data/threads_my_replies.json",      # корпус живого голоса (4966 реплик из Threads); формально
+                                         # пересобирается через API, но это сотни запросов — не повторяем
+    "data/psychotype_notes.md",          # ручная выжимка корпуса (17 партий через LLM) — не пересоздать
+    "data/threads_psychotype.md",        # аватар голоса, синтез по всему корпусу — не пересоздать
     "memory",                            # ВСЯ обученность/состояние агентов (gitignored: уроки, банки,
 ]                                        # леджеры, брифы, драфты) — в репозитории её НЕТ
 
@@ -44,8 +50,9 @@ SCRATCH = [
     "data/threads_analytics.csv", "data/threads_analytics.xlsx",
     "data/source_media", "data/gpt_images", "data/incoming",
     "data/creator_last_cover.txt", "data/creator_last_kind.txt", "data/scope_last_cover.txt",
+    "data/creator_pending_media.txt",
+    "data/scout_seen.json",              # watermark разведки — пересоберётся следующим прогоном Скаута
     "data/.login_code_hash",
-    "data/result.json", "data/analyze.mjs",   # legacy-скретч (не в git) — можно смело удалять
 ]
 
 
