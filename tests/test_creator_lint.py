@@ -125,3 +125,22 @@ def test_recess_calque_warns():
     # «до рецесса» — калька с recess прямо из источника; владелец правил на «до перерыва»
     _, warns = creator_tools._lint("⚠️ Заголовок\n\nСенат вернулся, до рецесса 3 недели", "scope")
     assert any("рецесс" in w for w in warns)
+
+
+# --- заголовок ОБЛОЖКИ: без эмодзи и без кавычек (правило владельца 16.07) ---
+
+def test_cover_title_strips_quotes():
+    # в теле поста «лапки» законны (в банке 6 из 291 заголовков с кавычками) — режем ТОЛЬКО для баннера
+    assert creator_tools._clean_title('📊 "Я сделал 5 иксов". А сколько это в год?') \
+        == "Я сделал 5 иксов. А сколько это в год?"
+
+
+def test_cover_title_strips_guillemets_and_curly():
+    assert creator_tools._clean_title("💎 Что значит «сильный актив» в портфеле?") \
+        == "Что значит сильный актив в портфеле?"
+    assert creator_tools._clean_title("💥 Миф: “Я живу на крипту”") == "Миф: Я живу на крипту"
+
+
+def test_cover_title_keeps_plain_text_intact():
+    assert creator_tools._clean_title("📉 DXY в 2026: главный фильтр для крипто-риска") \
+        == "DXY в 2026: главный фильтр для крипто-риска"
