@@ -106,6 +106,14 @@ def test_scope_headline_single_sentence_ok():
         assert not any("ДВУХ предложени" in w for w in warns), good
 
 
+def test_scope_headline_initials_not_two_sentences():
+    # точка после ИНИЦИАЛА/сокращения из одной буквы — не конец предложения (ложняк 17.07: T. Rowe Price)
+    for good in ("📊 T. Rowe Price открыл крипту для пенсионных денег\n\nтело",
+                 "📊 U.S. Bank запустил кастоди для крипты\n\nтело"):
+        _, warns = creator_tools._lint(good, "scope")
+        assert not any("ДВУХ предложени" in w for w in warns), good
+
+
 # --- утечка англоязычного источника в русский текст (сессия 15.07, CLARITY) ---
 
 def test_latin_person_name_warns():
