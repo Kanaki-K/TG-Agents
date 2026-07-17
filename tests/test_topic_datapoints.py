@@ -57,4 +57,25 @@ def test_unmatched_reported(tmp_path, monkeypatch):
     threads = THREADS + [{"id": "9", "date": "2026-07-16", "text": "личный пост про совсем иное вообще"}]
     res = td.build([ENTRY], [FLAG], TG, threads)
     assert len(res["datapoints"]) == 1
-    assert len(res["unmatched_threads"]) == 1  # личный пост не привязался
+    assert len(res["unmatched_threads"]) == 1  # пост без категории и без связи не привязался
+
+
+def test_standalone_self_written_becomes_datapoint(tmp_path, monkeypatch):
+    _bank(tmp_path, monkeypatch)
+    # пост НЕ из дистилляции, но классификатор дал крипто-категорию → свой датапоинт (via=standalone)
+    threads = [{"id": "9", "date": "2026-07-10", "text": "мой пост про рынок",
+                "category": "рынок", "quality": 70.0}]
+    res = td.build([], [], [], threads)
+    assert len(res["datapoints"]) == 1
+    dp = res["datapoints"][0]
+    assert dp["category"] == "рынок" and dp["via"] == "standalone"
+    assert dp["threads_best"] == 70.0 and dp["tg_quality"] is None
+    assert res["unmatched_threads"] == []
+
+
+def test_personal_post_excluded_from_loop(tmp_path, monkeypatch):
+    _bank(tmp_path, monkeypatch)
+    threads = [{"id": "8", "date": "2026-07-10", "text": "личный пост", "category": "личное", "quality": 90.0}]
+    res = td.build([], [], [], threads)
+    assert res["datapoints"] == []             # «личное» — не крипто-категория, пикеру не действие
+    assert len(res["unmatched_threads"]) == 1

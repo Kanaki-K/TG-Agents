@@ -55,10 +55,11 @@ def _recency_weight(created: str | None, today: date | None) -> float:
 
 
 def _by_category(datapoints: list[dict], today: date | None) -> dict[str, list[tuple[float, float]]]:
-    out: dict[str, list[tuple[float, float]]] = {}
+    valid = set(topic_category.all_slugs())     # только 7 крипто-категорий банка (пикер действует по ним);
+    out: dict[str, list[tuple[float, float]]] = {}   # «личное»/«прочее»/UNKNOWN сюда не идут
     for dp in datapoints:
         cat = dp.get("category")
-        if not cat or cat == topic_category.UNKNOWN:
+        if cat not in valid:
             continue
         sc = topic_score(dp.get("tg_quality"), dp.get("threads_best"))
         if sc is None:

@@ -8,6 +8,15 @@ def _dps(cat, scores):
     return [{"category": cat, "threads_best": s, "tg_quality": None} for s in scores]
 
 
+def test_non_bank_categories_ignored():
+    # в петлю идут только 7 крипто-категорий банка; «личное»/UNKNOWN — мимо
+    dps = (_dps("рынок", [60, 60, 60, 60]) + _dps("личное", [95, 95, 95, 95])
+           + _dps(cs.topic_category.UNKNOWN, [10]))
+    rows = {r["category"]: r for r in cs.leaderboard(dps)}
+    assert "рынок" in rows
+    assert "личное" not in rows and cs.topic_category.UNKNOWN not in rows
+
+
 def test_topic_score_blend_and_fallback():
     assert cs.topic_score(40, 80) == 66.0     # 0.65*80 + 0.35*40
     assert cs.topic_score(None, 80) == 80.0

@@ -23,6 +23,7 @@ from connectors.threads import scoring as th_scoring
 
 _FLAGSHIPS = config.ROOT / "data" / "published_flagships.jsonl"
 _THREADS_POSTS = config.ROOT / "data" / "threads_posts.json"
+_THREADS_TOPICS = config.ROOT / "data" / "threads_topics.json"
 
 
 def _load_flagships() -> list[dict]:
@@ -113,6 +114,12 @@ def _evaluation(flagships: list[dict]) -> None:
     tg_posts = analytics._load_posts()
     tg_scoring.enrich(tg_posts)
     th_scoring.enrich(threads_posts)
+    # классификатор-категория из enrich_topics → на каждый пост (для standalone-датапоинтов)
+    topics = json.loads(_THREADS_TOPICS.read_text(encoding="utf-8")) if _THREADS_TOPICS.exists() else {}
+    for p in threads_posts:
+        t = topics.get(str(p.get("id", "")), {})
+        p["category"] = t.get("category", "")
+        p.setdefault("theme", t.get("theme", ""))
     res = topic_datapoints.build(threads_distill_journal.entries(), flagships, tg_posts, threads_posts)
     dps = res["datapoints"]
     if not dps:

@@ -99,4 +99,25 @@ def build(entries: list[dict], flagships: list[dict], tg_posts: list[dict],
             "via": "+".join(sorted(b["via"])),
             "tg_coverage": tg_cov,
         })
-    return {"datapoints": dps, "unmatched_threads": fl_link["unmatched"]}
+
+    # STANDALONE — посты вне дистилляций (самописные и пр.): каждый = свой датапоинт по КЛАССИФИКАТОРУ
+    # (enrich_topics ставит category). Так «личное>крипта» и виральный самописный крипто-пост тоже
+    # считаются. Берём только 7 крипто-категорий (личное/прочее пикеру не действие) — остальное в leftover.
+    valid = set(topic_category.all_slugs())
+    leftover = []
+    for p in fl_link["unmatched"]:
+        cat = (p.get("category") or "").strip()
+        if cat not in valid:
+            leftover.append(p)
+            continue
+        dps.append({
+            "category": cat,
+            "theme": (p.get("theme") or "(самописный пост)"),
+            "tg_quality": None,
+            "threads_best": p.get("quality"),
+            "created": (p.get("date") or p.get("timestamp") or "")[:10],
+            "n_threads": 1,
+            "via": "standalone",
+            "tg_coverage": 0.0,
+        })
+    return {"datapoints": dps, "unmatched_threads": leftover}

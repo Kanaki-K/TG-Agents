@@ -19,7 +19,10 @@ from pathlib import Path
 
 from anthropic import Anthropic
 
-from core import config
+from core import config, topic_category
+
+# Список 7 категорий банка для классификатора (slug — описание). Держится в синхроне с topic_category.
+_CATS = "\n".join(f'    "{s}" — {topic_category.label(s)}' for s in topic_category.all_slugs())
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -38,6 +41,9 @@ PROMPT = """Ты — аналитик Threads-аккаунта про крипт
 - "theme": тема-тег, 1-3 слова, ЕДИНООБРАЗНО между постами (например: "DeFi", \
 "Безопасность", "Личное", "Обучение", "Новости рынка", "Кошельки", "Биржи", "Психология"). \
 Старайся переиспользовать одни и те же теги для похожих постов.
+- "category": РОВНО один slug-разряд из списка (для само-обучения канала):
+{cats}
+  Личное/бытовое/не про крипту → "личное". Крипта, но ни в один разряд → "прочее".
 - "summary": суть поста одной короткой фразой.
 
 Верни ТОЛЬКО валидный JSON-массив объектов, без пояснений и без markdown.
@@ -75,7 +81,7 @@ def _enrich_batch(client: Anthropic, batch: list[dict]) -> list[dict]:
     msg = client.messages.create(
         model=MODEL,
         max_tokens=OUT_TOKENS,
-        messages=[{"role": "user", "content": PROMPT.format(posts="\n".join(lines))}],
+        messages=[{"role": "user", "content": PROMPT.format(cats=_CATS, posts="\n".join(lines))}],
     )
     out = "".join(b.text for b in msg.content if b.type == "text")
     return _parse_json(out)
@@ -98,6 +104,7 @@ def main() -> None:
                 done[str(item["id"])] = {
                     "title": item.get("title", "").strip(),
                     "theme": item.get("theme", "").strip(),
+                    "category": item.get("category", "").strip(),   # разряд банка для само-обучения
                     "summary": item.get("summary", "").strip(),
                 }
         except Exception as e:  # noqa: BLE001 — не теряем уже сделанное
