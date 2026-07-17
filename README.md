@@ -10,7 +10,7 @@ Each agent is a separate Telegram bot running on a single shared *agent engine*.
 
 > **Status — Phase 1 complete (Telegram: text + images); Phase 2 (Threads) well underway.** The content pipeline runs end-to-end (Scout → Creator → scheduled channel post) and is production-ready: **3 content agents** (Scout · Creator · Analyst) on one shared engine, **211 passing tests**, green CI, one-command backup, and prompt-injection hardening.
 >
-> **Roadmap:** ✅ **Phase 1** — Telegram (text + images) · 🚧 **Phase 2** — Threads: connector, analytics, and a **distillation content format** (TG flagship → native Threads series) are built, plus a **self-learning topic loop** (scores which *category* of topics resonates, mostly via Threads — built but not yet wired to topic selection). Remaining: pipeline integration, delivery polish, a second native Threads format, auto-publish (posting is manual by design for now). · **Phase 3** — X/Twitter. See [`docs/AUDIT.md`](docs/AUDIT.md) for the maturity assessment and [`docs/PLAN.md`](docs/PLAN.md) for the roadmap.
+> **Roadmap:** ✅ **Phase 1** — Telegram (text + images) · 🚧 **Phase 2** — Threads: connector, analytics, and a **distillation content format** (TG flagship → native Threads series) are built, plus a **self-learning topic loop** (scores which *category* of topics resonates and gently tilts the flagship topic picker — **wired for Telegram** since 17.07, learning from on-channel performance; the Threads half is dormant until distillation data accrues). Remaining: delivery polish, a second native Threads format, auto-publish (posting is manual by design for now). · **Phase 3** — X/Twitter. See [`docs/AUDIT.md`](docs/AUDIT.md) for the maturity assessment and [`docs/PLAN.md`](docs/PLAN.md) for the roadmap.
 
 ---
 
