@@ -22,6 +22,12 @@ def _norm(t: str) -> str:
     return " ".join((t or "").split()).lower()
 
 
+def _reach_killed(p: dict) -> bool:
+    """Пост саботирован механикой (ссылка/хештег режут охват) → НЕ честный тест темы.
+    Такие в сигнал категории не берём: иначе тема получает штраф за прошлую механику автора."""
+    return bool(p.get("has_link") or p.get("has_hashtag"))
+
+
 def _find_flagship(flagships: list[dict], date: str, theme: str) -> dict | None:
     """Флагман по теме (точно) или по дате — чтобы достать его текст для матча с ТГ-постом."""
     nt = _norm(theme)
@@ -86,7 +92,7 @@ def build(entries: list[dict], flagships: list[dict], tg_posts: list[dict],
 
     dps = []
     for b in buckets.values():
-        quals = [p.get("quality") for p in b["posts"]]
+        quals = [p.get("quality") for p in b["posts"] if not _reach_killed(p)]  # саботированные — мимо
         threads_best = max([q for q in quals if q is not None], default=None)
         tg_q, tg_cov = _tg_quality_for(b["flagship"], tg_posts) if b["flagship"] else (None, 0.0)
         dps.append({
@@ -107,7 +113,7 @@ def build(entries: list[dict], flagships: list[dict], tg_posts: list[dict],
     leftover = []
     for p in fl_link["unmatched"]:
         cat = (p.get("category") or "").strip()
-        if cat not in valid:
+        if cat not in valid or _reach_killed(p):   # не крипто-категория ИЛИ саботирован механикой
             leftover.append(p)
             continue
         dps.append({

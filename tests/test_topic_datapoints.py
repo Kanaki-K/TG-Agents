@@ -79,3 +79,13 @@ def test_personal_post_excluded_from_loop(tmp_path, monkeypatch):
     res = td.build([], [], [], threads)
     assert res["datapoints"] == []             # «личное» — не крипто-категория, пикеру не действие
     assert len(res["unmatched_threads"]) == 1
+
+
+def test_reach_killed_post_excluded(tmp_path, monkeypatch):
+    _bank(tmp_path, monkeypatch)
+    # крипто-пост, но со ссылкой — охват саботирован механикой → не честный тест темы, не считаем
+    threads = [{"id": "7", "date": "2026-07-10", "text": "пост про рынок", "category": "рынок",
+                "quality": 90.0, "has_link": True}]
+    res = td.build([], [], [], threads)
+    assert res["datapoints"] == []
+    assert len(res["unmatched_threads"]) == 1
