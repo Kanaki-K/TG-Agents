@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 
 from core import config
@@ -51,14 +52,9 @@ def _norm(theme: str) -> str:
     return re.sub(r"\s+", " ", t).lower()
 
 
-def _bank_map() -> dict[str, str]:
-    """{нормализованная_тема → slug категории}. Парсим при каждом вызове — банк маленький
-    (~200 строк), кэш не нужен, зато всегда актуален после правки банка."""
+def _parse_bank(text: str) -> dict[str, str]:
+    """{нормализованная_тема → slug категории} из текста банка."""
     out: dict[str, str] = {}
-    try:
-        text = BANK_FILE.read_text(encoding="utf-8")
-    except Exception:  # noqa: BLE001 — нет банка → пустая карта, category_of вернёт UNKNOWN
-        return out
     slug: str | None = None
     for ln in text.splitlines():
         h = _HEADER_RE.match(ln.strip())
@@ -73,6 +69,30 @@ def _bank_map() -> dict[str, str]:
             if key:
                 out[key] = slug
     return out
+
+
+_cache: dict = {"key": None, "map": {}}
+
+
+def _bank_map() -> dict[str, str]:
+    """Карта тема→категория с кэшем по (путь, mtime): перечитываем банк ТОЛЬКО при его правке.
+    Раньше парсили на КАЖДУЮ тему пула (~200×/прогон пикера — регресс N-15). Кэш по mtime, а не
+    навсегда: правка банка подхватывается сама (иначе была бы новая тихая деградация — устаревшая карта);
+    путь в ключе — чтобы смена BANK_FILE (тесты) не отдала чужую карту.
+    Ошибка чтения/парсинга ЛОГИРУЕТСЯ (N-11): иначе битый банк → все UNKNOWN → наклон пикера тихо off."""
+    try:
+        key = (str(BANK_FILE), BANK_FILE.stat().st_mtime)
+    except OSError:
+        logging.warning("Банк тем не читается (%s) — категории UNKNOWN, наклон пикера выключится", BANK_FILE)
+        return {}
+    if _cache["key"] != key:
+        try:
+            _cache["map"] = _parse_bank(BANK_FILE.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            logging.warning("Банк тем не распарсился (%s) — категории UNKNOWN", BANK_FILE, exc_info=True)
+            _cache["map"] = {}
+        _cache["key"] = key
+    return _cache["map"]
 
 
 def category_of(theme: str) -> str:
