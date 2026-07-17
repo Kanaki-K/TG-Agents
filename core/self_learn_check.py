@@ -24,6 +24,7 @@ from connectors.threads import scoring as th_scoring
 _FLAGSHIPS = config.ROOT / "data" / "published_flagships.jsonl"
 _THREADS_POSTS = config.ROOT / "data" / "threads_posts.json"
 _THREADS_TOPICS = config.ROOT / "data" / "threads_topics.json"
+_TG_TOPICS = config.ROOT / "data" / "post_topics.json"
 
 
 def _load_flagships() -> list[dict]:
@@ -153,6 +154,38 @@ def _evaluation(flagships: list[dict]) -> None:
     c_spread, a_spread = category_scoring.spread(rows), category_scoring.spread(a_rows)
     verdict = "ПОДАЧА (угол)" if a_spread > c_spread else "ТЕМА"
     print(f"\n    СПРЕД (разброс сильн.−слаб.): темы {c_spread} vs углы {a_spread}  →  сильнее объясняет: {verdict}")
+
+    # ВТОРОЙ СЛОЙ — ТГ-канал по тем же 7 категориям: валидация Threads-сигнала на реальной цели
+    tg_topics = json.loads(_TG_TOPICS.read_text(encoding="utf-8")) if _TG_TOPICS.exists() else {}
+    valid = set(tc.all_slugs())
+    tg_dps = []
+    for p in tg_posts:
+        meta = tg_topics.get(str(p.get("id", "")), {})
+        if meta.get("category") not in valid:
+            continue
+        tg_dps.append({"category": meta.get("category"), "angle": meta.get("angle", ""),
+                       "tg_quality": p.get("quality"), "threads_best": None,
+                       "created": (p.get("date") or "")[:10]})
+    tg_rows = category_scoring.leaderboard_by(tg_dps, "category", valid, today=date.today())
+    print("\n    ── ВТОРОЙ СЛОЙ: ТГ-КАНАЛ по тем же категориям (валидация на реальной площадке) ──")
+    if not tg_rows:
+        print("      нет категорий у ТГ-постов — прогони `python -m connectors.telegram_export.enrich_topics --all`")
+        return
+    print("    " + category_scoring.render(tg_rows).replace("\n", "\n    "))
+    th_order = [r["category"] for r in rows]
+    tg_order = [r["category"] for r in tg_rows]
+    print(f"\n    МЕСТО В РЕЙТИНГЕ:   {'категория':<38}{'Threads':>8}{'ТГ':>5}")
+    for cat in tc.all_slugs():
+        tp = str(th_order.index(cat) + 1) if cat in th_order else "—"
+        tg = str(tg_order.index(cat) + 1) if cat in tg_order else "—"
+        print(f"                        {tc.label(cat):<38}{tp:>8}{tg:>5}")
+    if th_order and tg_order:
+        top = "СОВПАЛ" if th_order[0] == tg_order[0] else "разошёлся"
+        bot = "СОВПАЛ" if th_order[-1] == tg_order[-1] else "разошёлся"
+        agree = th_order[0] == tg_order[0] or th_order[-1] == tg_order[-1]
+        print(f"\n    Топ: {top} · Низ: {bot}  →  "
+              + ("сигнал ПЕРЕНОСИТСЯ на ТГ — ребаланс банка обоснован двумя источниками"
+                 if agree else "сигналы РАЗНЫЕ (Threads ≠ ТГ) — банк на Threads-данных НЕ менять"))
 
 
 def main() -> None:
