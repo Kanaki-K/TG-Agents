@@ -168,6 +168,7 @@ def _latest_threads_draft() -> str:
         files = sorted(THREADS_DRAFTS_DIR.glob("*.md"), key=lambda p: -p.stat().st_mtime)
         return files[0].read_text(encoding="utf-8") if files else ""
     except Exception:
+        logging.warning("Не смог прочитать последний Threads-драфт для сравнения", exc_info=True)
         return ""
 
 

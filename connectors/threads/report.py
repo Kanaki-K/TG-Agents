@@ -10,10 +10,10 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
+from core import io_safe
 from connectors.threads import scoring
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,11 +43,9 @@ def _weekday(p: dict):
 def _load(posts=None, topics=None):
     """Данные для отчёта: переданные posts/topics или из data/threads_*.json. (None, {}) — если нет файла."""
     if posts is None:
-        if not POSTS_JSON.exists():
-            return None, {}
-        posts = json.loads(POSTS_JSON.read_text(encoding="utf-8"))
+        posts = io_safe.load_json(POSTS_JSON, None)   # битый/нет файла → None + INFO-лог (не трейс)
     if topics is None:
-        topics = json.loads(TOPICS_JSON.read_text(encoding="utf-8")) if TOPICS_JSON.exists() else {}
+        topics = io_safe.load_json(TOPICS_JSON, {})
     return posts, topics
 
 

@@ -17,7 +17,7 @@ import json
 from collections import Counter
 from datetime import date, timedelta
 
-from core import (analytics, category_scoring, config, post_angle, self_learn, tg_scoring,
+from core import (analytics, category_scoring, config, io_safe, post_angle, self_learn, tg_scoring,
                   threads_distill_journal, topic_category as tc, topic_datapoints)
 from connectors.threads import scoring as th_scoring
 
@@ -42,12 +42,7 @@ def _load_flagships() -> list[dict]:
 
 
 def _load_threads_posts() -> list[dict]:
-    if not _THREADS_POSTS.exists():
-        return []
-    try:
-        return json.loads(_THREADS_POSTS.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return []
+    return io_safe.load_json(_THREADS_POSTS, [])   # битый/нет файла → [] + INFO-лог (не молча)
 
 
 def _fresh_note(created: str) -> str:

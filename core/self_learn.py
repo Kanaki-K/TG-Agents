@@ -10,11 +10,13 @@
 """
 from __future__ import annotations
 
-import json
+import logging
 import random
 from datetime import date
 
-from core import analytics, category_scoring, config, tg_scoring, topic_category
+from core import analytics, category_scoring, config, io_safe, tg_scoring, topic_category
+
+log = logging.getLogger(__name__)
 
 _TG_TOPICS = config.ROOT / "data" / "post_topics.json"
 
@@ -23,7 +25,7 @@ def tg_datapoints() -> list[dict]:
     """Датапоинты канала: каждый пост → его категория (классификатор) + Качество (tg_scoring)."""
     posts = analytics._load_posts()
     tg_scoring.enrich(posts)
-    topics = json.loads(_TG_TOPICS.read_text(encoding="utf-8")) if _TG_TOPICS.exists() else {}
+    topics = io_safe.load_json(_TG_TOPICS, {})   # битый/нет файла → {} + INFO-лог, не трейс
     valid = set(topic_category.all_slugs())
     dps = []
     for p in posts:
@@ -40,7 +42,10 @@ def tg_category_weights() -> dict[str, float]:
     """{категория → вес пикера} по ТГ-данным. Нет данных/сбой → пусто (пикер работает нейтрально)."""
     try:
         return category_scoring.picker_weights(tg_datapoints(), today=date.today())
-    except Exception:  # noqa: BLE001 — сигнал не критичен: сбой не должен ронять генерацию флагмана
+    except Exception:  # noqa: BLE001 — сигнал не критичен: сбой не должен ронять генерацию флагмана,
+        # НО обязан быть ВИДЕН: молча выключенный наклон = тихая деградация обучения (аудит 17.07).
+        log.warning("Наклон категорий пикера ОТКЛЮЧЁН: не смог посчитать веса по ТГ-данным "
+                    "(пикер работает равномерно). Проверь data/post_topics.json и tg_scoring.", exc_info=True)
         return {}
 
 
