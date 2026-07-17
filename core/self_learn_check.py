@@ -113,7 +113,7 @@ def _evaluation(flagships: list[dict]) -> None:
     tg_posts = analytics._load_posts()
     tg_scoring.enrich(tg_posts)
     th_scoring.enrich(threads_posts)
-    res = topic_datapoints.build(flagships, tg_posts, threads_posts)
+    res = topic_datapoints.build(threads_distill_journal.entries(), flagships, tg_posts, threads_posts)
     dps = res["datapoints"]
     if not dps:
         print(f"    ни один флагман не связался с Threads-постами (постов вне окна/покрытия: "
@@ -127,7 +127,7 @@ def _evaluation(flagships: list[dict]) -> None:
             verdict = _fresh_note(dp["created"])       # None не из-за поломки — посты ещё зреют
         else:
             verdict = f"балл темы: {sc}"
-        print(f"    {dp['created']} [{tc.label(dp['category'])}] {verdict}")
+        print(f"    {dp['created']} [{tc.label(dp['category'])}] {verdict}  (связь: {dp.get('via') or '?'})")
         print(f"                ТГ {dp['tg_quality']} · Threads-best {dp['threads_best']} из "
               f"{dp['n_threads']} постов  «{(dp['theme'] or '')[:52]}»")
     rows = category_scoring.leaderboard(dps, today=date.today())

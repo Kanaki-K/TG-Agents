@@ -1,24 +1,43 @@
 """Сборка датапоинтов «флагман + дистилляция» для рейтинга категорий (core/category_scoring).
 
-Соединяет три источника в один датапоинт на тему:
-- КАТЕГОРИЯ — из темы флагмана (core/topic_category);
-- threads_best — ЛУЧШЕЕ Качество среди Threads-постов дистилляции (линкер их привязал);
-- tg_quality — Качество ТГ-флагмана (матч флагман↔пост канала по тексту → его quality).
+Связь Threads-постов с темой — МНОГОУРОВНЕВАЯ, деградирует мягко (см. threads_distill_link):
+1. журнал дистилляций (ID / тугой текст серии) — надёжно, основной путь;
+2. флагман-фаззи (threads_flagship_link) — ЗАПАСНОЙ, для до-журнальных дистилляций.
+Оба сливаются в один датапоинт по флагману (ключ = дата+тема). Датапоинт:
+- КАТЕГОРИЯ — из журнала/банка (topic_category);
+- threads_best — ЛУЧШЕЕ Качество среди привязанных Threads-постов;
+- tg_quality — Качество ТГ-флагмана (матч флагман↔пост канала по тексту).
 
-Чистая логика: посты приходят УЖЕ обогащённые скорингом (несут 'quality'); загрузку файлов и
-enrich делает вызывающий (core/self_learn_check). Так модуль тестируется без тяжёлых зависимостей.
+Чистая логика: посты приходят УЖЕ обогащённые скорингом ('quality'); загрузку/enrich делает
+вызывающий (core/self_learn_check).
 """
 from __future__ import annotations
 
-from core import text_match, threads_flagship_link, topic_category
+from core import text_match, threads_distill_link, threads_flagship_link, topic_category
 
 TG_MIN_COVERAGE = 0.5     # тело флагмана ≈ текст поста канала → покрытие высокое; ниже = не тот пост
 
 
+def _norm(t: str) -> str:
+    return " ".join((t or "").split()).lower()
+
+
+def _find_flagship(flagships: list[dict], date: str, theme: str) -> dict | None:
+    """Флагман по теме (точно) или по дате — чтобы достать его текст для матча с ТГ-постом."""
+    nt = _norm(theme)
+    for fl in flagships:
+        if _norm(fl.get("theme", "")) == nt:
+            return fl
+    d = (date or "")[:10]
+    for fl in flagships:
+        if (fl.get("date", "") or "")[:10] == d:
+            return fl
+    return None
+
+
 def _tg_quality_for(flagship: dict, tg_posts: list[dict]) -> tuple[float | None, float]:
-    """Качество ТГ-поста этого флагмана: матч по покрытию тела флагмана текстом поста.
-    Возвращает (quality|None, покрытие). quality может быть None (пост ещё не зрел) при валидном матче."""
-    body = flagship.get("text", "")
+    """Качество ТГ-поста флагмана: матч по покрытию тела флагмана текстом поста канала."""
+    body = (flagship or {}).get("text", "")
     best, best_cov = None, 0.0
     for p in tg_posts:
         cov = text_match.coverage(body, p.get("text", ""))
@@ -29,26 +48,55 @@ def _tg_quality_for(flagship: dict, tg_posts: list[dict]) -> tuple[float | None,
     return None, round(best_cov, 2)
 
 
-def build(flagships: list[dict], tg_posts: list[dict], threads_posts: list[dict]) -> dict:
-    """Датапоинты + диагностика. tg_posts/threads_posts — УЖЕ обогащены скорингом ('quality').
+def build(entries: list[dict], flagships: list[dict], tg_posts: list[dict],
+          threads_posts: list[dict]) -> dict:
+    """Датапоинты + диагностика. entries — журнал дистилляций; tg/threads посты УЖЕ обогащены ('quality')."""
+    buckets: dict[tuple, dict] = {}
 
-    Возвращает {"datapoints": [...], "unmatched_threads": [...]}. Датапоинт:
-    {category, theme, tg_quality, threads_best, created, n_threads, tg_coverage}."""
-    linked = threads_flagship_link.link(flagships, threads_posts)
-    dps = []
-    for g in linked["groups"]:
+    def _bucket(key, theme, category, created, flagship) -> dict:
+        b = buckets.setdefault(key, {"flagship": flagship, "theme": theme, "category": category,
+                                     "created": created, "posts": [], "via": set()})
+        if flagship and not b["flagship"]:
+            b["flagship"] = flagship
+        return b
+
+    # Ступень 1 — журнал дистилляций (тугой/ID)
+    jl = threads_distill_link.link(entries, threads_posts)
+    for g in jl["groups"]:
+        e = g["entry"]
+        theme = e.get("theme", "")
+        b = _bucket((e.get("flagship_date", ""), _norm(theme)), theme,
+                    e.get("category") or topic_category.category_of(theme),
+                    (e.get("flagship_date", "") or "")[:10],
+                    _find_flagship(flagships, e.get("flagship_date", ""), theme))
+        for gp in g["posts"]:
+            b["posts"].append(gp["post"])
+            b["via"].add(gp["via"])
+
+    # Ступень 2 — флагман-фаззи, ТОЛЬКО по постам, что журнал не поймал (до-журнальные)
+    fl_link = threads_flagship_link.link(flagships, jl["unmatched"])
+    for g in fl_link["groups"]:
         fl = g["flagship"]
         theme = fl.get("theme", "")
-        quals = [gp["post"].get("quality") for gp in g["posts"]]
-        threads_best = max([q for q in quals if q is not None], default=None)  # 1 прострел из N — норма
-        tg_q, tg_cov = _tg_quality_for(fl, tg_posts)
+        b = _bucket(((fl.get("date", "") or "")[:10], _norm(theme)), theme,
+                    topic_category.category_of(theme), (fl.get("date", "") or "")[:10], fl)
+        for gp in g["posts"]:
+            b["posts"].append(gp["post"])
+            b["via"].add("flagship-fuzzy")
+
+    dps = []
+    for b in buckets.values():
+        quals = [p.get("quality") for p in b["posts"]]
+        threads_best = max([q for q in quals if q is not None], default=None)
+        tg_q, tg_cov = _tg_quality_for(b["flagship"], tg_posts) if b["flagship"] else (None, 0.0)
         dps.append({
-            "category": topic_category.category_of(theme),
-            "theme": theme,
+            "category": b["category"],
+            "theme": b["theme"],
             "tg_quality": tg_q,
             "threads_best": threads_best,
-            "created": (fl.get("date") or "")[:10],
-            "n_threads": len(g["posts"]),
+            "created": b["created"],
+            "n_threads": len(b["posts"]),
+            "via": "+".join(sorted(b["via"])),
             "tg_coverage": tg_cov,
         })
-    return {"datapoints": dps, "unmatched_threads": linked["unmatched"]}
+    return {"datapoints": dps, "unmatched_threads": fl_link["unmatched"]}

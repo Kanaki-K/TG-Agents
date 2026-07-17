@@ -1,10 +1,18 @@
-"""Тесты сборки датапоинтов (core/topic_datapoints): join флагман+дистилляция → датапоинт."""
+"""Тесты сборки датапоинтов (core/topic_datapoints): журнал (тугой) + флагман-фаззи (запасной)."""
 from core import topic_datapoints as td
 from core import topic_category as tc
 
 BANK = """## Слой 3.4 — Математика стратегии
-- IRR — почему «иксы» врут: 3x за 5 лет ≠ 3x за год
+- IRR — иксы врут
 """
+
+FLAG = {"date": "2026-07-16", "theme": "IRR — иксы врут",
+        "text": "иксы врут доходность годовых процент удвоение дистанция актив держать"}
+ENTRY = {"flagship_date": "2026-07-16", "theme": "IRR — иксы врут", "category": "рынок",
+         "posts": ["иксы врут годовых процент", "доходность удвоение дистанция актив"], "post_ids": []}
+TG = [{"text": "иксы врут доходность годовых процент удвоение дистанция актив держать дольше", "quality": 72.0}]
+THREADS = [{"id": "1", "date": "2026-07-16", "text": "иксы врут годовых процент", "quality": 60.0},
+           {"id": "2", "date": "2026-07-16", "text": "доходность удвоение дистанция актив", "quality": 80.0}]
 
 
 def _bank(tmp_path, monkeypatch):
@@ -13,46 +21,40 @@ def _bank(tmp_path, monkeypatch):
     monkeypatch.setattr(tc, "BANK_FILE", f)
 
 
-FLAGSHIP = {
-    "date": "2026-07-16",
-    "theme": "IRR — почему «иксы» врут: 3x за 5 лет ≠ 3x за год",
-    "text": "иксы врут доходность годовых процент удвоение дистанция актив держать",
-}
-
-
-def test_datapoint_joins_all_three(tmp_path, monkeypatch):
+def test_journal_path_tight(tmp_path, monkeypatch):
     _bank(tmp_path, monkeypatch)
-    tg_posts = [
-        {"text": "иксы врут доходность годовых процент удвоение дистанция актив держать дольше", "quality": 72.0},
-        {"text": "постороннее про стейблы рельсы", "quality": 5.0},
-    ]
-    threads_posts = [
-        {"date": "2026-07-16", "text": "иксы врут годовых процент", "quality": 60.0},
-        {"date": "2026-07-16", "text": "доходность удвоение дистанция актив", "quality": 80.0},
-    ]
-    res = td.build([FLAGSHIP], tg_posts, threads_posts)
+    res = td.build([ENTRY], [FLAG], TG, THREADS)
     assert len(res["datapoints"]) == 1
     dp = res["datapoints"][0]
-    assert dp["category"] == "рынок"          # Слой 3.* → рынок
-    assert dp["threads_best"] == 80.0         # ЛУЧШИЙ из двух постов, не среднее
-    assert dp["tg_quality"] == 72.0           # матч с постом канала
+    assert dp["category"] == "рынок"          # из записи журнала
+    assert dp["via"] == "text"                # связь через текст серии (тугой), не фаззи
+    assert dp["threads_best"] == 80.0         # лучший из двух
+    assert dp["tg_quality"] == 72.0           # флагман ↔ пост канала
     assert dp["n_threads"] == 2
-    assert dp["created"] == "2026-07-16"
 
 
-def test_tg_none_when_no_match(tmp_path, monkeypatch):
+def test_flagship_fuzzy_fallback(tmp_path, monkeypatch):
     _bank(tmp_path, monkeypatch)
-    threads_posts = [{"date": "2026-07-16", "text": "иксы врут годовых процент", "quality": 60.0}]
-    res = td.build([FLAGSHIP], [{"text": "ничего общего", "quality": 9.0}], threads_posts)
+    # журнал ПУСТ (до-журнальная дистилляция) → должен сработать запасной флагман-фаззи
+    res = td.build([], [FLAG], TG, THREADS)
+    assert len(res["datapoints"]) == 1
     dp = res["datapoints"][0]
-    assert dp["tg_quality"] is None           # поста канала не нашли — ТГ-объектив пуст
-    assert dp["threads_best"] == 60.0         # Threads-объектив есть
+    assert dp["via"] == "flagship-fuzzy"
+    assert dp["category"] == "рынок"          # из банка (фаззи-путь)
+    assert dp["threads_best"] == 80.0
 
 
-def test_unmatched_threads_reported(tmp_path, monkeypatch):
+def test_tg_none_when_no_channel_match(tmp_path, monkeypatch):
     _bank(tmp_path, monkeypatch)
-    threads_posts = [{"date": "2026-07-16", "text": "иксы врут годовых", "quality": 60.0},
-                     {"date": "2026-07-16", "text": "личный пост ни о чём общем", "quality": 90.0}]
-    res = td.build([FLAGSHIP], [], threads_posts)
+    res = td.build([ENTRY], [FLAG], [{"text": "ничего общего", "quality": 9.0}], THREADS)
+    dp = res["datapoints"][0]
+    assert dp["tg_quality"] is None           # поста канала не нашли
+    assert dp["threads_best"] == 80.0
+
+
+def test_unmatched_reported(tmp_path, monkeypatch):
+    _bank(tmp_path, monkeypatch)
+    threads = THREADS + [{"id": "9", "date": "2026-07-16", "text": "личный пост про совсем иное вообще"}]
+    res = td.build([ENTRY], [FLAG], TG, threads)
     assert len(res["datapoints"]) == 1
     assert len(res["unmatched_threads"]) == 1  # личный пост не привязался
