@@ -15,7 +15,7 @@ import logging
 import re
 from datetime import date
 
-from core import config, cost, flagship_journal, llm, runmode
+from core import config, cost, flagship_journal, llm, runmode, threads_distill_journal
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
 THREADS_MODEL = "claude-sonnet-4-6"       # короткий формат — Opus избыточен (как у scope); /test → Haiku
@@ -113,6 +113,8 @@ def write(hint: str = "") -> str:
     text = (text or "").strip()
     if text:
         _save(text, src)
+        # Журнал дистилляций: связь «флагман → серия» + категория (вход петли само-обучения).
+        threads_distill_journal.record(src, text, POST_SEP)
     return text
 
 
