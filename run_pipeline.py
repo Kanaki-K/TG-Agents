@@ -38,7 +38,8 @@ import time
 from pathlib import Path
 
 from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
-                  logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools, verify)
+                  logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools,
+                  self_learn, topic_category, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
@@ -174,7 +175,12 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
     pool = dedup.available_bank_themes()
     if len(pool) <= 1:
         return (pool[0] if pool else ""), ("без вариантов" if pool else "банк пуст"), {}
-    sample = random.sample(pool, min(25, len(pool)))
+    # Само-обучение: наклон ротации к категориям, что заходят на КАНАЛЕ (ТГ-сигнал; Threads НЕ берём —
+    # площадки инвертированы). Мягко — веса влияют лишь на попадание в 25 кандидатов, финал за
+    # свежестью/рынком/LLM. Нет данных → веса пустые → weighted_sample = обычная равномерная выборка.
+    cat_w = self_learn.tg_category_weights()
+    sample = self_learn.weighted_sample(pool, min(25, len(pool)),
+                                        lambda t: cat_w.get(topic_category.category_of(t), 1.0))
     try:
         market = market_tools.handle("market_price", {}) or ""
     except Exception:  # noqa: BLE001
@@ -184,9 +190,12 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
         coverage = analytics.topics_digest(limit=80) or ""
     except Exception:  # noqa: BLE001
         coverage = ""
+    ranked = sorted(cat_w.items(), key=lambda kv: -kv[1])
+    tilt = (f"{topic_category.label(ranked[0][0])} ×{ranked[0][1]} … "
+            f"{topic_category.label(ranked[-1][0])} ×{ranked[-1][1]}") if ranked else "нет данных (равномерно)"
     meas = {"кандидатов": len(sample),
             "покрытие_учтено": sum(1 for l in coverage.splitlines() if l.strip()),
-            "рынок": bool(market), "бриф": bool(brief)}
+            "рынок": bool(market), "бриф": bool(brief), "наклон": tilt}
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(sample))
     system = (
         "Ты выбираешь ОДНУ тему образовательного флагмана крипто-канала о ДОЛГОСРОЧНОМ инвесторе (DCA). "
@@ -361,6 +370,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         out(f"   ├ покрытие канала учтено .. {meas.get('покрытие_учтено', '—')} постов (свежесть)")
         out(f"   ├ рынок ................... {'✓ учтён' if meas.get('рынок') else '— нет данных'}")
         out(f"   ├ бриф Скаута ............. {'✓ учтён' if meas.get('бриф') else '— нет'}")
+        out(f"   ├ наклон категорий (ТГ) ... {meas.get('наклон', '—')}")
         out(f"   └→ РЕШЕНИЕ: «{theme}»   ПОЧЕМУ: {theme_why}\n")
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:

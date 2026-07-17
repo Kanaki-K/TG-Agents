@@ -17,7 +17,7 @@ import json
 from collections import Counter
 from datetime import date, timedelta
 
-from core import (analytics, category_scoring, config, post_angle, tg_scoring,
+from core import (analytics, category_scoring, config, post_angle, self_learn, tg_scoring,
                   threads_distill_journal, topic_category as tc, topic_datapoints)
 from connectors.threads import scoring as th_scoring
 
@@ -156,17 +156,8 @@ def _evaluation(flagships: list[dict]) -> None:
     print(f"\n    СПРЕД (разброс сильн.−слаб.): темы {c_spread} vs углы {a_spread}  →  сильнее объясняет: {verdict}")
 
     # ВТОРОЙ СЛОЙ — ТГ-канал по тем же 7 категориям: валидация Threads-сигнала на реальной цели
-    tg_topics = json.loads(_TG_TOPICS.read_text(encoding="utf-8")) if _TG_TOPICS.exists() else {}
-    valid = set(tc.all_slugs())
-    tg_dps = []
-    for p in tg_posts:
-        meta = tg_topics.get(str(p.get("id", "")), {})
-        if meta.get("category") not in valid:
-            continue
-        tg_dps.append({"category": meta.get("category"), "angle": meta.get("angle", ""),
-                       "tg_quality": p.get("quality"), "threads_best": None,
-                       "created": (p.get("date") or "")[:10]})
-    tg_rows = category_scoring.leaderboard_by(tg_dps, "category", valid, today=date.today())
+    tg_dps = self_learn.tg_datapoints()          # общий источник — ровно то, что применяет пикер флагманов
+    tg_rows = category_scoring.leaderboard_by(tg_dps, "category", set(tc.all_slugs()), today=date.today())
     print("\n    ── ВТОРОЙ СЛОЙ: ТГ-КАНАЛ по тем же категориям (валидация на реальной площадке) ──")
     if not tg_rows:
         print("      нет категорий у ТГ-постов — прогони `python -m connectors.telegram_export.enrich_topics --all`")
