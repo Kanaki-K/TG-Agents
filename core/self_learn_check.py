@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 
 from core import (analytics, category_scoring, config, tg_scoring,
                   threads_distill_journal, topic_category as tc, topic_datapoints)
@@ -46,6 +46,20 @@ def _load_threads_posts() -> list[dict]:
         return json.loads(_THREADS_POSTS.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         return []
+
+
+def _fresh_note(created: str) -> str:
+    """Объяснить, почему балл ещё None: посты моложе гейта зрелости (это норма, не поломка)."""
+    mdays = th_scoring.MATURITY_DAYS
+    try:
+        c = date.fromisoformat((created or "")[:10])
+    except ValueError:
+        return "балл: — (нет зрелых данных)"
+    age = (date.today() - c).days
+    if age < mdays:
+        ripe = (c + timedelta(days=mdays)).strftime("%d.%m")
+        return f"балл: — рано судить (посты ~{age} дн из {mdays}; оценка ≈ после {ripe})"
+    return "балл: — нет зрелых цифр (пост без охвата / ТГ не привязался)"
 
 
 def _bank_distribution() -> None:
@@ -109,9 +123,13 @@ def _evaluation(flagships: list[dict]) -> None:
     print(f"    датапоинтов: {len(dps)} | Threads-постов не привязано: {len(res['unmatched_threads'])}")
     for dp in dps:
         sc = category_scoring.topic_score(dp["tg_quality"], dp["threads_best"])
-        print(f"    {dp['created']} [{tc.label(dp['category'])}] балл темы: {sc} "
-              f"(ТГ {dp['tg_quality']} · Threads-best {dp['threads_best']} из {dp['n_threads']} постов)")
-        print(f"                «{(dp['theme'] or '')[:64]}»")
+        if sc is None:
+            verdict = _fresh_note(dp["created"])       # None не из-за поломки — посты ещё зреют
+        else:
+            verdict = f"балл темы: {sc}"
+        print(f"    {dp['created']} [{tc.label(dp['category'])}] {verdict}")
+        print(f"                ТГ {dp['tg_quality']} · Threads-best {dp['threads_best']} из "
+              f"{dp['n_threads']} постов  «{(dp['theme'] or '')[:52]}»")
     rows = category_scoring.leaderboard(dps, today=date.today())
     print("\n    " + category_scoring.render(rows).replace("\n", "\n    "))
 
