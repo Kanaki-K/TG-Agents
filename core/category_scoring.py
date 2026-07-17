@@ -25,6 +25,7 @@ from core import topic_category
 W_THREADS, W_TG = 0.65, 0.35
 SHRINK_K = 4.0          # псевдо-счёт усадки к μ (плавная замена жёсткого MIN_N)
 INFLUENCE = 0.30        # макс. доля перекоса веса пикера (±30%) — рекомендация, не рельса
+EXPLORE_MAX = 0.15      # макс. бонус разведки (не пробованная категория → +0.15 к весу; затухает ~1/√n)
 WEIGHT_MIN, WEIGHT_MAX = 0.6, 1.4
 HALF_LIFE_DAYS = 120    # полу-затухание рецентности (старый успех весит вдвое меньше)
 CONF_RANKED = 0.5       # c ≥ этого → «в игре» (только метка для человека; вес использует c непрерывно)
@@ -124,6 +125,31 @@ def category_weights(datapoints: list[dict], today: date | None = None) -> dict[
         w = 1.0 + INFLUENCE * st["confidence"] * rel
         weights[cat] = round(max(WEIGHT_MIN, min(WEIGHT_MAX, w)), 3)
     return weights
+
+
+def explore_bonus(datapoints: list[dict], today: date | None = None) -> dict[str, float]:
+    """Бонус РАЗВЕДКИ per категория: недосэмплированные пробуем чаще, чтобы не голодали
+    (категория, которой не повезло на старте, иначе никогда не отыграется). Бонус ~1/√(n_eff+1):
+    не пробованная → EXPLORE_MAX, хорошо изученная → почти 0. Все категории банка."""
+    by_cat = _by_category(datapoints, today)
+    out: dict[str, float] = {}
+    for cat in topic_category.all_slugs():
+        pairs = by_cat.get(cat, [])
+        wsum = sum(w for _, w in pairs)
+        w2 = sum(w * w for _, w in pairs)
+        n_eff = (wsum * wsum) / w2 if w2 else 0.0
+        out[cat] = round(EXPLORE_MAX / math.sqrt(n_eff + 1.0), 3)
+    return out
+
+
+def picker_weights(datapoints: list[dict], today: date | None = None) -> dict[str, float]:
+    """ИТОГОВЫЕ веса для пикера = эксплуатация (усадка-тилт, #2) + разведка (недосэмплированные вверх, #3).
+    Это то, что реально наклоняет ротацию тем. Мало данных → тилт≈0, но разведка держит категорию
+    в игре; накопилась статистика → решает уже перформанс. Все категории банка, клампится в [MIN,MAX]."""
+    exploit = category_weights(datapoints, today)
+    explore = explore_bonus(datapoints, today)
+    return {cat: round(max(WEIGHT_MIN, min(WEIGHT_MAX, exploit.get(cat, 1.0) + explore.get(cat, 0.0))), 3)
+            for cat in topic_category.all_slugs()}
 
 
 def render(rows: list[dict]) -> str:

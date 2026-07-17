@@ -61,3 +61,27 @@ def test_recency_lifts_recent():
     flat = cs.leaderboard(dps, today=None)[0]["mean"]
     assert flat == 50.0
     assert with_rec > flat                     # свежий успех тянет среднее вверх
+
+
+# --- #3 разведка (bandit) ---
+
+def test_explore_bonus_favors_undersampled():
+    dps = _dps("рынок", [50] * 8)              # хорошо изучена
+    b = cs.explore_bonus(dps)
+    assert b["философия"] == round(cs.EXPLORE_MAX / 1.0, 3)   # не пробована → максимум
+    assert b["рынок"] < b["философия"]         # изученная → бонус меньше
+
+
+def test_picker_weights_explore_lifts_unknown():
+    dps = _dps("рынок", [50] * 4)              # нейтральная, изучена
+    pw = cs.picker_weights(dps)
+    assert pw["философия"] > pw["рынок"]        # неизвестную пробуем охотнее нейтрально-изученной
+    assert all(cs.WEIGHT_MIN <= v <= cs.WEIGHT_MAX for v in pw.values())
+
+
+def test_exploration_saves_unlucky_from_starvation():
+    # слабая категория с малой выборкой не падает в пол — разведка держит шанс отыграться
+    dps = _dps("рынок", [80] * 8) + _dps("словарь", [20, 25])
+    exploit = cs.category_weights(dps)
+    pw = cs.picker_weights(dps)
+    assert pw["словарь"] > exploit["словарь"]   # разведка приподняла над чистой эксплуатацией

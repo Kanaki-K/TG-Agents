@@ -132,6 +132,10 @@ def _evaluation(flagships: list[dict]) -> None:
               f"{dp['n_threads']} постов  «{(dp['theme'] or '')[:52]}»")
     rows = category_scoring.leaderboard(dps, today=date.today())
     print("\n    " + category_scoring.render(rows).replace("\n", "\n    "))
+    pw = category_scoring.picker_weights(dps, today=date.today())
+    print("\n    веса пикера (эксплуатация + разведка → наклон ротации тем):")
+    for cat, w in sorted(pw.items(), key=lambda kv: -kv[1]):
+        print(f"      {w:>5} × {tc.label(cat)}")
 
 
 def main() -> None:
