@@ -2,6 +2,7 @@
 from datetime import date
 
 from core import category_scoring as cs
+from core import post_angle
 
 
 def _dps(cat, scores):
@@ -94,3 +95,27 @@ def test_exploration_saves_unlucky_from_starvation():
     exploit = cs.category_weights(dps)
     pw = cs.picker_weights(dps)
     assert pw["словарь"] > exploit["словарь"]   # разведка приподняла над чистой эксплуатацией
+
+
+# --- второй объектив: угол/подача ---
+
+def _dps2(cat, angle, scores):
+    return [{"category": cat, "angle": angle, "threads_best": s, "tg_quality": None} for s in scores]
+
+
+def test_leaderboard_by_arbitrary_key():
+    # одна ТЕМА (рынок), но два УГЛА (личный сильный, новость слабый)
+    dps = _dps2("рынок", "личный", [80, 80, 80, 80]) + _dps2("рынок", "новость", [20, 20, 20, 20])
+    cat_rows = cs.leaderboard(dps)
+    ang_rows = cs.leaderboard_by(dps, "angle", set(post_angle.all_slugs()))
+    assert len(cat_rows) == 1                                  # тема одна
+    assert {r["category"] for r in ang_rows} == {"личный", "новость"}
+    assert ang_rows[0]["category"] == "личный"                # личный (80) выше новости (20)
+
+
+def test_spread_compares_lenses():
+    dps = _dps2("рынок", "личный", [80, 80, 80, 80]) + _dps2("рынок", "новость", [20, 20, 20, 20])
+    cat_spread = cs.spread(cs.leaderboard(dps))               # одна тема → нечего сравнивать
+    ang_spread = cs.spread(cs.leaderboard_by(dps, "angle", set(post_angle.all_slugs())))
+    assert cat_spread == 0.0
+    assert ang_spread > 0.0                                   # разброс объясняет УГОЛ, не тема → решает подача

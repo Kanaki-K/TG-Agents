@@ -17,7 +17,7 @@ import json
 from collections import Counter
 from datetime import date, timedelta
 
-from core import (analytics, category_scoring, config, tg_scoring,
+from core import (analytics, category_scoring, config, post_angle, tg_scoring,
                   threads_distill_journal, topic_category as tc, topic_datapoints)
 from connectors.threads import scoring as th_scoring
 
@@ -119,6 +119,7 @@ def _evaluation(flagships: list[dict]) -> None:
     for p in threads_posts:
         t = topics.get(str(p.get("id", "")), {})
         p["category"] = t.get("category", "")
+        p["angle"] = t.get("angle", "")
         p.setdefault("theme", t.get("theme", ""))
     res = topic_datapoints.build(threads_distill_journal.entries(), flagships, tg_posts, threads_posts)
     dps = res["datapoints"]
@@ -143,6 +144,15 @@ def _evaluation(flagships: list[dict]) -> None:
     print("\n    веса пикера (эксплуатация + разведка → наклон ротации тем):")
     for cat, w in sorted(pw.items(), key=lambda kv: -kv[1]):
         print(f"      {w:>5} × {tc.label(cat)}")
+
+    # ВТОРОЙ ОБЪЕКТИВ: угол/подача — решает тема или как подано?
+    a_rows = category_scoring.leaderboard_by(dps, "angle", set(post_angle.all_slugs()), today=date.today())
+    print("\n    рейтинг УГЛОВ/подачи (усадка · нижн.гран · n · уверенность):")
+    print(("    " + category_scoring.render(a_rows, label_fn=post_angle.label).replace("\n", "\n    "))
+          if a_rows else "      (данных мало)")
+    c_spread, a_spread = category_scoring.spread(rows), category_scoring.spread(a_rows)
+    verdict = "ПОДАЧА (угол)" if a_spread > c_spread else "ТЕМА"
+    print(f"\n    СПРЕД (разброс сильн.−слаб.): темы {c_spread} vs углы {a_spread}  →  сильнее объясняет: {verdict}")
 
 
 def main() -> None:

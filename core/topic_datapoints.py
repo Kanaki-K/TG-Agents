@@ -98,6 +98,7 @@ def build(entries: list[dict], flagships: list[dict], tg_posts: list[dict],
         dps.append({
             "category": b["category"],
             "theme": b["theme"],
+            "angle": "",                       # у серии-дистилляции угол не сводим к одному — вне угол-анализа
             "tg_quality": tg_q,
             "threads_best": threads_best,
             "created": b["created"],
@@ -119,6 +120,7 @@ def build(entries: list[dict], flagships: list[dict], tg_posts: list[dict],
         dps.append({
             "category": cat,
             "theme": (p.get("theme") or "(самописный пост)"),
+            "angle": (p.get("angle") or ""),   # второй объектив: подача поста
             "tg_quality": None,
             "threads_best": p.get("quality"),
             "created": (p.get("date") or p.get("timestamp") or "")[:10],

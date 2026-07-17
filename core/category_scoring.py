@@ -58,17 +58,19 @@ def _recency_weight(created: str | None, today: date | None) -> float:
     return 0.5 ** (max(age, 0) / HALF_LIFE_DAYS)
 
 
-def _by_category(datapoints: list[dict], today: date | None) -> dict[str, list[tuple[float, float]]]:
-    valid = set(topic_category.all_slugs())     # только 7 крипто-категорий банка (пикер действует по ним);
-    out: dict[str, list[tuple[float, float]]] = {}   # «личное»/«прочее»/UNKNOWN сюда не идут
+def _group(datapoints: list[dict], key: str, valid: set | None,
+           today: date | None) -> dict[str, list[tuple[float, float]]]:
+    """Сгруппировать датапоинты по произвольному объективу (key='category' тема / 'angle' подача).
+    valid — множество допустимых значений (None = любое непустое)."""
+    out: dict[str, list[tuple[float, float]]] = {}
     for dp in datapoints:
-        cat = dp.get("category")
-        if cat not in valid:
+        k = dp.get(key)
+        if not k or (valid is not None and k not in valid):
             continue
         sc = topic_score(dp.get("tg_quality"), dp.get("threads_best"))
         if sc is None:
             continue
-        out.setdefault(cat, []).append((sc, _recency_weight(dp.get("created"), today)))
+        out.setdefault(k, []).append((sc, _recency_weight(dp.get("created"), today)))
     return out
 
 
@@ -99,27 +101,33 @@ def _cat_stats(pairs: list[tuple[float, float]], mu: float) -> dict:
             "confidence": round(conf, 2)}
 
 
-def leaderboard(datapoints: list[dict], today: date | None = None) -> list[dict]:
-    """Рейтинг категорий по НИЖНЕЙ границе (честно: наверху — надёжно-сильные, не везучие/шумные)."""
-    by_cat = _by_category(datapoints, today)
-    mu, _ = _global(by_cat)
+def leaderboard_by(datapoints: list[dict], key: str = "category", valid: set | None = None,
+                   today: date | None = None) -> list[dict]:
+    """Рейтинг по объективу key (тема/угол) по НИЖНЕЙ границе (надёжно-сильные сверху)."""
+    by = _group(datapoints, key, valid, today)
+    mu, _ = _global(by)
     if mu is None:
         return []
     rows = []
-    for cat, pairs in by_cat.items():
+    for grp, pairs in by.items():
         st = _cat_stats(pairs, mu)
-        st["category"] = cat
+        st["category"] = grp                # slug объектива (тема или угол)
         st["ranked"] = st["confidence"] >= CONF_RANKED
         rows.append(st)
     rows.sort(key=lambda r: (r["lower"], r["confidence"]), reverse=True)
     return rows
 
 
+def leaderboard(datapoints: list[dict], today: date | None = None) -> list[dict]:
+    """Рейтинг ТЕМ (7 крипто-категорий банка)."""
+    return leaderboard_by(datapoints, "category", set(topic_category.all_slugs()), today)
+
+
 def category_weights(datapoints: list[dict], today: date | None = None) -> dict[str, float]:
     """Множители пикера: {категория → вес}. Перекос = усадка относительно μ, масштабированный
     уверенностью c (мало данных → c→0 → вес ≈ 1, категория не задавлена). Все категории банка есть."""
     weights = {s: 1.0 for s in topic_category.all_slugs()}
-    by_cat = _by_category(datapoints, today)
+    by_cat = _group(datapoints, "category", set(topic_category.all_slugs()), today)
     mu, sigma = _global(by_cat)
     if mu is None:
         return weights
@@ -136,7 +144,7 @@ def explore_bonus(datapoints: list[dict], today: date | None = None) -> dict[str
     """Бонус РАЗВЕДКИ per категория: недосэмплированные пробуем чаще, чтобы не голодали
     (категория, которой не повезло на старте, иначе никогда не отыграется). Бонус ~1/√(n_eff+1):
     не пробованная → EXPLORE_MAX, хорошо изученная → почти 0. Все категории банка."""
-    by_cat = _by_category(datapoints, today)
+    by_cat = _group(datapoints, "category", set(topic_category.all_slugs()), today)
     out: dict[str, float] = {}
     for cat in topic_category.all_slugs():
         pairs = by_cat.get(cat, [])
@@ -157,13 +165,24 @@ def picker_weights(datapoints: list[dict], today: date | None = None) -> dict[st
             for cat in topic_category.all_slugs()}
 
 
-def render(rows: list[dict]) -> str:
-    """Рейтинг строкой — для лог-панели пайплайна."""
+def spread(rows: list[dict]) -> float:
+    """Разброс объектива = lb лучшего − lb худшего среди ранжированных. Круче спред → объектив
+    сильнее объясняет, что заходит. Сравнив спред тем и углов, видно, что решает — тема или подача."""
+    ranked = [r for r in rows if r["ranked"]]
+    if len(ranked) < 2:
+        return 0.0
+    lbs = [r["lower"] for r in ranked]
+    return round(max(lbs) - min(lbs), 1)
+
+
+def render(rows: list[dict], label_fn=None) -> str:
+    """Рейтинг строкой — для лог-панели. label_fn — как назвать slug (тема/угол)."""
+    label_fn = label_fn or topic_category.label
     if not rows:
-        return "рейтинг категорий: (данных нет)"
-    out = ["рейтинг категорий (усадка · нижн.гран · n · уверенность):"]
+        return "(данных нет)"
+    out = []
     for r in rows:
         status = "✓ в игре" if r["ranked"] else "копится"
         out.append(f"  {r['shrunk']:>5} · lb {r['lower']:>5} · n={r['n']:<2}(эфф {r['n_eff']}) · "
-                   f"увер {r['confidence']:<4} · {status:<8} {topic_category.label(r['category'])}")
+                   f"увер {r['confidence']:<4} · {status:<8} {label_fn(r['category'])}")
     return "\n".join(out)
