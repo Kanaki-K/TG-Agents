@@ -172,6 +172,32 @@ vision-выбор (`_vision_pick`, `VISION_MODEL`=haiku) берёт подход
 
 ---
 
+## 4.2 Петля само-обучения на ТЕМЫ (Threads → выбор темы флагмана) — ПОСТРОЕНА, дормант
+
+Замыкает «скоринг → выбор темы»: мерит, какой **РАЗРЯД тем** заходит у аудитории (в основном по
+Threads — холодная аудитория = более честный сигнал интереса, чем маленький тёплый ТГ), чтобы позже
+мягко смещать выбор тем флагмана туда. **Влияет ТОЛЬКО на выбор темы, НЕ на подачу** (голос/формулировки
+залочены — метрика-нудж на текст откатывали 13.07, Goodhart). Единица замера = **1 флагман + его
+Threads-дистилляция**. Гейты честности: зрелость 14 дн (свежее не судим), самозаглушка при <MIN_N
+датапоинтов, «лучший из 1-3 постов» (не среднее), окно рецентности, влияние на пикер ±30%.
+
+Модули (все чистые, нигде НЕ подключены к генерации — read-only/дормант):
+| Модуль | Что делает |
+|---|---|
+| `core/topic_category` | тема → 1 из 7 категорий (макро-слой банка `flagship_topics.md`; AI×крипта отдельно) |
+| `core/threads_distill_journal` | журнал «флагман → его Threads-серия + категория» (`data/threads_distillations.jsonl`) |
+| `core/text_match` + `core/threads_flagship_link` | линкер собранного поста к флагману (окно дат + покрытие токенов) |
+| `core/topic_datapoints` | сборка датапоинта: ТГ-Качество (`tg_scoring`) + лучший Threads-пост (`threads/scoring`) |
+| `core/category_scoring` | балл темы + рейтинг категорий + веса пикера (Threads 0.65 / ТГ 0.35) |
+| `core/self_learn_check` | проверка всего прохода на реальных данных: `python -m core.self_learn_check` |
+
+**ОСТАЛОСЬ (финал, по команде владельца):** мост `category_scoring.category_weights` →
+`run_pipeline._pick_timely_theme` (наклон ротации к сильным категориям). До него петля на контент
+НЕ влияет. Проверено на живых данных 17.07: линкер верно привязал серию недели к флагману, оценка
+честно молчит на незрелом.
+
+---
+
 ## 5. Сквозной конвейер: как пост доходит до канала
 
 Шаги развязаны **через ФАЙЛЫ-шину** (не через память процесса) — поэтому каждый можно гонять отдельно,
@@ -242,7 +268,8 @@ vision-выбор (`_vision_pick`, `VISION_MODEL`=haiku) берёт подход
 | `channel_posts.json` / `channel_stats.json` / `post_topics.json` / `post_formats.json` | `telegram_export/*` + Аналитик | `analytics.py` |
 | `threads_posts.json` / `threads_stats.json` / `threads_topics.json` / `threads_analytics.{csv,xlsx}` | `connectors/threads/*` (`refresh_threads.py`) | **Аналитик** (`threads_report`/`threads_find`, с 12.07); `threads_dedup` (задел Формата 2) |
 | `threads_token.json` (авто-refresh, невосстановим без OAuth-бутстрапа; в бэкапе) | `threads/auth.py` | весь `connectors/threads/*` |
-| `published_flagships.jsonl` ★ журнал ВЫШЕДШИХ флагманов (append-only, датированная история; в бэкапе) | `flagship_journal.record` (из `run_pipeline` после отложки) | `threads_creator` (вход дистилляции) |
+| `published_flagships.jsonl` ★ журнал ВЫШЕДШИХ флагманов (append-only, датированная история; в бэкапе) | `flagship_journal.record` (из `run_pipeline` после отложки) | `threads_creator` (вход дистилляции), линкер §4.2 |
+| `threads_distillations.jsonl` ★ журнал дистилляций (флагман→серия+категория; вход петли само-обучения §4.2) | `threads_distill_journal.record` (из `threads_creator`) | `topic_datapoints`, `self_learn_check` |
 | `threads_unlocked` (стоп-кран: НЕТ файла = сеть Threads ЗАКРЫТА) / `threads_cooldown` / `threads_api_log.jsonl` (журнал каждого запроса) | владелец (unlock) / `threads/_guard` | `_guard` перед КАЖДЫМ запросом; см. OPERATIONS.md |
 | `threads_my_replies.json` (корпус живого голоса, 4966 реплик) + `psychotype_notes.md` / `threads_psychotype.md` (выжимка/аватар; всё в бэкапе) | разовый дамп 14.07 / ручная LLM-выжимка | владелец, будущие голосовые работы |
 | `custom_emoji.json` | `telegram_emoji/collect_ids.py` | `tg_format`, `creator_tools._lint` |

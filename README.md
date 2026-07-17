@@ -8,9 +8,9 @@ Each agent is a separate Telegram bot running on a single shared *agent engine*.
 
 [![tests](https://github.com/Kanaki-K/TG-Agents/actions/workflows/tests.yml/badge.svg)](https://github.com/Kanaki-K/TG-Agents/actions/workflows/tests.yml)
 
-> **Status — Phase 1 complete (Telegram: text + images).** The content pipeline runs end-to-end (Scout → Creator → scheduled channel post) and is production-ready: **3 content agents** (Scout · Creator · Analyst) on one shared engine, **100 passing tests**, green CI, one-command backup, and prompt-injection hardening. Remaining Phase-1 work is quality polish of the flagship & scope formats.
+> **Status — Phase 1 complete (Telegram: text + images); Phase 2 (Threads) well underway.** The content pipeline runs end-to-end (Scout → Creator → scheduled channel post) and is production-ready: **3 content agents** (Scout · Creator · Analyst) on one shared engine, **211 passing tests**, green CI, one-command backup, and prompt-injection hardening.
 >
-> **Roadmap:** ✅ **Phase 1** — Telegram (text + images) · 🔜 **Phase 2** — Threads (analytics built, wiring next) · **Phase 3** — X/Twitter. See [`docs/AUDIT.md`](docs/AUDIT.md) for the maturity assessment and [`docs/PLAN.md`](docs/PLAN.md) for the roadmap.
+> **Roadmap:** ✅ **Phase 1** — Telegram (text + images) · 🚧 **Phase 2** — Threads: connector, analytics, and a **distillation content format** (TG flagship → native Threads series) are built, plus a **self-learning topic loop** (scores which *category* of topics resonates, mostly via Threads — built but not yet wired to topic selection). Remaining: pipeline integration, delivery polish, a second native Threads format, auto-publish (posting is manual by design for now). · **Phase 3** — X/Twitter. See [`docs/AUDIT.md`](docs/AUDIT.md) for the maturity assessment and [`docs/PLAN.md`](docs/PLAN.md) for the roadmap.
 
 ---
 
@@ -95,7 +95,7 @@ core/          agent engine (agent_runtime, llm, config, tg_format, runmode, cos
                + per-agent code: <agent>_bot.py / <agent>_tools.py
 agents/<name>/ agent definitions (data): config.yaml + SKILL.md personality + README.md
 connectors/    "hands": Telegram MTProto (export/scan/publish), RSS/web, X, GPT image, source-media
-               (og:image covers), market data, Threads API (Phase 2 — built, not yet wired to a bot)
+               (og:image covers), market data, Threads API (collect/insights/scoring/report/publish)
 memory/        shared layer: brand.md, post_standard.md, sources.md (canon); briefs/ & drafts/ (bus)
 data/          runtime artefacts (git-ignored): sessions, exports, covers, cost log, run mode
 docs/          PLAN.md (strategy), ARCHITECTURE.md (code map), AUDIT.md, scope.md
