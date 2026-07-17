@@ -70,12 +70,15 @@ GAP_MAX = float(os.getenv("THREADS_GAP_MAX", "11.0"))
 BREATHER_EVERY = (8, 18)
 BREATHER_SECONDS = (30.0, 120.0)
 
-# --- Бюджеты. Потолок, а не пожелание: упёрлись — прогон встаёт сам. ---
-# Осознанно НАМНОГО ниже квоты Meta (её пол — 48 000/сутки, см. threads-api-quota-real).
-# Смысл прямой: наш баг не должен превратиться в объём на стороне Meta. 14.07 ровно это и вышло —
-# 51 запрос в пустоту, потому что никто не считал. Недособрать за раз дешевле, чем чинить потом.
-RUN_BUDGET = int(os.getenv("THREADS_RUN_BUDGET", "60"))    # запросов за один прогон
-DAY_BUDGET = int(os.getenv("THREADS_DAY_BUDGET", "150"))   # запросов за скользящие 24ч
+# --- Бюджеты. Потолок против РУНАВЕЯ (цикл в пустую), а не главная защита. ---
+# Главный предохранитель против вреда аккаунту — стоп по КВОТЕ META (x-app-usage 80%, ниже):
+# он смотрит реальный расход глазами Meta, а не наш счётчик. Поэтому счётные бюджеты держим
+# АДЕКВАТНЫМИ работе, а не душащими: инкрементальный сбор стоит ~50-120 запросов (метрики+комменты
+# по окну 30 дней), и прежние 60/сутки 150 не давали ему даже ДОБЕЖАТЬ — фейл-закрыто выбрасывало
+# всё собранное (гоняли вхолостую). Всё ещё намного ниже пола Meta 48 000/сутки (~1%).
+# Урок 14.07 (51 запрос в пустоту) закрыт не крошечным лимитом, а СЧЁТОМ+СВОДКОЙ (run_summary).
+RUN_BUDGET = int(os.getenv("THREADS_RUN_BUDGET", "200"))   # запросов за прогон (хватает на полный сбор ×~2)
+DAY_BUDGET = int(os.getenv("THREADS_DAY_BUDGET", "500"))   # за скользящие 24ч (сбор ~ежедневно + отчёты)
 
 # --- Полоса ЗАПИСИ: строже чтения на порядок. ---
 # Лимиты Meta на запись: 250 постов + 1000 ответов / 24ч (threads_publishing_limit). Наши
@@ -100,6 +103,8 @@ COOLDOWN_HOURS = float(os.getenv("THREADS_COOLDOWN_HOURS", "6"))
 
 _run_count = 0          # запросов в этом процессе
 _write_run_count = 0    # из них — записей (пост/ответ/удаление)
+_run_by_kind: dict[str, int] = {}   # endpoint-класс → счётчик за процесс (для сводки «куда ушло»)
+_peak_usage_pct = 0.0   # макс. x-app-usage % за процесс — расход ГЛАЗАМИ Meta
 _next_breather = random.randint(*BREATHER_EVERY)
 _last_call_at = 0.0
 _last_write_at = 0.0
@@ -278,13 +283,31 @@ def before(endpoint: str, *, write: bool = False) -> float:
     return _now()
 
 
+def _classify(endpoint: str) -> str:
+    """Класс запроса для сводки «куда ушло»: лента/метрики/комменты/прочее."""
+    e = (endpoint or "").lower()
+    if "insights" in e:
+        return "метрики"
+    if "replies" in e or "conversation" in e:
+        return "комменты"
+    if "threads" in e:
+        return "лента/посты"
+    return "прочее"
+
+
 def after(endpoint: str, t0: float, *, status: int | None, error: str = "",
           usage: dict | None = None, write: bool = False) -> None:
-    """Вызывается ПОСЛЕ запроса (успех или ошибка) — пишет журнал."""
-    global _last_call_at, _last_write_at
+    """Вызывается ПОСЛЕ запроса (успех или ошибка) — пишет журнал + учёт для сводки."""
+    global _last_call_at, _last_write_at, _peak_usage_pct
     _last_call_at = _now()
     if write:
         _last_write_at = _last_call_at
+    kind = _classify(endpoint)
+    _run_by_kind[kind] = _run_by_kind.get(kind, 0) + 1
+    if usage:
+        pct = _peak_percent(usage)
+        if pct > _peak_usage_pct:
+            _peak_usage_pct = pct
     _journal(
         at=round(_last_call_at, 3),
         iso=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -397,3 +420,17 @@ def stats() -> dict:
         "блокировка чтения": frozen_reason() or "нет",
         "блокировка записи": frozen_reason(write=True) or "нет",
     }
+
+
+def run_summary() -> str:
+    """Человеческая сводка расхода за прогон: сколько, КУДА ушло, дневной остаток, квота Meta.
+    Печатается в конце сбора — чтобы «сколько куда потратили» было видно без раскопок журнала."""
+    day = _calls_last_24h()
+    lines = ["📊 Threads API — расход этого прогона:",
+             f"   всего: {_run_count} запрос(ов)  (бюджет прогона {RUN_BUDGET})"]
+    for kind, n in sorted(_run_by_kind.items(), key=lambda x: -x[1]):
+        lines.append(f"      ├ {kind}: {n}")
+    left = max(0, DAY_BUDGET - day)
+    lines.append(f"   за сутки: {day}/{DAY_BUDGET} (осталось ~{left})")
+    lines.append(f"   квота Meta (x-app-usage, наш стоп {USAGE_STOP_PERCENT:.0f}%): пик {_peak_usage_pct:.1f}%")
+    return "\n".join(lines)

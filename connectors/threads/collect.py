@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-from connectors.threads import _api, insights, read, replies
+from connectors.threads import _api, _guard, insights, read, replies
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -286,6 +286,7 @@ def main() -> None:
         # лучше остаться со вчерашними данными, чем записать поверх них мусор.
         print(f"\n⛔ Сбор остановлен защитой: {e}")
         print("   База на диске не изменена. Повторить можно позже — данные не потеряны.")
+        print("\n" + _guard.run_summary())
         return
 
     for r in rows:
@@ -310,6 +311,7 @@ def main() -> None:
     print(f"   Сводка аккаунта → {STATS_OUT}")
     print("Дальше: python -m connectors.threads.enrich_topics  (темы)  →  "
           "python -m connectors.threads.build_table  (таблица)")
+    print("\n" + _guard.run_summary())
 
 
 if __name__ == "__main__":
