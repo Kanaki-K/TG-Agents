@@ -34,6 +34,8 @@ IRREPLACEABLE = [
     "data/channel-analyst_owner.txt",
     "data/published_flagships.jsonl",    # журнал ВЫШЕДШИХ флагманов — вход Threads-дистиллятора;
                                          # датированная история (драфты эфемерны, а этот — нет)
+    "data/threads_distillations.jsonl",  # журнал дистилляций (флагман→Threads-серия+категория) —
+                                         # append-only вход линкера петли обучения, не пересоздать
     "data/threads_my_replies.json",      # корпус живого голоса (4966 реплик из Threads); формально
                                          # пересобирается через API, но это сотни запросов — не повторяем
     "data/psychotype_notes.md",          # ручная выжимка корпуса (17 партий через LLM) — не пересоздать
@@ -56,13 +58,20 @@ SCRATCH = [
 ]
 
 
+# Регенерируемый кэш Chromium в gpt_profile (~264МБ из 301) — браузер пересоздаёт сам. НЕ бэкапим:
+# логин бёрнера держится в Cookies/Local Storage/Login Data/Preferences, их НЕ трогаем.
+_CACHE_DIRS = {"Cache", "Code Cache", "GPUCache", "DawnWebGPUCache", "DawnGraphiteCache",
+               "GrShaderCache", "ShaderCache", "BrowserMetrics"}
+
+
 def _iter_files(rel: str):
-    """Файлы под путём rel (файл → он сам; каталог → рекурсивно). Пусто, если не существует."""
+    """Файлы под путём rel (файл → он сам; каталог → рекурсивно, минус кэш-подпапки). Пусто, если нет."""
     p = ROOT / rel
     if not p.exists():
         return
     if p.is_dir():
-        yield from (f for f in p.rglob("*") if f.is_file())
+        yield from (f for f in p.rglob("*")
+                    if f.is_file() and not (_CACHE_DIRS & set(f.relative_to(p).parts)))
     else:
         yield p
 
@@ -97,6 +106,16 @@ def print_lists() -> None:
     print("🟢 СКРЕТЧ (не бэкапим, пересоздаётся):")
     for r in SCRATCH:
         print(f"   {r}")
+    # Страж рецидива N-27: новый важный файл в data/ не должен остаться невидимым для бэкапа.
+    known = set(IRREPLACEABLE) | set(SCRATCH)
+    data_dir = ROOT / "data"
+    if data_dir.exists():
+        unclassified = [f"data/{p.name}" for p in sorted(data_dir.iterdir())
+                        if f"data/{p.name}" not in known and not p.name.startswith(".")]
+        if unclassified:
+            print("⚠ НЕ классифицировано (реши IRREPLACEABLE/SCRATCH — иначе НЕ попадёт в бэкап):")
+            for u in unclassified:
+                print(f"   ? {u}")
 
 
 def main() -> int:
