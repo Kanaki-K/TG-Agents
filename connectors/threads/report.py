@@ -75,7 +75,7 @@ def build_report(posts=None, topics=None) -> str:
     live = [p for p in mature if (p.get("people_count") or 0) > 0]
     multi = [p for p in mature if (p.get("people_count") or 0) >= 2]
     amp_posts = [p for p in mature if p.get("amplification", 0) > 0]
-    P(f"\n[КОРПУС]")
+    P("\n[КОРПУС]")
     P(f"  всего с охватом: {len(measured)} | зрелых (>{base['maturity_days']} дн): {len(mature)} | "
       f"свежих (в рейтинги не берём): {base['fresh']}")
     P(f"  годны для оценки качества (зрелые, ≥{base['view_floor']} просм): {len(elig)}")
