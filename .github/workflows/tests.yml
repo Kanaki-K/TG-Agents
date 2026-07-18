@@ -29,10 +29,9 @@ jobs:
           pip install -r requirements.lock -r requirements-dev.txt
 
       # Статичный линтер (аудит 17.07): ловит тихие баги — неопределённые имена, мёртвые импорты/
-      # переменные (набор F+E9, конфиг в pyproject.toml). НЕ роняет сборку — сигнал, а не шлагбаум,
-      # как pip-audit ниже: пока чистим, потом сделаем блокирующим. Смотрим лог при жёлтой отметке.
-      - name: Lint (ruff, non-blocking)
-        continue-on-error: true
+      # переменные (набор F+E9, конфиг в pyproject.toml). БЛОКИРУЮЩИЙ с 18.07 — набор вычищен до нуля
+      # находок, красный ruff = что-то тихо сломалось, не доходит до main. Расширять набор — по мере готовности.
+      - name: Lint (ruff)
         run: python -m ruff check .
 
       - name: Run tests
