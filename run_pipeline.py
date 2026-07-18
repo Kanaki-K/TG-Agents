@@ -274,8 +274,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     panel["данные канала"] = _refresh.splitlines()[0][:70] if _refresh.strip() else "актуальны"
     # N-16 HEALTH-CHECK: если ПОСЛЕ попытки тяги выгрузка всё ещё протухла — сборщик молча упал (частая
     # причина: единая MTProto-сессия истекла/забанена, она же на выгрузку+разведку+публикацию). НЕ молчим:
-    # громкий лог + строка в отчёт всегда; уведомление владельцу — best-effort (при мёртвой сессии оно тоже
-    # не дойдёт, но лог/отчёт сработают, а при живой сессии + сбое сбора — дойдёт). Поток НЕ меняем.
+    # громкий лог + строка в отчёт всегда; уведомление владельцу — через Bot API (N-45): раньше шло через
+    # ту же MTProto-сессию, т.е. при её смерти (вероятная причина алерта) не доходило. Bot API от неё независим.
     _age = dedup.data_age_hours()
     if _age is None or _age >= STALE_ALERT_HOURS:
         _alert = (f"Данные канала НЕ обновляются ({'выгрузки нет' if _age is None else f'{_age:.0f}ч'} "
@@ -285,10 +285,9 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         out("🚨 " + _alert + "\n")
         panel["данные канала"] = "🚨 НЕ обновляются — проверь MTProto-сессию"
         try:
-            _n = config.get_optional("PUBLISH_NOTIFY")
-            if _n:
-                from connectors.telegram_publish import publish as _publish
-                _publish.notify(_n, "🚨 KANAKI-завод: " + _alert)
+            from core import bot_alert
+            if not bot_alert.notify_owner("🚨 KANAKI-завод: " + _alert):
+                logging.warning("[health] алерт владельцу не доставлен (проверь токен бота/OWNER_ID)")
         except Exception:
             logging.exception("[health] уведомление владельцу не отправилось")
     age = _latest_brief_age_hours()
