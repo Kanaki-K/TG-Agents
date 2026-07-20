@@ -37,6 +37,20 @@ def test_flag_off_keeps_provenance(tmp_path, monkeypatch):
     assert "из правки" in creator_tools.load_lessons_for_context(f)  # флаг выкл → хвост на месте
 
 
+def test_graduated_section_excluded_from_context(tmp_path):
+    # уроки под маркером «## 📦 Выпущено» (правило переехало в линтер/мануал) в контекст НЕ грузятся
+    f = tmp_path / "post_lessons.md"
+    f.write_text(
+        "# Уроки\n\n"
+        "- (2026-07-01) Активное правило голоса A\n"
+        "## 📦 Выпущено\n"
+        "- (2026-06-30) Выпущенное правило B (живёт в мануале)\n",
+        encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    assert "Активное правило голоса A" in ctx
+    assert "Выпущенное правило B" not in ctx
+
+
 def test_missing_or_empty_file_returns_empty(tmp_path):
     assert creator_tools.load_lessons_for_context(Path("/no/such.md")) == ""
     empty = tmp_path / "e.md"
