@@ -189,6 +189,11 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
     cat_w = self_learn.tg_category_weights()
     sample = self_learn.weighted_sample(pool, min(25, len(pool)),
                                         lambda t: cat_w.get(topic_category.category_of(t), 1.0))
+    # Аудит 20.07: при пуле ≤25 weighted_sample отдаёт ВСЕ темы → наклон обучения НЕ влияет (тихий no-op).
+    # Пока пул ~134 (норма), но банк усыхает метками [вышло] — делаем вырождение видимым, а не тихим.
+    if cat_w and len(pool) <= 25:
+        logging.warning("Само-обучение: пул тем ≤25 (%d) — наклон категорий НЕ влияет на выбор (все "
+                        "кандидаты проходят). Пополни банк тем или проверь метки [вышло].", len(pool))
     try:
         market = market_tools.handle("market_price", {}) or ""
     except Exception:  # noqa: BLE001
