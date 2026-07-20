@@ -76,3 +76,26 @@ def test_question_marks_still_do_not_block():
     v = ("❓ «оборот 150 млрд$» — в брифе нет, проверь вручную\n"
          "ИТОГ: 0✅ / 0⚠️ / 1❓\nСТАТУС: ЧИСТО")
     assert verify.has_issues(v) is False
+
+
+# --- расширение охвата атрибуций (аудит 20.07: частые пропуски исходного регекса) ---
+
+def test_finds_colon_quote_attribution():
+    # «Имя: «цитата»» — атрибуция БЕЗ глагола, самый частый пропуск
+    assert verify.find_attributions('Ламмис: «закон пройдёт в 2027»')
+    assert verify.find_attributions('Джером Пауэлл: "ставки останутся высокими"')
+
+
+def test_finds_po_dannym_and_soglasno():
+    assert verify.find_attributions("по данным Glassnode, отток с бирж продолжается")
+    assert verify.find_attributions("согласно отчёту JPMorgan, спрос институтов вырос")
+
+
+def test_finds_added_speech_verbs():
+    assert verify.find_attributions("Пауэлл предупредил о рисках рецессии")
+    assert verify.find_attributions("Saylor настаивает на 1 млн$ за биткоин")
+
+
+def test_colon_without_quote_is_not_attribution():
+    # тег-заголовок «Act: кому выгоден» — двоеточие БЕЗ кавычки-цитаты → НЕ атрибуция (ложняк отсечён)
+    assert verify.find_attributions("CLARITY Act: кому выгоден провал закона") == []

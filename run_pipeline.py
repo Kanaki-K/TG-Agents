@@ -433,7 +433,21 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 post = _run_creator_fix(post, verdict)
                 out((post or "").strip()[:600] + "\n")
                 out("🔎 Повторный фактчек после правок:")
-                out(str(verify.verify_post(post, verify.latest_brief(), api_key=ckey)) + "\n")
+                reverdict = verify.verify_post(post, verify.latest_brief(), api_key=ckey)
+                out(str(reverdict) + "\n")
+                # Аудит 20.07: раньше результат ре-верификации ВЫБРАСЫВАЛСЯ → остаточный ⚠️ (правка не
+                # помогла) уходил в публикацию. Цифры/атрибуция — красная линия: остался ⚠️ → СТОП +
+                # уведомление (как интерактивный /schedule). Сбой самого 2FA — по-прежнему фейл-открыто
+                # (внешний except ниже логирует и продолжает: инфра-флейк не должен блокировать пост).
+                if verify.has_issues(reverdict):
+                    panel["🔎 фактчек 2FA"] = "⛔ замечания НЕ устранены правкой"
+                    panel["публикация"] = "⛔ СТОП — 2FA: конфликт цифр/атрибуции не устранён правкой"
+                    out("⛔ 2FA: после правки замечания ОСТАЛИСЬ — НЕ публикую (цифры/атрибуция = красная "
+                        "линия бренда). Проверь пост и поправь вручную по вердикту выше.")
+                    out(_panel_block())
+                    out("\n" + cost.summary())
+                    return "\n".join(report)
+                panel["🔎 фактчек 2FA"] = "были замечания → исправлено, перепроверка чистая"
             else:
                 panel["🔎 фактчек 2FA"] = "чисто — замечаний нет"
         except Exception:
