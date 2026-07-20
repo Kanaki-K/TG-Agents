@@ -438,7 +438,12 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 post = _run_creator_fix(post, verdict)
                 out((post or "").strip()[:600] + "\n")
                 out("🔎 Повторный фактчек после правок:")
-                reverdict = verify.verify_post(post, verify.latest_brief(), api_key=ckey)
+                # Аудит флагмана 20.07: верифицируем ТО, ЧТО РЕАЛЬНО ПУБЛИКУЕТСЯ — драфт с диска
+                # (latest_draft), а не строку `post` в памяти. Иначе, если фикс-модель поправила текст,
+                # но забыла save_draft, гейт прошёл бы на исправленной строке, а в канал ушёл бы старый
+                # драфт с той самой ⚠️-цифрой. Верна и та, и другая ветка: не сохранил → старый драфт с
+                # ⚠️ → блок (безопасно); сохранил → чистый драфт == post → проходит.
+                reverdict = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=ckey)
                 out(str(reverdict) + "\n")
                 # Аудит 20.07: раньше результат ре-верификации ВЫБРАСЫВАЛСЯ → остаточный ⚠️ (правка не
                 # помогла) уходил в публикацию. Цифры/атрибуция — красная линия: остался ⚠️ → СТОП +

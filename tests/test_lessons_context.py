@@ -30,6 +30,15 @@ def test_non_provenance_dash_italic_kept(tmp_path):
     assert "это часть правила, не провенанс" in ctx   # НЕ срезано (не провенанс-хвост)
 
 
+def test_non_provenance_iz_italic_kept(tmp_path):
+    # сужение 20.07 (нит ревью): «— _из этого правила…_» = ПРАВИЛО, не провенанс → НЕ срезаем.
+    # Провенанс «из правки/разбора/поста» по-прежнему срезается (см. первый тест).
+    f = tmp_path / "post_lessons.md"
+    f.write_text('- (2026-07-20) не пиши "из коробки" — _из этого правила исключений нет_\n', encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    assert "из этого правила исключений нет" in ctx
+
+
 def test_flag_off_keeps_provenance(tmp_path, monkeypatch):
     f = tmp_path / "post_lessons.md"
     f.write_text("- (2026-06-17) Правило X — _из правки: было Y_\n", encoding="utf-8")
