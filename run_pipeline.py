@@ -90,12 +90,20 @@ def _run_scout() -> None:
     if cfg.get("web_search"):
         tools.append(scout_bot.WEB_SEARCH_TOOL)
     cost.set_context("scout")
+    scout_tools.reset_degraded()  # чистим след деградации прошлого прогона (аудит 20.07)
     print("🔍 [1/3] Скаут: разведка трендов...")
     # coverage-зрение Скаута — для ОБЕИХ веток (хорошее универсальное решение: не тащить повтор у
     # истока ни во флагман, ни в scope). Это РАЗВЕДКА, не письмо — тут scope/флагман не разделяем.
     text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"],
                         tools, scout_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
+    # Структурный детект деградации (аудит 20.07): баннер «источник недоступен» полагался на то, что
+    # LLM донесёт его до чата — в headless это могло тихо потеряться. Логируем WARNING независимо.
+    down = scout_tools.degraded_sources()
+    if down:
+        logging.warning("🛑 Скаут: источник(и) вернули ТОЛЬКО ошибки: %s — возможна деградация разведки "
+                        "(протухла сессия/куки); бриф мог выйти без части сигнала. Это НЕ «тихий день».",
+                        ", ".join(down))
 
 
 def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: str = "",

@@ -289,4 +289,13 @@ def recent(limit_per_account: int = 6, handle: str = "", track: str = "",
         leaders = leaders[:max_accounts]
     if not leaders:
         return [{"error": "В выбранных тирах нет авторов (или не подошло под фильтр)."}]
-    return _collect_retry(leaders, max(1, min(limit_per_account, 15)))
+    items = _collect_retry(leaders, max(1, min(limit_per_account, 15)))
+    # Тихий login-wall (аудит 20.07): X может вернуть ПУСТО вместо исключения (протухшие куки / стена
+    # логина). Активные топ-аккаунты не бывают все разом пусты — ноль твитов И ноль ошибок при непустом
+    # списке авторов = почти наверняка сбой сессии, а не «тихий день». Помечаем ошибкой-записью, иначе
+    # Скаут прочитает пустоту как затишье, а баннер «источник недоступен» не сработает.
+    if not any(isinstance(it, dict) and (it.get("text") or it.get("error")) for it in items):
+        return [{"handle": "*", "track": track or "*",
+                 "error": "X отдал ПУСТО без ошибок по всем аккаунтам — вероятно, протухли куки / стена "
+                          "логина, а не «тихий день». Проверь X_AUTH_TOKEN / X_CT0."}]
+    return items

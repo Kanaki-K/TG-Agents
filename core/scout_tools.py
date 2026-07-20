@@ -226,6 +226,22 @@ TOOLS = [
 ]
 
 
+# Структурный след деградации (аудит 20.07): баннер ниже — ТОЛЬКО текст для LLM, а в headless-пайплайне
+# его никто не проверяет (полагается, что LLM донесёт до чата). Помечаем «источник упал целиком» здесь,
+# чтобы _run_scout залогировал WARNING независимо от того, донёс ли LLM баннер.
+_degraded_sources: list[str] = []
+
+
+def degraded_sources() -> list[str]:
+    """Источники, целиком вернувшие ошибки в текущем скане (уникальные) — для headless-детекта в _run_scout."""
+    return sorted(set(_degraded_sources))
+
+
+def reset_degraded() -> None:
+    """Сбросить след перед новым прогоном Скаута."""
+    _degraded_sources.clear()
+
+
 def _all_errors_banner(items: list[dict], what: str) -> str:
     """Громкий сигнал, когда источник упал ЦЕЛИКОМ (все записи — ошибки). Пусто — есть живые записи.
 
@@ -233,6 +249,7 @@ def _all_errors_banner(items: list[dict], what: str) -> str:
     а владелец не в курсе. Явный баннер = Скаут обязан сообщить владельцу (см. SKILL)."""
     if not items or any(isinstance(it, dict) and not it.get("error") for it in items):
         return ""
+    _degraded_sources.append(what)  # структурный след для _run_scout (не только текст ниже)
     errs = "\n".join(f"⚠ {it.get('name') or it.get('channel') or it.get('handle') or '?'}: "
                      f"{it.get('error')}" for it in items if isinstance(it, dict))
     return (f"🛑 ИСТОЧНИК НЕДОСТУПЕН — весь {what} вернул только ошибки. Вероятно, сессия/доступ "

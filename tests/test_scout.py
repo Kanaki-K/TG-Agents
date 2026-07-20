@@ -1,7 +1,8 @@
 """Скаут — непокрытая машинерия капремонта 13.07: воронка (parse/sift) + watermark (filter/commit).
 Аудит 20.07: scout_funnel/scout_seen чисто детерминированы, но без единого теста. Тесты ЗАЩИЩАЮТ
 реконструированный код от регресса + локают фикс мис-атрибуции cost-контекста."""
-from core import scout_funnel, scout_seen
+from connectors.x_scan import read as x_read
+from core import scout_funnel, scout_seen, scout_tools
 
 
 # --- воронка: разбор ответа Haiku ---
@@ -104,3 +105,36 @@ def test_commit_caps_at_seen_cap(monkeypatch, tmp_path):
     seen = scout_seen._load()
     assert len(seen["rss"]) == 3                       # держим последние SEEN_CAP
     assert set(seen["rss"]) <= {f"u{i}" for i in range(5)}
+
+
+# --- деградация источника: баннер + структурный след (аудит 20.07) ---
+
+def test_banner_empty_when_live_records():
+    scout_tools.reset_degraded()
+    live = [{"handle": "a", "text": "живой твит"}, {"handle": "b", "error": "down"}]
+    assert scout_tools._all_errors_banner(live, "X-скан") == ""   # есть живая запись → не баннер
+    assert scout_tools.degraded_sources() == []                   # и след не ставим
+
+
+def test_banner_and_degraded_when_all_errors():
+    scout_tools.reset_degraded()
+    allerr = [{"handle": "a", "error": "стена логина"}, {"handle": "b", "error": "down"}]
+    assert "ИСТОЧНИК НЕДОСТУПЕН" in scout_tools._all_errors_banner(allerr, "X-скан")
+    assert "X-скан" in scout_tools.degraded_sources()             # структурный след для _run_scout
+    scout_tools.reset_degraded()
+    assert scout_tools.degraded_sources() == []
+
+
+# --- тихий login-wall X: пусто без ошибок → явная ошибка-запись ---
+
+def test_recent_silent_empty_becomes_error(monkeypatch):
+    monkeypatch.setattr(x_read, "load_leaders", lambda scope: [{"handle": "saylor", "track": "crypto"}])
+    monkeypatch.setattr(x_read, "_collect_retry", lambda leaders, n: [])   # X отдал ПУСТО без ошибок
+    out = x_read.recent(max_accounts=12)
+    assert len(out) == 1 and "куки" in out[0]["error"].lower()   # помечено как сбой, не «тихий день»
+
+
+def test_recent_live_tweets_pass_untouched(monkeypatch):
+    monkeypatch.setattr(x_read, "load_leaders", lambda scope: [{"handle": "saylor", "track": "crypto"}])
+    monkeypatch.setattr(x_read, "_collect_retry", lambda leaders, n: [{"handle": "saylor", "text": "BTC"}])
+    assert x_read.recent() == [{"handle": "saylor", "text": "BTC"}]   # живые твиты не трогаем
