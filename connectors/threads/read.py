@@ -34,19 +34,26 @@ def recent(limit: int = 25, since: int | None = None, until: int | None = None) 
     token = auth.valid_token()
     uid = auth.user_id()
     out: list[dict] = []
+    seen: set[str] = set()
     after: str | None = None
     limit = max(1, min(int(limit), _HARD_CAP))
 
     while len(out) < limit:
-        page = _api.get(f"{uid}/threads", {
-            "fields": _FIELDS,
-            "limit": min(100, limit - len(out)),
-            "since": since,
-            "until": until,
-            "after": after,
-        }, token=token)
+        params = {"fields": _FIELDS, "limit": min(100, limit - len(out))}
+        if after:
+            # Курсор УЖЕ несёт позицию в ленте. Раньше since/until слались вместе с ним на каждой
+            # странице — Meta ждёт либо окно, либо курсор, и смесь ведёт себя непредсказуемо.
+            params["after"] = after
+        else:
+            params["since"] = since
+            params["until"] = until
+        page = _api.get(f"{uid}/threads", params, token=token)
         rows = page.get("data") or []
-        out.extend(_normalize(r) for r in rows)
+        for r in rows:
+            item = _normalize(r)
+            if item["id"] and item["id"] not in seen:   # страницы могут перекрываться
+                seen.add(item["id"])
+                out.append(item)
         after = ((page.get("paging") or {}).get("cursors") or {}).get("after")
         if not rows or not after:
             break

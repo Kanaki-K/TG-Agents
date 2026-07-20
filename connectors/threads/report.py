@@ -10,10 +10,10 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
+from core import io_safe
 from connectors.threads import scoring
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,11 +43,9 @@ def _weekday(p: dict):
 def _load(posts=None, topics=None):
     """Данные для отчёта: переданные posts/topics или из data/threads_*.json. (None, {}) — если нет файла."""
     if posts is None:
-        if not POSTS_JSON.exists():
-            return None, {}
-        posts = json.loads(POSTS_JSON.read_text(encoding="utf-8"))
+        posts = io_safe.load_json(POSTS_JSON, None)   # битый/нет файла → None + INFO-лог (не трейс)
     if topics is None:
-        topics = json.loads(TOPICS_JSON.read_text(encoding="utf-8")) if TOPICS_JSON.exists() else {}
+        topics = io_safe.load_json(TOPICS_JSON, {})
     return posts, topics
 
 
@@ -77,7 +75,7 @@ def build_report(posts=None, topics=None) -> str:
     live = [p for p in mature if (p.get("people_count") or 0) > 0]
     multi = [p for p in mature if (p.get("people_count") or 0) >= 2]
     amp_posts = [p for p in mature if p.get("amplification", 0) > 0]
-    P(f"\n[КОРПУС]")
+    P("\n[КОРПУС]")
     P(f"  всего с охватом: {len(measured)} | зрелых (>{base['maturity_days']} дн): {len(mature)} | "
       f"свежих (в рейтинги не берём): {base['fresh']}")
     P(f"  годны для оценки качества (зрелые, ≥{base['view_floor']} просм): {len(elig)}")
@@ -191,6 +189,40 @@ def find_posts(query: str, n: int = 10, posts=None, topics=None) -> str:
             f"  просм {p.get('views', 0):>6} | люди/1k {p.get('people_per_k') or 0} | "
             f"ER {p.get('er') or 0}% | Кач {qv if qv is not None else '-'} | "
             f"{p.get('tier_ru') or ''} | {_title(topics, p)[:50]}")
+    return "\n".join(out)
+
+
+def orientation_digest(posts=None, topics=None, max_themes=4, max_posts=5) -> str:
+    """Компактный ОРИЕНТИР «что заходит на Threads» для Криейтора (НЕ полный build_report). На зрелых
+    чистых постах: сигнал медиа, топ-темы по Качеству, несколько зашедших постов. Это РЕКОМЕНДАЦИЯ
+    (владелец в контуре), НЕ правило — голос/вкус метрике не подчиняем (Goodhart). posts/topics — тесты."""
+    posts, topics = _load(posts, topics)
+    if not posts:
+        return "(данных Threads пока нет — ориентируйся на мануал и эталоны)"
+    scoring.enrich(posts)
+    mature = [p for p in posts if p.get("mature") and (p.get("views") or 0) > 0]
+    clean = [p for p in mature if not p.get("has_link") and not p.get("has_hashtag")]
+    if len(clean) < 5:
+        return "(зрелых чистых постов Threads мало — ориентируйся на мануал и эталоны)"
+    out = ["Ориентир «что заходит на Threads» (по ТВОИМ данным; рекомендация, не правило — "
+           "голос не подчиняем метрике):"]
+    med = [p for p in clean if p.get("has_media")]
+    txt = [p for p in clean if not p.get("has_media")]
+    if med and txt:
+        mv, tv = _avg([p["views"] for p in med]), _avg([p["views"] for p in txt])
+        out.append(f"- медиа vs текст: с медиа ср.просм {int(mv)} vs без {int(tv)} (x{round(mv / max(tv, 1), 1)})")
+    by_theme: dict[str, list] = {}
+    for p in clean:
+        by_theme.setdefault(topics.get(str(p.get("id", "")), {}).get("theme", "?"), []).append(p)
+    rows = [(th, a) for th, a in by_theme.items() if len(a) >= 5]
+    rows.sort(key=lambda x: -_avg([p.get("quality") or 0 for p in x[1]]))
+    if rows:
+        out.append("- темы по Качеству (сильные сверху): "
+                   + "; ".join(f"{th} ({round(_avg([p.get('quality') or 0 for p in a]))})" for th, a in rows[:max_themes]))
+    top = sorted([p for p in clean if p.get("quality") is not None], key=lambda p: -(p.get("quality") or 0))[:max_posts]
+    if top:
+        out.append("- заходило (заголовок · тир): "
+                   + "; ".join(f"{_title(topics, p)[:38]} · {p.get('tier_ru') or ''}" for p in top))
     return "\n".join(out)
 
 

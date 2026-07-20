@@ -20,14 +20,17 @@ _owner_username: str | None = None
 
 
 def _owner() -> str:
-    """Ник владельца (кэш на процесс) — запасной способ отличить свой ответ от чужого."""
+    """Ник владельца (кэш на процесс) — запасной способ отличить свой ответ от чужого.
+
+    Кэшируем ТОЛЬКО успех. Раньше при сбое кэшировалась пустая строка — и навсегда, до конца
+    процесса: дальше _is_own() всегда возвращал False, и весь self-тред записывался в
+    «ответы людей», то есть в главный честный сигнал «зашло». Один сетевой сбой на старте молча
+    завышал аналитику по ВСЕМ постам прогона.
+    """
     global _owner_username
-    if _owner_username is None:
-        try:
-            me = _api.get("me", {"fields": "id,username"}, token=auth.valid_token())
-            _owner_username = (me.get("username") or "").lower()
-        except _api.ThreadsError:
-            _owner_username = ""
+    if not _owner_username:
+        me = _api.get("me", {"fields": "id,username"}, token=auth.valid_token())
+        _owner_username = (me.get("username") or "").lower()
     return _owner_username
 
 
@@ -66,17 +69,19 @@ def audience_for(media_id: str) -> dict:
     """
     try:
         rows = conversation(media_id)
+        people, selfr, names = 0, 0, set()
+        for r in rows:
+            if _is_own(r):   # может сходить за ником владельца → тоже под try
+                selfr += 1
+            else:
+                people += 1
+                u = r.get("username")
+                if u:
+                    names.add(u.lower())
     except _api.ThreadsError as e:
+        # Лучше честный ноль с пометкой error, чем правдоподобная цифра: collect увидит
+        # replies_error и НЕ затрёт ею прежние значения (см. collect._merge_keep).
         return {"people_replies": 0, "people_count": 0, "self_replies": 0, "error": str(e)}
-    people, selfr, names = 0, 0, set()
-    for r in rows:
-        if _is_own(r):
-            selfr += 1
-        else:
-            people += 1
-            u = r.get("username")
-            if u:
-                names.add(u.lower())
     return {"people_replies": people, "people_count": len(names) or (1 if people else 0),
             "self_replies": selfr, "error": None}
 

@@ -60,17 +60,28 @@ def _write(value: str) -> None:
         logging.exception("Не смог записать режим в %s", _FILE)
 
 
-def resolve(boevoy_model: str) -> str:
+def resolve(boevoy_model: str, ceiling: str | None = None) -> str:
     """Какую модель реально использовать СЕЙЧАС.
 
     Приоритет: env MODEL_OVERRIDE (жёсткий — для скриптов/CI) → тест-режим (/test) →
     боевая модель из config.yaml. Вызывается на каждый ход — переключение живое.
+
+    ceiling — потолок ТИРА для механических ролей (verify/scope/dedup/…): override и тест
+    могут только УДЕШЕВИТЬ такую роль, не удорожить. Урок аудита расходов 15.07: MODEL_OVERRIDE,
+    выставленный ради флагмана, молча утёк в scope+verify — 36 вызовов на Opus, $4.32 вместо
+    $2.59, качеству это не дало ничего. Флагман ceiling НЕ передаёт — его тир решает владелец.
     """
     env = (os.getenv("MODEL_OVERRIDE") or "").strip()
-    if env:
-        return env
     st = get()
-    return st["model"] if st["mode"] == "test" else boevoy_model
+    resolved = env or (st["model"] if st["mode"] == "test" else boevoy_model)
+    if ceiling and resolved != ceiling:
+        from core import cost  # локально: не тащить cost при импорте модуля
+        price = lambda m: cost.RATES.get(m, cost._DEFAULT)[0]  # noqa: E731 — вход $/1M = ранг тира
+        if price(resolved) > price(ceiling):
+            logging.getLogger(__name__).warning(
+                "runmode: %s дороже потолка %s для этой роли — режу до потолка", resolved, ceiling)
+            return ceiling
+    return resolved
 
 
 def banner(boevoy_model: str) -> str:

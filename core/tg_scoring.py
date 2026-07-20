@@ -28,7 +28,7 @@ from __future__ import annotations
 import bisect
 import statistics
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from core import analytics
 
@@ -161,7 +161,7 @@ def ranking(recent_months: int = 0, fmt: str = "", n: int = 30) -> str:
     fresh = [p for p in posts if p.get("mature") is False and (p.get("views") or 0) > 0]
     if fresh:
         rows.append("-" * 96)
-        rows.append(f"СВЕЖИЕ (ещё зреют, не в рейтинге): "
+        rows.append("СВЕЖИЕ (ещё зреют, не в рейтинге): "
                     + ", ".join(f"#{p['id']}({p['age_days']}дн)" for p in fresh[:12]))
     return "\n".join(rows)
 

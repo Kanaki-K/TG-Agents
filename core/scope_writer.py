@@ -131,7 +131,14 @@ TASK = (
 
 FIX = (
     "Независимый фактчек (2FA) нашёл замечания к твоему короткому посту. Исправь ТОЧЕЧНО, сохраняя голос, "
-    "длину (цель ~800 всего, тело ~550–650; потолок ~1000) и формат scope (без флагман-фурнитуры-ярлыков):\n"
+    "длину (цель ~800 всего, тело ~550–650; потолок ~1000) и формат scope (без флагман-фурнитуры-ярлыков).\n"
+    "⚠️ ТОЧЕЧНО = ТОЛЬКО помеченные места. Строки БЕЗ замечаний НЕ удаляй, НЕ сокращай и НЕ переписывай — "
+    "особенно тезисную строку (ту, что отвечает на заголовок): реальный баг 15.07 — правя числа, ты заодно "
+    "вырезал строку «Вопрос - кому провал выгоднее», и пост остался без ответа на собственный заголовок. "
+    "Не влезаешь в длину — ужимай ПОМЕЧЕННОЕ, а не выбрасывай смысл.\n"
+    "— ⚠️ АТРИБУЦИЯ (имя лица под утверждением, которого нет в брифе) → это ВЫДУМАННЫЙ источник, "
+    "красная линия. Убери имя и его «цитату» целиком; поставь то, что РЕАЛЬНО говорит бриф (там верное "
+    "значение обычно уже есть). НЕ подбирай другое имя и НЕ смягчай «по некоторым оценкам» — это та же ложь;\n"
     "— ⚠️ конфликт → поставь значение ИЗ БРИФА дословно (НЕ округляй в меньшую сторону; при нужде сверь "
     "web_search). 2FA придрался к ВЕРНОМУ числу (совпадает с брифом, претензия лишь к «тиру источника») — НЕ трогай;\n"
     "— ❓ не подтверждено → убери цифру/утверждение ИЛИ смягчи, БЕЗ выдуманной точной цифры;\n"
@@ -151,7 +158,8 @@ def _system() -> str:
     """ЛЁГКИЙ контекст scope: персона + свой мануал + красные линии + уроки. БЕЗ флагман-мануала,
     БЕЗ блока обложки, БЕЗ плейбука — короткому это не нужно (дешевле и не тянет в флагман)."""
     persona = config.load_agent(AGENT_NAME)["persona"]
-    lessons = _read("memory/scope_lessons.md") or "(пока пусто — учусь на правках владельца к коротким постам)"
+    lessons = creator_tools.load_lessons_for_context(config.ROOT / "memory/scope_lessons.md") or \
+        "(пока пусто — учусь на правках владельца к коротким постам)"
     ctx = (
         "## 🔭 ТЫ ПИШЕШЬ КОРОТКИЙ АНАЛИТИЧЕСКИЙ ПОСТ «ПОД ПРИЦЕЛОМ»\n"
         "Это ОТДЕЛЬНЫЙ формат. Правила и анатомия ФЛАГМАНА (антитеза на весь пост, 💭/💡-разделы, "
@@ -258,7 +266,7 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
             f"{anchor}Тема поста 🔭 «Под прицелом»:\n{topic}\n\nВыше {len(images)} картинок-кандидатов в "
             f"ОБЛОЖКУ. {_MEDIA_CRITERIA}\n\nВыбери НОМЕР по ПОРЯДКУ ПРЕДПОЧТЕНИЯ выше (конкретный предмет повода "
             "> генерик; генерик против угла → 0). Если ни одна не годна — 0. Ответь СТРОГО одним числом."})
-        model = runmode.resolve(VISION_MODEL)
+        model = runmode.resolve(VISION_MODEL, ceiling=VISION_MODEL)
         resp = Anthropic(api_key=key).messages.create(
             model=model, max_tokens=10, messages=[{"role": "user", "content": content}])
         cost.record(model, resp.usage)
@@ -288,7 +296,7 @@ def _vision_ok(img_path, post_body: str, key: str) -> bool:
         media_type = _IMG_MEDIA_TYPE.get(img_path.suffix.lower(), "image/jpeg")
         b64 = base64.standard_b64encode(img_path.read_bytes()).decode()
         topic = "\n".join(l for l in post_body.splitlines() if l.strip())[:600]
-        model = runmode.resolve(VISION_MODEL)
+        model = runmode.resolve(VISION_MODEL, ceiling=VISION_MODEL)
         resp = Anthropic(api_key=key).messages.create(
             model=model, max_tokens=10,
             messages=[{"role": "user", "content": [
@@ -344,6 +352,13 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     return str(chosen)
 
 
+def _newest_draft_stamp() -> tuple[str, float]:
+    """(имя, mtime) самого свежего драфта — маркер «scope реально сохранил новый пост»."""
+    d = config.ROOT / "memory" / "drafts"
+    files = sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True) if d.exists() else []
+    return (files[0].name, files[0].stat().st_mtime) if files else ("", 0.0)
+
+
 def write(theme: str = "", avoid: str = "", recommend: str = "") -> str:  # recommend ПРИНИМАЕМ, но НЕ
     # используем: golden-скоуп выбирает повод сам по своему гейту. Nudge-рекомендация дедупа (13.07) толкала
     # на слабые/хендикеппинг-поводы (CLARITY) — откачено. Параметр оставлен ради совместимости с run_pipeline.
@@ -353,14 +368,21 @@ def write(theme: str = "", avoid: str = "", recommend: str = "") -> str:  # reco
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
     thinking = SCOPE_THINKING  # scope пишет БЕЗ мышления (см. SCOPE_THINKING: дёшево + не режет мету обложки)
-    model = runmode.resolve(SCOPE_MODEL)
+    model = runmode.resolve(SCOPE_MODEL, ceiling=SCOPE_MODEL)
     task = TASK
     if avoid:  # запрет на уже вышедшие темы — scope повод выбирает сам, но не из повторов
         task += ("\n\nАНТИ-ПОВТОР (сверено со свежей выгрузкой канала): НЕ бери эти направления — они уже "
                  f"выходили на канале: {avoid}. Возьми ДРУГОЙ свежий повод по своему гейту важности+свежести.")
     if theme:
         task += f"\n\nТЕМА ОТ ВЛАДЕЛЬЦА: {theme} — пиши по ней."
+    draft_before = _newest_draft_stamp()      # снимок ДО письма — чтобы поймать отказ scope
     post = _turn(task, model, key, thinking)
+    # Гейт «свежий драфт ДО трат» (аудит расходов 15.07): если scope отказался писать (нет годного
+    # повода — новый драфт НЕ сохранён), то 2FA и обложка жгли бы деньги на СТАРОМ драфте из
+    # архива, а run_pipeline всё равно отбросил бы результат своим гейтом свежести. Выходим сразу.
+    if _newest_draft_stamp() == draft_before:
+        logging.info("scope: новый драфт не появился (отказ) — пропускаю 2FA и обложку")
+        return post
     media_srcs = _parse_media_srcs(post)      # URL(ы) статей из меты — ДО 2FA (фикс мету срезает)
     media_subj = _parse_media_subject(post)   # якорь-сущности повода для vision (тоже до 2FA)
     # 2FA обязателен (цифры — красная линия). Свой фактчек на Sonnet, правки — своей же моделью/контекстом.
@@ -399,7 +421,7 @@ def write_feedback(final_text: str) -> str:
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
     thinking = SCOPE_THINKING  # scope пишет БЕЗ мышления (см. SCOPE_THINKING: дёшево + не режет мету обложки)
-    model = runmode.resolve(SCOPE_MODEL)
+    model = runmode.resolve(SCOPE_MODEL, ceiling=SCOPE_MODEL)
     # урок-инструмент даём ТОЛЬКО здесь (при генерации поста он не нужен и не должен соблазнять модель)
     return _turn(FEEDBACK.format(final=final_text.strip()), model, key, thinking,
                  tools=TOOLS + [RECORD_SCOPE_LESSON_TOOL])

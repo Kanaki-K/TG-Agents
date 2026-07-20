@@ -15,8 +15,11 @@ from core import agent_runtime, analytics, config, creator_tools, llm, runmode, 
 
 AGENT_NAME = "creator"
 
-# Серверный веб-поиск Anthropic — для ФАКТЧЕКА цифр/дат/цен перед выдачей (его выполняет Claude).
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 6}
+# Серверный веб-поиск Anthropic — свежие цифры/даты/цены под тему (его выполняет Claude).
+# max_uses=2 (было 6, аудит расходов 15.07, решение владельца): флагман живёт от банка ВЕЧНЫХ
+# тем (Модель А, 07.07) — поиск ему приправа, не основа; свежий повод = работа scope. Точечно
+# подтянуть цифру можно, крутить 6 Opus-раундов поиска — нет. Ошибки цифр страхует 2FA (verify).
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
 
 WELCOME = (
     "Я Криейтор KANAKI CRYPTO. Пишу посты в твоём голосе по стандарту канала — материал беру прямо "
@@ -33,6 +36,9 @@ WELCOME = (
     "🚀 ПОЛНЫЙ ЦИКЛ одной командой (Скаут → анти-повтор → пост → 2FA → отложка, идёт пару минут, тратит "
     "кредиты): /run — флагман (процесс 1); /run_scope — короткий 🔭 (процесс 2). В отличие от /post и /scope "
     "(только генерят) — эти гонят всю цепь и САМИ ставят в «Отложенные».\n"
+    "🧵 /run_threads — мини-флагман для Threads: дистиллирую ПОСЛЕДНИЙ вышедший флагман в серию 1–4 "
+    "постов и ставлю её в ОТЛОЖКУ тестового канала на обкатку (не живая публикация; для реального Threads "
+    "отложку ставишь руками в приложении); /run_threads_feedback <твой финал> — усвою урок из правки серии.\n"
     "Цифры не выдумываю — чего нет в материале, помечу [ПРОВЕРИТЬ]. Готовый пост ставлю в отложенные "
     "по /schedule — финальный контроль у тебя в «Отложенных» канала."
 )
@@ -224,7 +230,8 @@ def _anchors() -> str:
 
 def _system() -> str:
     persona = config.load_agent(AGENT_NAME)["persona"]
-    lessons = _read("memory/post_lessons.md") or "(пока пусто — учусь на правках владельца)"
+    lessons = creator_tools.load_lessons_for_context(config.ROOT / "memory/post_lessons.md") or \
+        "(пока пусто — учусь на правках владельца)"
     playbook = _read("memory/format_playbook.md") or (
         "(плейбук ещё не собран — Аналитик соберёт командой /playbook; пока опирайся на "
         "post_standard и данные через top_posts/by_dimension/themes_overview)")
@@ -361,6 +368,26 @@ def _run_pipeline_scope() -> str:
     return run_cycle(scope=True)
 
 
+def _run_pipeline_threads() -> str:
+    """🧵 МИНИ-ФЛАГМАН для Threads: дистиллировать ПОСЛЕДНИЙ вышедший ТГ-флагман в серию 1–4 постов и
+    поставить её в ОТЛОЖКУ тестового ТГ-канала (обкатка — тем же механизмом, что флагман/скоуп; НЕ живая
+    публикация, очередь на проверку). Для реального Threads отложку ставишь руками в приложении.
+    Тратит немного кредитов (одна Sonnet-дистилляция, без Скаута/2FA). = `python run_threads_pipeline.py`."""
+    from run_threads_pipeline import run_threads_cycle
+    return run_threads_cycle()
+
+
+def _run_threads_feedback(final_text: str = "") -> str:
+    """🧵 Петля обучения мини-флагмана: пришли отредактированный финал Threads-серии В ТОМ ЖЕ сообщении —
+    сравню со своей серией и усвою устойчивый урок (memory/threads_lessons.md, отдельно от ТГ). Учится с
+    первых постов на твоих правках (метрики-петля — позже, после пере-засева токена Threads)."""
+    if not (final_text or "").strip():
+        return ("Пришли свой отредактированный финал Threads-серии после команды:\n"
+                "/run_threads_feedback <твой финал> — сравню со своей серией и усвою урок.")
+    from core import threads_creator
+    return threads_creator.write_feedback(final_text)
+
+
 async def main() -> None:
     cfg = config.load_agent(AGENT_NAME)
     # адаптивное мышление — острее композиция и точнее соблюдение красных линий; включается в config.yaml
@@ -380,7 +407,11 @@ async def main() -> None:
         command_actions={"schedule": _schedule, "verify": _verify, "scope": _scope,
                          "scope_feedback": _scope_feedback,
                          # ПОЛНЫЙ цикл из бота (Скаут→анти-повтор→2FA→отложка): 1 — флагман, 2 — короткий
-                         "run": _run_pipeline_flagship, "run_scope": _run_pipeline_scope},
+                         "run": _run_pipeline_flagship, "run_scope": _run_pipeline_scope,
+                         # 🧵 мини-флагман Threads: дистилляция вышедшего флагмана в серию НА РЕВЬЮ (без публикации)
+                         "run_threads": _run_pipeline_threads,
+                         # 🧵 петля обучения мини-флагмана на правках владельца (учит threads_lessons.md)
+                         "run_threads_feedback": _run_threads_feedback},
         # авто-2FA СРАЗУ после генерации поста (на каждом /post и /light; в тест-режиме пропускается)
         post_hooks={"post": _post_2fa, "light": _post_2fa},
         thinking=thinking,

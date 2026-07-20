@@ -4,7 +4,14 @@ llm.reply на каждый вызов API зовёт record() — логиру�
 для итога — только между reset() и summary() (это включает run_pipeline, чтобы посчитать
 полную цену «Скаут→пост в отложке»). Боты reset() не зовут — у них просто строка в лог на ход.
 
-Цены $/1M токенов (вход, выход). Кэш: запись ~1.25× входной цены, чтение ~0.1× входной цены.
+Цены $/1M токенов (вход, выход). Кэш: запись 5m = 1.25×, запись 1h = 2× (!), чтение = 0.1×
+входной цены. web_search — $10 за 1000 поисков ПОВЕРХ токенов.
+
+⚠ Урок аудита расходов 15.07: считалка брала ВСЕ кэш-записи по 1.25×, хотя llm.py ставит
+системному блоку ttl=1h (биллится 2×), а web_search не считала вовсе — лог занижал реальный
+счёт Anthropic на ~$11-19/мес. Теперь 1h-записи считаются по 2× (разбивка из usage.cache_creation;
+если API её не дал — консервативно считаем всё по 2×: завысить безопаснее, чем занизить),
+поиски — по $0.01. После первого инвойса сверить: python run_cost_report.py vs счёт.
 """
 from __future__ import annotations
 
@@ -37,16 +44,28 @@ def set_context(label: str) -> None:
     _context = label or "?"
 
 
+def get_context() -> str:
+    """Текущая метка расхода — чтобы вложенный вызов (напр. воронка) мог ВЕРНУТЬ её после себя
+    и не утащить расход вызывающего под свою метку (аудит Скаута 20.07)."""
+    return _context
+
+
 def _append_ledger(model: str, u: dict, c: float) -> None:
     """Дописать строку в постоянный лог: дата/время + кто + токены (вкл. кэш) + цена."""
     try:
         _LEDGER.parent.mkdir(exist_ok=True)
         with _LEDGER.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({
+            row = {
                 "ts": datetime.now().isoformat(timespec="seconds"), "who": _context, "model": model,
                 "in": u["in"], "cache_w": u["cache_w"], "cache_r": u["cache_r"], "out": u["out"],
                 "cost": round(c, 6),
-            }, ensure_ascii=False) + "\n")
+            }
+            # новые поля пишем только ненулевыми — старые строки лога остаются сравнимыми
+            if u.get("cache_w_1h"):
+                row["cache_w_1h"] = u["cache_w_1h"]
+            if u.get("search"):
+                row["search"] = u["search"]
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:
         logging.exception("[cost] не смог записать в %s", _LEDGER)
 
@@ -58,16 +77,33 @@ def reset() -> None:
     _tracking = True
 
 
+SEARCH_RATE = 0.01  # $ за один web_search (тариф Anthropic: $10/1000 поисков)
+
+
 def _usage_dict(usage) -> dict:
     g = lambda n: int(getattr(usage, n, 0) or 0)  # noqa: E731
+    cache_w = g("cache_creation_input_tokens")
+    # Разбивка записей кэша по TTL: 1h биллится 2×, 5m — 1.25×. Если API разбивку не дал —
+    # консервативно считаем всё по 2× (llm.py ставит системному блоку именно 1h, а система —
+    # подавляющий объём записи; завысить копейки безопаснее, чем снова занижать счёт).
+    cc = getattr(usage, "cache_creation", None)
+    w1h = int(getattr(cc, "ephemeral_1h_input_tokens", 0) or 0) if cc else 0
+    w5m = int(getattr(cc, "ephemeral_5m_input_tokens", 0) or 0) if cc else 0
+    if not (w1h or w5m):
+        w1h = cache_w
+    stu = getattr(usage, "server_tool_use", None)
+    searches = int(getattr(stu, "web_search_requests", 0) or 0) if stu else 0
     return {"in": g("input_tokens"), "out": g("output_tokens"),
-            "cache_w": g("cache_creation_input_tokens"), "cache_r": g("cache_read_input_tokens")}
+            "cache_w": cache_w, "cache_w_1h": w1h, "cache_r": g("cache_read_input_tokens"),
+            "search": searches}
 
 
 def _cost(model: str, u: dict) -> float:
     inp, out = RATES.get(model, _DEFAULT)
-    return (u["in"] * inp + u["cache_w"] * inp * 1.25 + u["cache_r"] * inp * 0.1
-            + u["out"] * out) / 1_000_000
+    w1h = u.get("cache_w_1h", 0)
+    w5m = max(u["cache_w"] - w1h, 0)
+    return (u["in"] * inp + w5m * inp * 1.25 + w1h * inp * 2.0 + u["cache_r"] * inp * 0.1
+            + u["out"] * out) / 1_000_000 + u.get("search", 0) * SEARCH_RATE
 
 
 def record(model, usage) -> None:
@@ -79,8 +115,9 @@ def record(model, usage) -> None:
         return
     c = _cost(model, u)
     tok = u["in"] + u["out"] + u["cache_w"] + u["cache_r"]
-    logging.info("[cost] %s: %d ток (вход %d, кэш-зап %d, кэш-чт %d, выход %d) → $%.4f",
-                 model, tok, u["in"], u["cache_w"], u["cache_r"], u["out"], c)
+    logging.info("[cost] %s: %d ток (вход %d, кэш-зап %d, кэш-чт %d, выход %d%s) → $%.4f",
+                 model, tok, u["in"], u["cache_w"], u["cache_r"], u["out"],
+                 f", поисков {u['search']}" if u.get("search") else "", c)
     _append_ledger(model, u, c)  # постоянная запись (дата/время + кто + кэш + цена)
     if _tracking:
         _log.append((model, u))
@@ -96,9 +133,10 @@ def summary() -> str:
     _tracking = False
     by: dict[str, dict] = {}
     for m, u in _log:
-        a = by.setdefault(m, {"in": 0, "out": 0, "cache_w": 0, "cache_r": 0, "cost": 0.0, "calls": 0})
-        for k in ("in", "out", "cache_w", "cache_r"):
-            a[k] += u[k]
+        a = by.setdefault(m, {"in": 0, "out": 0, "cache_w": 0, "cache_r": 0, "search": 0,
+                              "cost": 0.0, "calls": 0})
+        for k in ("in", "out", "cache_w", "cache_r", "search"):
+            a[k] += u.get(k, 0)
         a["cost"] += _cost(m, u)
         a["calls"] += 1
     lines = ["=== Расход Claude за прогон ==="]

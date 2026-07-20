@@ -19,7 +19,8 @@
   1.5) Анти-повтор (флагман) — сверяет направления брифа с историей канала: повтор → берёт другую
      тему; ВСЕ повторы → пост не делает (дубль в канал не уйдёт);
   2) Криейтор — утверждённая НЕ-повторная тема: пост + обложка (make_image), сохраняет драфт;
-  3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление на @Kanaki_K.
+  3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление на @Kanaki_K;
+     вышедший флагман пишется в журнал (flagship_journal) — вход мини-флагмана Threads.
 Дальше проверяешь готовый пост в нативных «Отложенных» канала.
 
 llm.reply каждого агента гоняется в ОТДЕЛЬНОМ потоке (как в боте через asyncio.to_thread): так
@@ -36,8 +37,9 @@ import sys
 import time
 from pathlib import Path
 
-from core import (analytics, config, cost, creator_bot, creator_tools, dedup, llm, logging_setup,
-                  market_tools, runmode, scope_writer, scout_bot, scout_tools, verify)
+from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
+                  logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools,
+                  self_learn, topic_category, usefulness, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
@@ -88,12 +90,20 @@ def _run_scout() -> None:
     if cfg.get("web_search"):
         tools.append(scout_bot.WEB_SEARCH_TOOL)
     cost.set_context("scout")
+    scout_tools.reset_degraded()  # чистим след деградации прошлого прогона (аудит 20.07)
     print("🔍 [1/3] Скаут: разведка трендов...")
     # coverage-зрение Скаута — для ОБЕИХ веток (хорошее универсальное решение: не тащить повтор у
     # истока ни во флагман, ни в scope). Это РАЗВЕДКА, не письмо — тут scope/флагман не разделяем.
     text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"],
                         tools, scout_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
+    # Структурный детект деградации (аудит 20.07): баннер «источник недоступен» полагался на то, что
+    # LLM донесёт его до чата — в headless это могло тихо потеряться. Логируем WARNING независимо.
+    down = scout_tools.degraded_sources()
+    if down:
+        logging.warning("🛑 Скаут: источник(и) вернули ТОЛЬКО ошибки: %s — возможна деградация разведки "
+                        "(протухла сессия/куки); бриф мог выйти без части сигнала. Это НЕ «тихий день».",
+                        ", ".join(down))
 
 
 def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: str = "",
@@ -173,7 +183,17 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
     pool = dedup.available_bank_themes()
     if len(pool) <= 1:
         return (pool[0] if pool else ""), ("без вариантов" if pool else "банк пуст"), {}
-    sample = random.sample(pool, min(25, len(pool)))
+    # Само-обучение: наклон ротации к категориям, что заходят на КАНАЛЕ (ТГ-сигнал; Threads НЕ берём —
+    # площадки инвертированы). Мягко — веса влияют лишь на попадание в 25 кандидатов, финал за
+    # свежестью/рынком/LLM. Нет данных → веса пустые → weighted_sample = обычная равномерная выборка.
+    cat_w = self_learn.tg_category_weights()
+    sample = self_learn.weighted_sample(pool, min(25, len(pool)),
+                                        lambda t: cat_w.get(topic_category.category_of(t), 1.0))
+    # Аудит 20.07: при пуле ≤25 weighted_sample отдаёт ВСЕ темы → наклон обучения НЕ влияет (тихий no-op).
+    # Пока пул ~134 (норма), но банк усыхает метками [вышло] — делаем вырождение видимым, а не тихим.
+    if cat_w and len(pool) <= 25:
+        logging.warning("Само-обучение: пул тем ≤25 (%d) — наклон категорий НЕ влияет на выбор (все "
+                        "кандидаты проходят). Пополни банк тем или проверь метки [вышло].", len(pool))
     try:
         market = market_tools.handle("market_price", {}) or ""
     except Exception:  # noqa: BLE001
@@ -183,9 +203,12 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
         coverage = analytics.topics_digest(limit=80) or ""
     except Exception:  # noqa: BLE001
         coverage = ""
+    ranked = sorted(cat_w.items(), key=lambda kv: -kv[1])
+    tilt = (f"{topic_category.label(ranked[0][0])} ×{ranked[0][1]} … "
+            f"{topic_category.label(ranked[-1][0])} ×{ranked[-1][1]}") if ranked else "нет данных (равномерно)"
     meas = {"кандидатов": len(sample),
             "покрытие_учтено": sum(1 for l in coverage.splitlines() if l.strip()),
-            "рынок": bool(market), "бриф": bool(brief)}
+            "рынок": bool(market), "бриф": bool(brief), "наклон": tilt}
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(sample))
     system = (
         "Ты выбираешь ОДНУ тему образовательного флагмана крипто-канала о ДОЛГОСРОЧНОМ инвесторе (DCA). "
@@ -264,8 +287,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     panel["данные канала"] = _refresh.splitlines()[0][:70] if _refresh.strip() else "актуальны"
     # N-16 HEALTH-CHECK: если ПОСЛЕ попытки тяги выгрузка всё ещё протухла — сборщик молча упал (частая
     # причина: единая MTProto-сессия истекла/забанена, она же на выгрузку+разведку+публикацию). НЕ молчим:
-    # громкий лог + строка в отчёт всегда; уведомление владельцу — best-effort (при мёртвой сессии оно тоже
-    # не дойдёт, но лог/отчёт сработают, а при живой сессии + сбое сбора — дойдёт). Поток НЕ меняем.
+    # громкий лог + строка в отчёт всегда; уведомление владельцу — через Bot API (N-45): раньше шло через
+    # ту же MTProto-сессию, т.е. при её смерти (вероятная причина алерта) не доходило. Bot API от неё независим.
     _age = dedup.data_age_hours()
     if _age is None or _age >= STALE_ALERT_HOURS:
         _alert = (f"Данные канала НЕ обновляются ({'выгрузки нет' if _age is None else f'{_age:.0f}ч'} "
@@ -275,10 +298,9 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         out("🚨 " + _alert + "\n")
         panel["данные канала"] = "🚨 НЕ обновляются — проверь MTProto-сессию"
         try:
-            _n = config.get_optional("PUBLISH_NOTIFY")
-            if _n:
-                from connectors.telegram_publish import publish as _publish
-                _publish.notify(_n, "🚨 KANAKI-завод: " + _alert)
+            from core import bot_alert
+            if not bot_alert.notify_owner("🚨 KANAKI-завод: " + _alert):
+                logging.warning("[health] алерт владельцу не доставлен (проверь токен бота/OWNER_ID)")
         except Exception:
             logging.exception("[health] уведомление владельцу не отправилось")
     age = _latest_brief_age_hours()
@@ -360,6 +382,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         out(f"   ├ покрытие канала учтено .. {meas.get('покрытие_учтено', '—')} постов (свежесть)")
         out(f"   ├ рынок ................... {'✓ учтён' if meas.get('рынок') else '— нет данных'}")
         out(f"   ├ бриф Скаута ............. {'✓ учтён' if meas.get('бриф') else '— нет'}")
+        out(f"   ├ наклон категорий (ТГ) ... {meas.get('наклон', '—')}")
         out(f"   └→ РЕШЕНИЕ: «{theme}»   ПОЧЕМУ: {theme_why}\n")
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
@@ -385,6 +408,41 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 return "\n".join(report)
         except Exception:
             logging.exception("Пост-сверка scope упала — пропускаю её (осн. сверка до генерации уже прошла)")
+        # ГЕЙТ ПОЛЬЗА-ЭДЖ (жёсткий СТОП, ТОЛЬКО scope). Урок 20.07: пост может пройти анти-повтор + 2FA
+        # (факты чистые) и всё равно быть пересказом без вывода — владелец такой бракует. Польза — свойство
+        # темы/угла, авто-правкой не лечится, поэтому СТОП, а не правка. Приоритет над свежестью: «нет
+        # пользы — дата не спасёт». Фейл-ОТКРЫТО: сбой самого гейта (вторичная сеть) не глушит публикацию.
+        try:
+            gv = usefulness.judge(post.split("[[SPLIT]]")[0], verify.latest_brief(),
+                                  api_key=config.agent_api_key(config.load_agent("creator")))
+            if usefulness.blocks(gv):
+                panel["публикация"] = "⛔ СТОП — пересказ без пользы/эджа (гейт польза-эдж)"
+                out("⛔ Гейт польза-эдж: пост описывает событие, но не даёт читателю вывода через "
+                    "неочевидный угол — НЕ публикую (свежесть повода это не спасает):\n" + str(gv))
+                out(_panel_block())
+                out("\n" + cost.summary())
+                return "\n".join(report)
+        except Exception:
+            logging.exception("Гейт польза-эдж упал — пропускаю (сбой гейта не блокирует публикацию)")
+        # 2FA-РЕ-ГЕЙТ scope (N-59, ТВИН флагманского N-64 — правило-спутник аудита: починил близнеца →
+        # закрой второго). scope_writer сделал 2FA+правку ВНУТРИ write(), но БЕЗ перепроверки → остаточный
+        # ⚠️ (правка не помогла) уходил бы в канал. Верифицируем ТО, ЧТО ПУБЛИКУЕТСЯ — драфт с диска; остался
+        # ⚠️ (цифры/атрибуция — красная линия бренда) → СТОП+уведомление. Сбой самого 2FA — фейл-ОТКРЫТО
+        # (инфра-флейк не блокирует), как у флагмана. Темпоральную свежесть тут НЕ гоняем (scope=False):
+        # она мягкая и уже отработана внутри write() + отдельным гейтом свежести.
+        try:
+            sv = verify.verify_post(verify.latest_draft(), verify.latest_brief(),
+                                    api_key=config.agent_api_key(config.load_agent("creator")))
+            out("🔎 [2FA scope] Перепроверка опубликуемого драфта:\n" + str(sv) + "\n")
+            if verify.has_issues(sv):
+                panel["публикация"] = "⛔ СТОП — 2FA scope: конфликт цифр/атрибуции не устранён правкой"
+                out("⛔ 2FA scope: в опубликуемом драфте остались замечания — НЕ публикую (цифры/атрибуция "
+                    "— красная линия). Проверь и поправь вручную по вердикту выше.")
+                out(_panel_block())
+                out("\n" + cost.summary())
+                return "\n".join(report)
+        except Exception:
+            logging.exception("2FA-ре-гейт scope упал — пропускаю (сбой гейта не блокирует публикацию)")
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
     # 2FA уже прошёл внутри его ветки — здесь его НЕ дублируем.
     if post and not scope:
@@ -399,7 +457,26 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 post = _run_creator_fix(post, verdict)
                 out((post or "").strip()[:600] + "\n")
                 out("🔎 Повторный фактчек после правок:")
-                out(str(verify.verify_post(post, verify.latest_brief(), api_key=ckey)) + "\n")
+                # Аудит флагмана 20.07: верифицируем ТО, ЧТО РЕАЛЬНО ПУБЛИКУЕТСЯ — драфт с диска
+                # (latest_draft), а не строку `post` в памяти. Иначе, если фикс-модель поправила текст,
+                # но забыла save_draft, гейт прошёл бы на исправленной строке, а в канал ушёл бы старый
+                # драфт с той самой ⚠️-цифрой. Верна и та, и другая ветка: не сохранил → старый драфт с
+                # ⚠️ → блок (безопасно); сохранил → чистый драфт == post → проходит.
+                reverdict = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=ckey)
+                out(str(reverdict) + "\n")
+                # Аудит 20.07: раньше результат ре-верификации ВЫБРАСЫВАЛСЯ → остаточный ⚠️ (правка не
+                # помогла) уходил в публикацию. Цифры/атрибуция — красная линия: остался ⚠️ → СТОП +
+                # уведомление (как интерактивный /schedule). Сбой самого 2FA — по-прежнему фейл-открыто
+                # (внешний except ниже логирует и продолжает: инфра-флейк не должен блокировать пост).
+                if verify.has_issues(reverdict):
+                    panel["🔎 фактчек 2FA"] = "⛔ замечания НЕ устранены правкой"
+                    panel["публикация"] = "⛔ СТОП — 2FA: конфликт цифр/атрибуции не устранён правкой"
+                    out("⛔ 2FA: после правки замечания ОСТАЛИСЬ — НЕ публикую (цифры/атрибуция = красная "
+                        "линия бренда). Проверь пост и поправь вручную по вердикту выше.")
+                    out(_panel_block())
+                    out("\n" + cost.summary())
+                    return "\n".join(report)
+                panel["🔎 фактчек 2FA"] = "были замечания → исправлено, перепроверка чистая"
             else:
                 panel["🔎 фактчек 2FA"] = "чисто — замечаний нет"
         except Exception:
@@ -477,6 +554,11 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # РЕЦИКЛИНГ: тема флагмана ушла в канал → метим [вышло ДАТА], пикер не даст её ~полгода, потом вернёт.
     # Только на РЕАЛЬНОЙ публикации (draft-only сюда не доходит — вышел выше), чтобы тест не «съедал» темы.
     if theme and not scope:
+        # МОСТ В THREADS: вышедший флагман (полный текст + тема) → журнал вышедших. Отсюда мини-флагман
+        # (run_threads_pipeline) берёт его и дистиллирует в Threads-серию. Только боевая публикация —
+        # draft-only/тест сюда не доходят (вышли выше), журнал тестами не засоряется.
+        flagship_journal.record(post, theme)
+        out("🧵 Флагман записан в журнал вышедших — доступен мини-флагману Threads (run_threads_pipeline).")
         if dedup.mark_theme_used(theme):
             out(f"🧭 Тема помечена [вышло] в банке — вернётся в ротацию через ~{dedup.BANK_REUSE_DAYS//30} мес.")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
