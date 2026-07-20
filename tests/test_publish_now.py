@@ -46,11 +46,17 @@ def _draft(d, body, name="2026-07-22-post.md"):
 
 
 def test_md_files_only_dated_newest_first(tmp_path):
+    # _md_files сортирует по MTIME (свежий записанный = первым), НЕ по дате в имени. Задаём mtime ЯВНО:
+    # мгновенные записи на Windows дают одинаковый mtime (грубое разрешение) → порядок был бы недетерминирован.
     d = tmp_path / "drafts"
     d.mkdir()
-    (d / "2026-07-20-a.md").write_text("a", encoding="utf-8")
-    (d / "2026-07-22-b.md").write_text("b", encoding="utf-8")
+    a = d / "2026-07-20-a.md"
+    a.write_text("a", encoding="utf-8")
+    b = d / "2026-07-22-b.md"
+    b.write_text("b", encoding="utf-8")
     (d / "notes.md").write_text("x", encoding="utf-8")        # без даты → игнор (N-19)
+    os.utime(a, (1000, 1000))                                 # a записан раньше (mtime меньше)
+    os.utime(b, (2000, 2000))                                 # b свежее → первым
     assert [p.name for p in creator_tools._md_files(d)] == ["2026-07-22-b.md", "2026-07-20-a.md"]
 
 
