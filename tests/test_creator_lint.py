@@ -76,9 +76,47 @@ def test_warns_headline_metaphor_verb():
 
 
 def test_good_headline_no_metaphor_warn():
+    # заголовок одним вопросом (колон-тег) — без глагола-метафоры (форма «факт. вопрос?» снята 20.07)
     _, warns = creator_tools._lint(
-        "💸 20% майнеров в убытке. Это поломка или уборка?\n\nтело", "flagship")
+        "💸 20% майнеров в убытке: поломка или уборка?\n\nтело", "flagship")
     assert not any("глагол-метафора" in w for w in warns)
+
+
+# --- заголовок ФЛАГМАНА: эмодзи-якорь обязателен + РОВНО одно предложение (владелец 20.07) ---
+
+def test_flagship_headline_without_emoji_warns():
+    # флагман вышел без эмодзи-якоря (баг «Охота за стопами» 20.07)
+    _, warns = creator_tools._lint(
+        "Рынок вытряхивает трейдеров\n\n" + "тело поста " * 400, "флагман")
+    assert any("БЕЗ эмодзи" in w for w in warns)
+
+
+def test_flagship_headline_with_emoji_single_question_ok():
+    _, warns = creator_tools._lint(
+        "📊 Кто охотится за Вашим стоп-лоссом?\n\n" + "тело поста " * 400, "флагман")
+    assert not any("БЕЗ эмодзи" in w for w in warns)
+    assert not any("ДВУХ предложени" in w for w in warns)
+
+
+def test_flagship_headline_two_sentences_warns():
+    # «утверждение. утверждение» — ровно то, что владелец забраковал 20.07
+    _, warns = creator_tools._lint(
+        "📊 Рынок вытряхивает трейдеров. Долгосрочника - нечем\n\n" + "тело " * 400, "флагман")
+    assert any("ДВУХ предложени" in w for w in warns)
+
+
+def test_flagship_headline_fact_question_now_warns():
+    # «факт. вопрос?» БОЛЬШЕ не формула — теперь тоже два предложения (владелец 20.07)
+    _, warns = creator_tools._lint(
+        "💸 20% майнеров в убытке. Это поломка или уборка?\n\n" + "тело " * 400, "флагман")
+    assert any("ДВУХ предложени" in w for w in warns)
+
+
+def test_flagship_headline_colon_tag_ok():
+    # тег-тема через ДВОЕТОЧИЕ = одно предложение → ок
+    _, warns = creator_tools._lint(
+        "📉 DXY в 2026: главный фильтр для крипто-риска\n\n" + "тело " * 400, "флагман")
+    assert not any("ДВУХ предложени" in w for w in warns)
 
 
 # --- scope: заголовок = ОДИН крючок (манифест §1) ---
