@@ -230,7 +230,8 @@ def _anchors() -> str:
 
 def _system() -> str:
     persona = config.load_agent(AGENT_NAME)["persona"]
-    lessons = _read("memory/post_lessons.md") or "(пока пусто — учусь на правках владельца)"
+    lessons = creator_tools.load_lessons_for_context(config.ROOT / "memory/post_lessons.md") or \
+        "(пока пусто — учусь на правках владельца)"
     playbook = _read("memory/format_playbook.md") or (
         "(плейбук ещё не собран — Аналитик соберёт командой /playbook; пока опирайся на "
         "post_standard и данные через top_posts/by_dimension/themes_overview)")

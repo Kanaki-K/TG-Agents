@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -739,6 +740,50 @@ def _lesson_duplicate(new: str, lessons_path: Path = LESSONS) -> str | None:
     return None
 
 
+# ── Уроки в контекст без «жира» (анти-обрастание — влияет на цену КАЖДОГО поста) ──────────────────
+# Файлы уроков грузятся в контекст на КАЖДЫЙ пост и только растут (append-only). Провенанс-хвост
+# «— _из правки: …_» — это СОРСИНГ, не правило (сам дедуп уроков его отрезает, см. _lesson_keywords).
+# Стрип при ЗАГРУЗКЕ (файл на диске НЕ трогаем — там эвиденс для человека) убирает ~20-25% токенов
+# уроков АВТОМАТИЧЕСКИ, на всех текущих И будущих уроках — без ручных аудитов. Модель видит ПРАВИЛО
+# и все ИНЛАЙН-примеры (❌/✅/«…» в теле остаются), уходит только хвост-провенанс. Провабли без потери
+# качества: срезается ровно то, что система и так не считает правилом.
+STRIP_LESSON_EVIDENCE = True   # регресс подачи? → False: хвосты вернутся мгновенно, файл не тронут
+_LESSON_EVIDENCE_RE = re.compile(r"\s*[—–-]\s*_.+_\s*$")
+
+
+def load_lessons_for_context(path: Path) -> str:
+    """Текст уроков ДЛЯ ПРОМПТА: правила без провенанс-хвостов (при STRIP_LESSON_EVIDENCE). Файл на
+    диске не меняется. Логирует размер — телеметрия против незаметного обрастания уроков жиром."""
+    raw = path.read_text(encoding="utf-8") if path.exists() else ""
+    if not raw.strip():
+        return ""
+    if STRIP_LESSON_EVIDENCE:
+        raw = "\n".join(
+            _LESSON_EVIDENCE_RE.sub("", ln) if ln.lstrip().startswith("- (") else ln
+            for ln in raw.split("\n"))
+    logging.info("уроки %s → контекст: %d симв, ~%d уроков", path.name, len(raw), raw.count("\n- ("))
+    return raw
+
+
+def _covered_by_manual(new: str, manual_rel: str = "memory/content_manual.md") -> str | None:
+    """Правило нового урока УЖЕ покрыто мануалом (он и так в контексте)? Сверка по значимым словам,
+    порог 0.6. Тогда урок = дубль канона → платится в контексте дважды. Вернёт строку мануала или None."""
+    nw = _lesson_keywords(new)
+    if len(nw) < 4:
+        return None
+    p = config.ROOT / manual_rel
+    if not p.exists():
+        return None
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        s = ln.strip()
+        if len(s) < 40:
+            continue
+        ow = {w for w in re.findall(r"[а-яёa-z0-9]{4,}", s.lower()) if w not in _LESSON_STOP}
+        if ow and len(nw & ow) / len(nw) >= 0.6:
+            return s[:120]
+    return None
+
+
 # Шапка файла уроков при первом создании — по имени файла (флагман / scope).
 _LESSONS_SEED = {
     "post_lessons.md": (
@@ -773,6 +818,15 @@ def _record_lesson(args: dict, lessons_path: Path = LESSONS) -> str:
                 f"мануале/линтере, в {rel} тоже не нужно). Если урок правда НОВЫЙ или "
                 "уточняет старый — переформулируй так, чтобы было видно ЧЕМ отличается, и вызови "
                 "снова с confirm_new=true.")
+    # Страж против МАНУАЛА: мануал (content_manual/scope_manual) и так грузится в контекст — урок,
+    # повторяющий его правило, платится дважды каждый пост (обрастание жиром). Ловим ДО записи.
+    manual_rel = "memory/content_manual.md" if lessons_path.name == "post_lessons.md" else "memory/scope_manual.md"
+    man = _covered_by_manual(lesson, manual_rel)
+    if man and not args.get("confirm_new"):
+        return ("⚠ Это правило уже покрыто МАНУАЛОМ (" + manual_rel.split("/")[-1] + "):\n  " + man +
+                "\n\nМануал и так в контексте — дублировать урок незачем (жир бьёт по цене каждого "
+                "поста). Правда УТОЧНЯЕШЬ мануал? Переформулируй, ЧЕМ отличается, и вызови снова с "
+                "confirm_new=true.")
     lessons_path.parent.mkdir(parents=True, exist_ok=True)
     if not lessons_path.exists():
         lessons_path.write_text(
