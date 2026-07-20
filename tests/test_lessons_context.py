@@ -20,6 +20,16 @@ def test_strip_keeps_rule_and_inline_example_drops_provenance(tmp_path):
     assert "стало «биткоин»" not in ctx
 
 
+def test_non_provenance_dash_italic_kept(tmp_path):
+    # дыра старого широкого регекса: он срезал ЛЮБОЙ «— _italic_» в конце строки → мог съесть
+    # правило. Якорь на провенанс-префикс (из/владелец/правка) это чинит.
+    f = tmp_path / "post_lessons.md"
+    f.write_text("- (2026-07-20) Правило про заголовок — _это часть правила, не провенанс_\n",
+                 encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    assert "это часть правила, не провенанс" in ctx   # НЕ срезано (не провенанс-хвост)
+
+
 def test_flag_off_keeps_provenance(tmp_path, monkeypatch):
     f = tmp_path / "post_lessons.md"
     f.write_text("- (2026-06-17) Правило X — _из правки: было Y_\n", encoding="utf-8")
