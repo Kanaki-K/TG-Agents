@@ -2,6 +2,7 @@
 драфта). Тут живут channel-safety / data-loss пути (срез [[SPLIT]]/[ПРОВЕРИТЬ], гейт обложки), которые
 были без тестов. Сеть/планировщик замоканы — проверяем чистую логику, а не отправку."""
 import datetime
+import os
 
 from core import creator_tools
 
@@ -94,3 +95,34 @@ def test_flagship_without_cover_goes_textonly(monkeypatch, tmp_path):
     res = creator_tools._publish_now({"kind": "флагман"})   # LAST_COVER не существует
     assert pub.calls[0]["cover"] is None                    # флагман ушёл ТЕКСТОМ, не с чужой картинкой
     assert "НЕ прицепил" in res
+
+
+def _set_cover(tmp_path, mtime):
+    img = tmp_path / "cover.jpg"
+    img.write_text("img", encoding="utf-8")
+    creator_tools.LAST_COVER.write_text(str(img), encoding="utf-8")
+    os.utime(creator_tools.LAST_COVER, (mtime, mtime))
+    return str(img)
+
+
+def test_flagship_stale_cover_goes_textonly(monkeypatch, tmp_path):
+    # mtime-гейт (N-66): LAST_COVER СТАРШЕ драфта (make_image упал / прошлый флагман) → ТЕКСТОМ, не чужой
+    # картинкой. Поведение fail-safe+видимое (пометка) — тестируем ЕГО, а не «чиним» (расширение окна
+    # внесло бы тихий риск прицепить чужую обложку — хуже для бренда).
+    d, pub = _setup(monkeypatch, tmp_path)
+    _draft(d, "**Флагман**\nтело")
+    draft_mtime = next(d.glob("*.md")).stat().st_mtime
+    _set_cover(tmp_path, draft_mtime - 100)                 # обложка на 100с старше драфта
+    res = creator_tools._publish_now({"kind": "флагман"})
+    assert pub.calls[0]["cover"] is None
+    assert "НЕ прицепил" in res
+
+
+def test_flagship_fresh_cover_attached(monkeypatch, tmp_path):
+    # обложка ЭТОГО прогона (не старше драфта) → прицепляется
+    d, pub = _setup(monkeypatch, tmp_path)
+    _draft(d, "**Флагман**\nтело")
+    draft_mtime = next(d.glob("*.md")).stat().st_mtime
+    img = _set_cover(tmp_path, draft_mtime)                 # ровесник драфта — в пределах гейта
+    creator_tools._publish_now({"kind": "флагман"})
+    assert pub.calls[0]["cover"] == img
