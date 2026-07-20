@@ -117,6 +117,31 @@ async def _find_channel(client: TelegramClient):
                      f"Проверь TELEGRAM_CHANNEL в .env.")
 
 
+def _safe_write(posts: list[dict]) -> None:
+    """Защищённая запись выгрузки канала (аудит 20.07). Сборщик тянет ВСЮ историю, значит count растёт
+    или держится — резкое падение/пусто = транзиентный сбой Telegram на «успешном» (exit 0) прогоне.
+    Безусловная перезапись молча теряла бы корпус, а mtime-гейт свежести (dedup.data_age_hours)
+    сертифицировал пустоту как «свежо» → дедуп видит пустую историю → дубли проходят, скоринг отравлен.
+    Порог: пусто ИЛИ <50% существующего → НЕ пишем (старый файл и его ЧЕСТНЫЙ mtime целы), громкое
+    предупреждение. Годная выгрузка пишется АТОМАРНО (temp + os.replace) — без полу-файла при сбое процесса.
+    (Зеркалит защиту Threads-сборщика _merge_keep, которой у TG-стороны не было.)"""
+    existing = 0
+    if OUT.exists():
+        try:
+            existing = len(json.loads(OUT.read_text(encoding="utf-8")) or [])
+        except Exception:
+            existing = 0
+    if not posts or (existing and len(posts) < existing * 0.5):
+        print(f"⛔ Сбор дал {len(posts)} постов против {existing} в файле — резкое падение/пусто "
+              f"(вероятно, транзиентный сбой Telegram). НЕ затираю хорошую выгрузку: старые данные и "
+              f"честный mtime целы. Перезапусти сбор.")
+        return
+    tmp = OUT.with_suffix(OUT.suffix + ".tmp")
+    tmp.write_text(json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, OUT)
+    print(f"Собрано постов: {len(posts)} → {OUT}")
+
+
 async def collect() -> None:
     client = _client()
     await client.connect()
@@ -144,8 +169,7 @@ async def collect() -> None:
             "comments": m.replies.replies if m.replies else None,
             "has_media": m.media is not None,
         })
-    OUT.write_text(json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Собрано постов: {len(posts)} → {OUT}")
+    _safe_write(posts)  # аудит 20.07: не затирать хорошую историю урезанной/пустой выгрузкой
     await client.disconnect()
 
 
