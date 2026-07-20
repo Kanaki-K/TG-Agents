@@ -39,7 +39,7 @@ from pathlib import Path
 
 from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
                   logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools,
-                  self_learn, topic_category, verify)
+                  self_learn, topic_category, usefulness, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
@@ -395,6 +395,22 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 return "\n".join(report)
         except Exception:
             logging.exception("Пост-сверка scope упала — пропускаю её (осн. сверка до генерации уже прошла)")
+        # ГЕЙТ ПОЛЬЗА-ЭДЖ (жёсткий СТОП, ТОЛЬКО scope). Урок 20.07: пост может пройти анти-повтор + 2FA
+        # (факты чистые) и всё равно быть пересказом без вывода — владелец такой бракует. Польза — свойство
+        # темы/угла, авто-правкой не лечится, поэтому СТОП, а не правка. Приоритет над свежестью: «нет
+        # пользы — дата не спасёт». Фейл-ОТКРЫТО: сбой самого гейта (вторичная сеть) не глушит публикацию.
+        try:
+            gv = usefulness.judge(post.split("[[SPLIT]]")[0], verify.latest_brief(),
+                                  api_key=config.agent_api_key(config.load_agent("creator")))
+            if usefulness.blocks(gv):
+                panel["публикация"] = "⛔ СТОП — пересказ без пользы/эджа (гейт польза-эдж)"
+                out("⛔ Гейт польза-эдж: пост описывает событие, но не даёт читателю вывода через "
+                    "неочевидный угол — НЕ публикую (свежесть повода это не спасает):\n" + str(gv))
+                out(_panel_block())
+                out("\n" + cost.summary())
+                return "\n".join(report)
+        except Exception:
+            logging.exception("Гейт польза-эдж упал — пропускаю (сбой гейта не блокирует публикацию)")
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
     # 2FA уже прошёл внутри его ветки — здесь его НЕ дублируем.
     if post and not scope:
