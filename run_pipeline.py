@@ -76,6 +76,30 @@ def _latest_draft_mtime() -> float:
     return files[0].stat().st_mtime if files else 0.0
 
 
+def _recent_scope_titles(hours: float = 48.0) -> list[str]:
+    """Заголовки постов, СГЕНЕРированных за последние `hours` (черновики на диске) — чтобы гейт темы НЕ
+    выбрал ту же тему повторно. Баг 22.07: дедуп сверяет с ОПУБЛИКОВАННЫМ каналом (channel_posts.json), а
+    свежие драфты/отложка прошлых прогонов ему НЕВИДИМЫ → 3 прогона на одном брифе дали Gram-кошелёк 3× в
+    отложку. Читаем первую значимую строку (заголовок) свежих драфтов — гейт исключает эти темы."""
+    d = creator_tools.DRAFTS_DIR
+    if not d.exists():
+        return []
+    cutoff = time.time() - hours * 3600
+    out: list[str] = []
+    for p in sorted(d.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.stat().st_mtime < cutoff:
+            break
+        try:
+            for ln in p.read_text(encoding="utf-8").splitlines():
+                s = ln.strip().lstrip("*# ").rstrip("*").strip()
+                if s and "[[" not in s:          # первая значимая строка = заголовок (не мета [[...]])
+                    out.append(s[:120])
+                    break
+        except Exception:
+            continue
+    return out[:8]
+
+
 def _threaded(fn, *args):
     """Выполнить в отдельном потоке (как asyncio.to_thread в боте) — нужно для playwright на Windows."""
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -385,7 +409,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # Sonnet по готовому разбору). Урок 22.07: суд пользы ПОСЛЕ генерации жёг $1.5, а writer брал
         # слабейший протухший повод (Сейлор-13.07). Теперь свежесть+польза решают ВЫБОР темы, а не рубят.
         try:
-            scope_rec, scope_weak, tg_verdict = topic_gate.select(verdict, api_key=gkey)
+            _recent = _recent_scope_titles()  # темы прошлых прогонов (отложка/черновики) — не повторять
+            if _recent:
+                out(f"🧠 Гейту темы: не повторять недавно сделанное — {'; '.join(t[:40] for t in _recent[:4])}")
+            scope_rec, scope_weak, tg_verdict = topic_gate.select(verdict, api_key=gkey, recent=_recent)
             if (tg_verdict or "").strip():
                 out("🎯 [Гейт темы] лучший повод по свежести (≤3д идеал) + пользе, ДО генерации:")
                 out(str(tg_verdict) + "\n")
