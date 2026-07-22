@@ -335,6 +335,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             logging.exception("[health] уведомление владельцу не отправилось")
     age = _latest_brief_age_hours()
     scout_day = datetime.date.today().weekday() in SCOUT_DAYS
+    scout_ran = False  # бегал ли Скаут в этом прогоне — чтобы при исчерпании брифа не гонять его дважды
     if skip_scout or evergreen:
         panel["Скаут"] = "пропущен — вечная тема из банка" if evergreen else "пропущен (--skip-scout)"
         out("⏭ Скаута пропускаю — вечная тема из банка, разведка не нужна.\n"
@@ -371,6 +372,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 f"запускаю свежую.\n")
         try:
             _run_scout()
+            scout_ran = True
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
     # АНТИ-ПОВТОР + ГЕЙТ ТЕМЫ — ВЕТКИ РАЗДЕЛЕНЫ (scope и флагман не мешают друг другу):
@@ -408,6 +410,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # ГЕЙТ ТЕМЫ (свежесть+польза как РАНГ) — ВСЕГДА выбирает ЛУЧШИЙ повод ДО генерации (дёшево, один
         # Sonnet по готовому разбору). Урок 22.07: суд пользы ПОСЛЕ генерации жёг $1.5, а writer брал
         # слабейший протухший повод (Сейлор-13.07). Теперь свежесть+польза решают ВЫБОР темы, а не рубят.
+        tg_verdict = ""
         try:
             _recent = _recent_scope_titles()  # темы прошлых прогонов (отложка/черновики) — не повторять
             if _recent:
@@ -418,6 +421,24 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 out(str(tg_verdict) + "\n")
         except Exception:
             logging.exception("Гейт темы упал — фолбэк на recommend дедупа")
+        # БРИФ ИСЧЕРПАН (гейт нашёл только 🚫-поток/повтор/уже-сделанное) → НЕ скребём дно и не публикуем
+        # слабьё: гоним Скаута за СВЕЖИМИ темами (если ещё не бегал), пере-сверяем, пере-выбираем ОДИН раз.
+        # Резолвит противоречие «пост обязан быть» × «не публикуй слабое»: пост будет — но на СВЕЖЕЙ теме,
+        # а не на выжатом брифе (баг 22.07: 6 прогонов одного брифа → после Gram скребли Raoul-Pal-повтор).
+        try:
+            if topic_gate.is_exhausted(tg_verdict) and not scout_ran and not skip_scout:
+                out("♻️ Бриф исчерпан (сильные темы уже в отложке/повторы) — гоню Скаута за свежими, не скребу дно...")
+                _run_scout()
+                scout_ran = True
+                verdict = dedup.check(verify.latest_brief(), api_key=gkey)
+                out("🔁 [Анти-повтор] Пере-сверка после свежей разведки:\n" + str(verdict) + "\n")
+                avoid = "" if dedup.all_repeats(verdict) else dedup.repeat_themes(verdict)
+                scope_rec, scope_weak, tg_verdict = topic_gate.select(
+                    verdict, api_key=gkey, recent=_recent_scope_titles())
+                out("🎯 [Гейт темы] после свежей разведки:\n" + str(tg_verdict) + "\n")
+                panel["♻️ исчерпан"] = "бриф был выжат → свежая разведка → новый повод"
+        except Exception:
+            logging.exception("Пере-разведка при исчерпании брифа упала — пишу лучшее из имеющегося")
         if not scope_rec:  # гейт молчит/сбой → фолбэк на сырой recommend (writer всё равно пишет)
             scope_rec = dedup.recommended_theme(verdict)
         if scope_rec:
@@ -607,8 +628,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         except Exception:
             logging.exception("обложка: не смог получить/сгенерить — флагман уйдёт текстом")
     elif scope and (post or "").strip():
-        # Картинка для 🔭 ОБЯЗАТЕЛЬНА (правило владельца: без картинки пост не нужен). scope достал og:image
-        # со статей-кандидатов, vision выбрал подходящую по смыслу → путь в SCOPE_COVER. Пусто → НЕ публикуем.
+        # Картинка 🔭: 1) og:image первоисточника (vision выбрал) → SCOPE_COVER; 2) НЕТ og:image → ГЕНЕРИМ
+        # GPT-обложку из поста (как флагман) — на любой пост картинку можно СДЕЛАТЬ (владелец 22.07: «текстом»
+        # это отмазка); 3) и GPT упал → текст (редко). Раньше: нет og:image → СТОП/текст = дыра (ETF-повод без
+        # og:image давал ноль). Картинка почти всегда есть.
         try:
             sc = creator_tools.SCOPE_COVER
             cp = sc.read_text(encoding="utf-8").strip() if sc.exists() else ""
@@ -616,16 +639,30 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         except Exception:
             logging.exception("scope-обложка: не смог подхватить SCOPE_COVER")
             cover_path = ""
-        if not cover_path:
-            panel["🖼 обложка"] = "нет подходящей картинки"
-            panel["публикация"] = "⛔ СТОП — без картинки не публикуем"
-            out("\n⛔ У 🔭-поста НЕТ подходящей картинки — по правилу «без картинки не публикуем» в отложку "
-                "НЕ ставлю. Драфт сохранён в архиве (добавь картинку вручную или пропусти повод).")
-            out(_panel_block())
-            out("\n" + cost.summary())
-            return "\n".join(report)
-        panel["🖼 обложка"] = "первоисточник (og:image)"
-        out(f"🖼 Обложка выбрана (по смыслу подходит посту): {cover_path}")
+        if cover_path:
+            panel["🖼 обложка"] = "первоисточник (og:image)"
+            out(f"🖼 Обложка выбрана (по смыслу подходит посту): {cover_path}")
+        else:
+            out("🖼 og:image первоисточника не нашёлся — генерирую GPT-обложку из поста (картинка обязательна)...")
+            try:
+                ob = creator_tools.MEDIA_OUTBOX
+                if ob.exists():
+                    ob.unlink()
+                body = post.split("[[SPLIT]]")[0]
+                title = next((l.strip() for l in body.splitlines() if l.strip()), "").replace("**", "")
+                out(str(_threaded(creator_tools.dispatch, "make_image", {"title": title, "post_text": body})))
+                have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
+                    if ob.exists() else []
+                cover_path = have[-1] if have else ""
+            except Exception:
+                logging.exception("scope GPT-обложка не удалась — уйдём текстом")
+                cover_path = ""
+            if cover_path:
+                panel["🖼 обложка"] = "GPT-обложка (og:image не нашёлся)"
+                out(f"🖼 GPT-обложка сгенерирована: {cover_path}")
+            else:
+                panel["🖼 обложка"] = "нет — текстом (og:image и GPT не дали, редко)"
+                out("⚠️ Ни og:image, ни GPT-обложка не вышли — ставлю текстом (редкий случай).")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
     out(str(_threaded(creator_tools.dispatch, "publish_now",
                       {"kind": "short" if scope else "", "cover": cover_path})))
