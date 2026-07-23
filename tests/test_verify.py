@@ -30,3 +30,25 @@ def test_has_issues_failopen_on_error_or_empty():
 
 def test_has_issues_on_indented_warning():
     assert verify.has_issues("  ⚠️ АТРИБУЦИЯ выдумана\nСТАТУС: ЧИСТО") is True   # strip() терпит отступ
+
+
+def test_web_context_flagship_uses_reality_not_brief():
+    # Флагман (web=True, scope=False): у вечной темы брифа НЕТ → сверяем с вебом, кап выше дефолтного (1).
+    check, tool = verify._web_context(scope=False, web=True)
+    assert check is verify.FLAGSHIP_SOURCE_CHECK
+    assert tool is verify.FLAGSHIP_VERIFY_WEB
+    assert tool["max_uses"] > verify.VERIFY_WEB["max_uses"]
+    assert "БРИФА ПОД НЕЁ НЕТ" in check  # «нет в брифе» тут НЕ находка — источник истины веб
+
+
+def test_web_context_scope_web_uses_scope_check():
+    check, tool = verify._web_context(scope=True, web=True)
+    assert check is verify.SCOPE_SOURCE_CHECK
+    assert tool is verify.SCOPE_VERIFY_WEB
+
+
+def test_web_context_default_no_source_check():
+    # Дефолтный проход (web=False) — без спец-инструкции, дешёвый кап 1 (первый брифовый фильтр).
+    check, tool = verify._web_context(scope=False, web=False)
+    assert check == ""
+    assert tool is verify.VERIFY_WEB
