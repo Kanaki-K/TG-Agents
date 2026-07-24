@@ -557,6 +557,19 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             out((post or "").split("[[SPLIT]]")[0].strip()[:600] + "\n")
         except Exception:
             logging.exception("Редактурный проход scope упал — публикую как есть")
+        # 🎯 СУДЬЯ ФИНАЛА — enforcement концовки (самая частая ручная правка владельца, scope_manual §4.5).
+        # Advisory-слой финал не держал (писатель оставлял слабую концовку); этот пасс МЕРИТ последнюю строку
+        # и слабую (сомнение/вопрос/хедж/пересказ) переписывает кикером. Прицельно, одна переделка, ≤1000.
+        try:
+            out("🎯 [Финал] Сужу концовку — самостоятельный кикер или слабая (сомнение/вопрос/хедж)...")
+            _fin_before = (post or "").split("[[SPLIT]]")[0].rstrip()
+            post = _threaded(scope_writer.fix_finale, fkey) or post
+            _changed = (post or "").split("[[SPLIT]]")[0].rstrip() != _fin_before
+            panel["🎯 финал"] = "слабый → переписан кикером (§4.5)" if _changed else "✓ самостоятельный кикер"
+            out(("✍️ финал переписан кикером:\n" if _changed else "✅ финал самостоятелен, не трогал:\n")
+                + (post or "").split("[[SPLIT]]")[0].rstrip()[-320:] + "\n")
+        except Exception:
+            logging.exception("Судья финала scope упал — публикую как есть")
     # 2FA флагмана (Sonnet): нашёл замечания → Криейтор САМ исправляет → перепроверка. У scope свой
     # 2FA уже прошёл внутри его ветки — здесь его НЕ дублируем.
     # web=True (задача 23.07, симметрия со scope): у вечной темы БРИФА ПОД НЕЁ НЕТ (бриф на диске — от

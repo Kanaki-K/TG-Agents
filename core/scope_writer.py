@@ -544,6 +544,67 @@ def polish(api_key: str | None = None) -> str:
     return polished or post
 
 
+FINALE = (
+    "Ты — редактор канала 🔭. Смотри ТОЛЬКО на ФИНАЛ поста — последнюю строку-мысль ПЕРЕД футером "
+    "(строка со ссылками 🖥). Всё остальное НЕ трогай и НЕ оценивай.\n"
+    "ФИНАЛ канала = САМОСТОЯТЕЛЬНЫЙ КИКЕР (см. scope_manual §4.5, банк финалов в контексте выше): читается "
+    "ОТДЕЛЬНО, доставляет ВЫВОД, привязан к тезису холдера/образу. Приёмы: ирония-реверс, твист (строили "
+    "для X→взял Y), до→после, афоризм, рефрейм образа, ставка холдеру, payoff на сетапе, уступка→возвышение.\n"
+    "СЛАБЫЙ финал (переписать): кончается на СОМНЕНИИ/напряжении без посадки; хедж «посмотрим/если дойдёт»; "
+    "вопрос; пересказ лида; строка НЕ стоит сама (нужен контекст, чтобы понять).\n"
+    "ТЕСТ: вырежи последнюю строку, прочти отдельно — стоит и бьёт → ОК.\n\n"
+    "Финал СИЛЬНЫЙ → ответь РОВНО: ФИНАЛ ОК\n"
+    "Финал СЛАБЫЙ → верни РОВНО одну строку: ФИНАЛ: <новый финал, 1-2 предложения, по ФАКТАМ этого поста, "
+    "своим голосом, без точки в конце, без кавычек>. Больше НИЧЕГО не пиши.\n\nПОСТ:\n{post}"
+)
+
+_FOOTER_MARK = ("🖥", "t.me/", "[Канал]", "linktr")
+
+
+def fix_finale(api_key: str | None = None) -> str:
+    """СУДЬЯ ФИНАЛА — enforcement концовки (самая частая ручная правка владельца 10+ сессий, scope_manual
+    §4.5). Advisory-слой (мануал/уроки) финал НЕ держал — писатель оставлял слабую концовку раз за разом,
+    как игнорил длину/заголовок до код-гейтов. Этот пасс МЕРИТ последнюю строку и, если слабая (сомнение/
+    вопрос/хедж/пересказ/несамостоятельна), ПЕРЕПИСЫВАЕТ её кикером в стиле банка §4.5 — прицельно, ТОЛЬКО
+    финал (сплайс в КОДЕ, весь пост модели не доверяем). ОДНА переделка, не цикл. Пост НЕ блокирует («пост
+    обязан быть»): не смог/структуру не угадал → как есть. Держит ≤1000 (режет абзацы МЕЖДУ заголовком и
+    финалом, сам финал/футер бережёт)."""
+    cfg = config.load_agent(AGENT_NAME)
+    key = api_key or config.agent_api_key(cfg)
+    model = runmode.resolve(SCOPE_MODEL, ceiling=SCOPE_MODEL)
+    post = verify.latest_draft() or ""
+    body, sep, tail = post.partition("[[SPLIT]]")
+    paras = body.split("\n\n")
+    foot_i = next((i for i, p in enumerate(paras) if any(mk in p for mk in _FOOTER_MARK)), None)
+    if foot_i is None or foot_i < 2:
+        return post                       # нет футера/слишком короткий — структуру не угадать, не трогаем
+    fin_i = foot_i - 1
+    while fin_i > 0 and not paras[fin_i].strip():
+        fin_i -= 1
+    if fin_i < 1:
+        return post
+    verdict = (_turn(FINALE.format(post=body.strip()), model, key, SCOPE_THINKING, tools=[]) or "").strip()
+    m = re.search(r"ФИНАЛ\s*:\s*(.+)", verdict, re.S)
+    if not m:                             # «ФИНАЛ ОК» либо непарсибельно → финал сильный, оставляем
+        return post
+    new_fin = m.group(1).split("\n\n")[0].strip().strip('«»"').rstrip(" .").strip()  # 1-й абзац: без «болтовни»
+    if not new_fin or new_fin == paras[fin_i].strip():
+        return post
+    paras[fin_i] = new_fin
+
+    def _n(s: str) -> int:
+        return len(s.encode("utf-16-le")) // 2
+
+    cut = fin_i - 1                        # новый финал мог подрасти — режем абзацы ПЕРЕД финалом до ≤1000
+    while _n("\n\n".join(paras)) > 1000 and cut >= 1 and sum(1 for p in paras if p.strip()) > 3:
+        del paras[cut]
+        cut -= 1
+    new_post = "\n\n".join(paras) + sep + tail
+    creator_tools.dispatch("save_draft", {"content": new_post, "kind": "scope"})
+    logging.info("scope судья финала: слабый финал переписан кикером (§4.5)")
+    return new_post
+
+
 FEEDBACK = (
     "ОБУЧЕНИЕ НА ПРАВКЕ (scope 🔭). Владелец прислал свой ФИНАЛЬНЫЙ отредактированный вариант короткого "
     "поста «Под прицелом». 1) read_draft('latest') — подними СВОЙ исходный scope-драфт, чтобы сравнить. "
