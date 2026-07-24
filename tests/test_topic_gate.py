@@ -71,3 +71,44 @@ def test_select_passes_today_into_prompt(monkeypatch):
     monkeypatch.setattr(topic_gate.llm, "reply", cap)
     topic_gate.select("🆕 повод — событие 13.07", today="2026-07-22")
     assert "2026-07-22" in seen["user"]
+
+
+# --- бренд-вето офф-темы (баг 24.07: гейт был слеп к бренду → опубликовал DOGE+SHIB) --------------
+
+def test_is_offbrand_yes_no_absent_markdown():
+    assert topic_gate.is_offbrand("СЛАБО: жидко\nОФФ-БРЕНД: да\nПОВОД: «мемки»") is True
+    assert topic_gate.is_offbrand("ОФФ-БРЕНД: нет\nПОВОД: «BTC»") is False
+    assert topic_gate.is_offbrand("**ОФФ-БРЕНД: да**") is True   # markdown-обёртку терпим (как is_exhausted)
+    assert topic_gate.is_offbrand("ПОВОД: «BTC»") is False       # строки нет → не офф-бренд
+    assert topic_gate.is_offbrand("") is False
+
+
+def test_off_brand_block_parses_only_that_section(monkeypatch, tmp_path):
+    # извлекаем РОВНО секцию «Что НЕ наше», не соседние (герметично: memory/ gitignored, реального нет в CI)
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "brand.md").write_text(
+        "# Бренд\n\n## Голос\nживой голос\n\n## Что НЕ наше (Скаут понижает)\n"
+        "- Шиткоин-памп, мемкоины ради иксов; сигналы/скальпинг.\n- Дневной шум без структуры.\n\n"
+        "## Аудитория\nDCA-долгосрочник\n", encoding="utf-8")
+    monkeypatch.setattr(topic_gate.config, "ROOT", tmp_path)
+    block = topic_gate._off_brand_block()
+    assert "мемкоин" in block.lower() and "шум" in block.lower()
+    assert "живой голос" not in block and "DCA" not in block   # только своя секция, не соседи
+
+
+def test_off_brand_block_missing_file_failopen(monkeypatch, tmp_path):
+    # нет brand.md → '' (fail-open: гейт работает как раньше, конвейер не падает)
+    monkeypatch.setattr(topic_gate.config, "ROOT", tmp_path)
+    assert topic_gate._off_brand_block() == ""
+
+
+def test_select_injects_brand_block_into_prompt(monkeypatch):
+    # список «что НЕ наше» ДОЛЖЕН уходить в промпт гейта — иначе он слеп к бренду (корень бага 24.07)
+    seen = {}
+    monkeypatch.setattr(topic_gate, "_off_brand_block", lambda: "- Шиткоин-памп, мемкоины ради иксов")
+    def cap(model, system, hist, user, tools, disp, key, thinking, **k):
+        seen["user"] = user
+        return ("ОФФ-БРЕНД: нет\nПОВОД: «x»", None)
+    monkeypatch.setattr(topic_gate.llm, "reply", cap)
+    topic_gate.select("🆕 повод — событие 13.07", today="2026-07-22")
+    assert "ЧТО НЕ НАШЕ" in seen["user"] and "мемкоин" in seen["user"]
