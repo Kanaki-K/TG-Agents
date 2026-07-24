@@ -4,8 +4,13 @@ This is the shared, human-inspectable memory layer of the agent fleet (see [`doc
 
 > **The actual content of this folder is intentionally kept out of the public repository.**
 > It holds the brand playbook, voice standard, content lessons, and the owner's personal
-> profile and to-do — private material, not code. Only this README and the folder structure
-> are versioned; everything else is git-ignored (`.gitignore`).
+> profile and to-do — private material, not code. In this public repo only this README and the
+> folder structure are versioned; everything else is git-ignored (`.gitignore`).
+>
+> The content **is** versioned — in a **separate private repo** (`tg-agents-memory`, a nested
+> `.git` inside this folder) for backup + history, decoupled from the public code repo. The
+> runtime never reads from GitHub — it reads these files from disk; git is backup only.
+> Operational manual for that private repo: `MEMORY_REPO.md` (itself private).
 
 ## What lives here (created/maintained at runtime, not in git)
 
