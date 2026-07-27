@@ -112,3 +112,44 @@ def test_select_injects_brand_block_into_prompt(monkeypatch):
     monkeypatch.setattr(topic_gate.llm, "reply", cap)
     topic_gate.select("🆕 повод — событие 13.07", today="2026-07-22")
     assert "ЧТО НЕ НАШЕ" in seen["user"] and "мемкоин" in seen["user"]
+
+
+# --- ЯКОРЬ к анти-повтору: гейт не публикует СЛАБЫЙ выбор при чистой 🆕 (фикс 27.07) ----------------
+# Корень бага: гейт-ре-ранкер принял «BTC устоял» (дневной шум) за структурное, выбрал слабейший из 5
+# поводов, переиграв Скаута И анти-повтор (оба звали #3-кэрри); гейт пользы ниже пометил ПЕРЕСКАЗ — но $2
+# сожжены. Страж ловит В КОДЕ: слабый выбор гейта + чистая 🆕 от анти-повтора → берём рекомендацию.
+
+def test_anchor_swaps_weak_pick_for_recommend():
+    # тот самый кейс 27.07: гейт пометил выбор СЛАБО, анти-повтор рекомендовал чистую 🆕 → подмена
+    theme, weak, swapped = topic_gate.anchor_weak_to_recommend(
+        "BTC устоял — дневной шум", "скатывается в дневной шум",
+        "BTC-кэрри <2% — механизм ухода спекулянтов", "ИСЧЕРПАНО: нет\nОФФ-БРЕНД: нет")
+    assert theme == "BTC-кэрри <2% — механизм ухода спекулянтов"
+    assert weak == ""
+    assert swapped is True
+
+
+def test_anchor_keeps_strong_pick():
+    # weak пусто (гейт уверен в выборе) → НЕ трогаем, даже если рекомендация другая
+    out = topic_gate.anchor_weak_to_recommend(
+        "сильный структурный повод", "", "другая тема", "ИСЧЕРПАНО: нет")
+    assert out == ("сильный структурный повод", "", False)
+
+
+def test_anchor_noop_when_no_recommend():
+    # анти-повтор без чистой 🆕 (все повторы) → подменять не на что, слабый выбор остаётся как есть
+    out = topic_gate.anchor_weak_to_recommend("слабый повод", "жидкая польза", "", "ИСЧЕРПАНО: нет")
+    assert out == ("слабый повод", "жидкая польза", False)
+
+
+def test_anchor_noop_when_exhausted_or_offbrand():
+    # исчерпан/офф-бренд — свои ветки (ре-разведка/пропуск прогона); якорь НЕ вмешивается
+    assert topic_gate.anchor_weak_to_recommend("x", "слаб", "рек", "ИСЧЕРПАНО: да")[2] is False
+    assert topic_gate.anchor_weak_to_recommend("x", "слаб", "рек", "ОФФ-БРЕНД: да")[2] is False
+
+
+def test_anchor_noop_when_gate_already_picked_recommend():
+    # гейт выбрал ровно рекомендованное (пусть и пометил слабым) → менять не на что, подмены нет
+    theme, weak, swapped = topic_gate.anchor_weak_to_recommend(
+        "BTC-кэрри", "слабовато", "BTC-кэрри", "ИСЧЕРПАНО: нет")
+    assert swapped is False and theme == "BTC-кэрри"

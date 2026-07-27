@@ -455,6 +455,15 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             return "\n".join(report)
         if not scope_rec:  # гейт молчит/сбой → фолбэк на сырой recommend (writer всё равно пишет)
             scope_rec = dedup.recommended_theme(verdict)
+        # ЯКОРЬ К АНТИ-ПОВТОРУ (фикс 27.07): гейт НЕ печатает тему, которую сам пометил СЛАБО, если
+        # анти-повтор рекомендовал чистую 🆕 — берём рекомендацию (корень: гейт-ре-ранкер выбрал
+        # слабейший из 5 поводов, переиграв и Скаута, и анти-повтор). Ловим кодом, не правилом в промпт.
+        scope_rec, scope_weak, _anchored = topic_gate.anchor_weak_to_recommend(
+            scope_rec, scope_weak, dedup.recommended_theme(verdict), tg_verdict)
+        if _anchored:
+            out(f"⚓ Гейт выбрал слабую тему при чистой 🆕 от анти-повтора — беру рекомендацию, "
+                f"слабьё в канал не пущу: «{scope_rec[:60]}»")
+            panel["⚓ якорь темы"] = "слабый выбор гейта → рекомендация анти-повтора"
         if scope_rec:
             panel["🎯 гейт темы"] = f"повод: {scope_rec[:52]}" + (f"  ⚠{scope_weak[:34]}" if scope_weak else "")
             panel["🧭 рекоменд."] = scope_rec
