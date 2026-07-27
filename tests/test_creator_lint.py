@@ -126,7 +126,7 @@ def test_scope_headline_two_sentences_statement_tail_warns():
     # прогоны 24.07 показали, что на warn модель отвечала «авторское решение, не режу».
     clean, warns = creator_tools._lint(
         "📈 Robinhood запустил блокчейн для акций. Пришли мемы\n\nтело поста", "scope")
-    assert any("ДВУХ предложени" in w for w in warns)
+    assert any("ДВОЙНЫМ" in w for w in warns)
     # заголовок к моменту среза уже авто-обёрнут в **…** (§5), срез сохраняет жирность
     assert clean.split("\n")[0] == "**📈 Robinhood запустил блокчейн для акций**"
 
@@ -135,7 +135,7 @@ def test_scope_headline_statement_plus_question_trimmed_to_statement():
     # «утверждение. вопрос?» → оставляем ПЕРВОЕ (утверждение), вопрос-хвост срезаем (владелец 20.07)
     clean, warns = creator_tools._lint(
         "💸 700 млрд$ домой каждый год. Банк или крипта?\n\nтело поста", "scope")
-    assert any("ДВУХ предложени" in w for w in warns)
+    assert any("ДВОЙНЫМ" in w for w in warns)
     assert clean.split("\n")[0] == "**💸 700 млрд$ домой каждый год**"
 
 
@@ -159,7 +159,7 @@ def test_scope_headline_single_sentence_ok():
                  "❓ Кто пришёл на блокчейн первым?\n\nтело",
                  "🌐 LINK | Chainlink в банках Европы и Кореи\n\nтело"):
         _, warns = creator_tools._lint(good, "scope")
-        assert not any("ДВУХ предложени" in w for w in warns), good
+        assert not any("ДВОЙНЫМ" in w for w in warns), good
 
 
 def test_scope_headline_initials_not_two_sentences():
@@ -167,7 +167,7 @@ def test_scope_headline_initials_not_two_sentences():
     for good in ("📊 T. Rowe Price открыл крипту для пенсионных денег\n\nтело",
                  "📊 U.S. Bank запустил кастоди для крипты\n\nтело"):
         _, warns = creator_tools._lint(good, "scope")
-        assert not any("ДВУХ предложени" in w for w in warns), good
+        assert not any("ДВОЙНЫМ" in w for w in warns), good
 
 
 # --- утечка англоязычного источника в русский текст (сессия 15.07, CLARITY) ---
