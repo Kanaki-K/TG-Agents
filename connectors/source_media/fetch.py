@@ -50,12 +50,16 @@ def og_image_url(page_url: str) -> str | None:
 
 
 _MAX_SIDE = 1600  # ресайз до этой макс.стороны: Telegram отклоняет большие фото (PhotoInvalidDimensionsError)
+_MIN_SIDE = 800   # МЕНЬШЕ по длинной стороне — мелкий thumbnail/битый кроп, не обложка (баг 24.07: 8.5КБ og:image
+                  # ушла в канал «обрезанной и корявой» — vision судит смысл, не пиксели; ловим детерминированно)
 
 
-def _normalize(path: Path) -> Path:
+def _normalize(path: Path) -> Path | None:
     """Привести к Telegram-safe ФОТО: RGB, макс сторона 1600px, JPEG q85. Так Telegram не отклоняет 'photo'
     по размерам (частая ошибка на больших PNG) + меньше вес (дешевле vision). Pillow нет → отдаём как есть
-    (publish подстрахует документом). Заодно уменьшенная картинка удешевляет vision-вызов."""
+    (publish подстрахует документом). Заодно уменьшенная картинка удешевляет vision-вызов.
+    None — картинка МЕЛКАЯ (длинная сторона < _MIN_SIDE): отклоняем кандидата, пусть сработает фолбаг
+    «уйдём текстом» (обложка-мусор хуже отсутствия обложки — баг 24.07)."""
     try:
         from PIL import Image
     except Exception:
@@ -65,12 +69,22 @@ def _normalize(path: Path) -> Path:
         with Image.open(path) as im:
             im = im.convert("RGB")
             w, h = im.size
-            longest = max(w, h)
-            if longest > _MAX_SIDE:
-                s = _MAX_SIDE / longest
-                im = im.resize((max(1, round(w * s)), max(1, round(h * s))))
-            out = path.with_suffix(".jpg")
-            im.save(out, "JPEG", quality=85, optimize=True)
+            small = max(w, h) < _MIN_SIDE   # порог качества по РАЗРЕШЕНИЮ (байты обманывают: JPEG q85 сильно жмёт)
+            if not small:
+                longest = max(w, h)
+                if longest > _MAX_SIDE:
+                    s = _MAX_SIDE / longest
+                    im = im.resize((max(1, round(w * s)), max(1, round(h * s))))
+                out = path.with_suffix(".jpg")
+                im.save(out, "JPEG", quality=85, optimize=True)
+        if small:
+            logging.info("source_media: обложка %dx%d < %dpx по длинной стороне — отклоняю (мелкая/битая, "
+                         "уйдём текстом)", w, h, _MIN_SIDE)
+            try:
+                path.unlink()
+            except Exception:
+                pass
+            return None
         if out != path:
             try:
                 path.unlink()

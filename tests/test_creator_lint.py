@@ -122,17 +122,35 @@ def test_flagship_headline_colon_tag_ok():
 # --- scope: заголовок = ОДИН крючок (манифест §1) ---
 
 def test_scope_headline_two_sentences_statement_tail_warns():
-    # утверждение + приколка = ДВА предложения → ругаем
-    _, warns = creator_tools._lint(
+    # утверждение + приколка = ДВА предложения → ДЕТЕРМИНИРОВАННО режем до первого (не просто warn):
+    # прогоны 24.07 показали, что на warn модель отвечала «авторское решение, не режу».
+    clean, warns = creator_tools._lint(
         "📈 Robinhood запустил блокчейн для акций. Пришли мемы\n\nтело поста", "scope")
-    assert any("ДВУХ предложени" in w for w in warns)
+    assert any("ДВОЙНЫМ" in w for w in warns)
+    # заголовок к моменту среза уже авто-обёрнут в **…** (§5), срез сохраняет жирность
+    assert clean.split("\n")[0] == "**📈 Robinhood запустил блокчейн для акций**"
 
 
-def test_scope_headline_statement_plus_question_warns():
-    # «утверждение. вопрос?» ТОЖЕ два предложения → ругаем (владелец 13.07: ровно ОДНО предложение)
-    _, warns = creator_tools._lint(
+def test_scope_headline_statement_plus_question_trimmed_to_statement():
+    # «утверждение. вопрос?» → оставляем ПЕРВОЕ (утверждение), вопрос-хвост срезаем (владелец 20.07)
+    clean, warns = creator_tools._lint(
         "💸 700 млрд$ домой каждый год. Банк или крипта?\n\nтело поста", "scope")
-    assert any("ДВУХ предложени" in w for w in warns)
+    assert any("ДВОЙНЫМ" in w for w in warns)
+    assert clean.split("\n")[0] == "**💸 700 млрд$ домой каждый год**"
+
+
+def test_scope_headline_bold_two_sentences_trimmed_keeps_bold():
+    # реальный кейс 24.07 (квантовый пост): жирную обёртку сохраняем, точку в конце убираем
+    clean, _ = creator_tools._lint(
+        "**⚠️ 15 млн$ на квантовую защиту BTC. Страховка или пиар?**\n\nтело поста", "scope")
+    assert clean.split("\n")[0] == "**⚠️ 15 млн$ на квантовую защиту BTC**"
+
+
+def test_scope_headline_tag_prefix_two_sentences_trimmed():
+    # тег-рубрику «LINK | …» сохраняем целиком, режем только заголовок после разделителя
+    clean, _ = creator_tools._lint(
+        "🌐 LINK | Факт один. Вопрос два?\n\nтело поста", "scope")
+    assert clean.split("\n")[0] == "**🌐 LINK | Факт один**"
 
 
 def test_scope_headline_single_sentence_ok():
@@ -141,7 +159,7 @@ def test_scope_headline_single_sentence_ok():
                  "❓ Кто пришёл на блокчейн первым?\n\nтело",
                  "🌐 LINK | Chainlink в банках Европы и Кореи\n\nтело"):
         _, warns = creator_tools._lint(good, "scope")
-        assert not any("ДВУХ предложени" in w for w in warns), good
+        assert not any("ДВОЙНЫМ" in w for w in warns), good
 
 
 def test_scope_headline_initials_not_two_sentences():
@@ -149,7 +167,7 @@ def test_scope_headline_initials_not_two_sentences():
     for good in ("📊 T. Rowe Price открыл крипту для пенсионных денег\n\nтело",
                  "📊 U.S. Bank запустил кастоди для крипты\n\nтело"):
         _, warns = creator_tools._lint(good, "scope")
-        assert not any("ДВУХ предложени" in w for w in warns), good
+        assert not any("ДВОЙНЫМ" in w for w in warns), good
 
 
 # --- утечка англоязычного источника в русский текст (сессия 15.07, CLARITY) ---

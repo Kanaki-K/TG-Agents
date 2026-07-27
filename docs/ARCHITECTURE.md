@@ -248,7 +248,31 @@ Threads-дистилляции, которых в проде пока нет (`d
 
 `★` = шина конвейера. Источник правды для задач/форматов — JSON; `.md` генерируется.
 
-**memory/ (в git, кроме pending/briefs/drafts):**
+### 6.0 ДВА РЕПОЗИТОРИЯ — куда коммитить, откуда рантайм, как проверять (важно для правок)
+
+`/workspace` — это **9p-маунт диска владельца** (`C:\Users\lodk9\PycharmProjects\PythonProject1`): правки в контейнере = его файлы на Windows сразу, без `git pull`. Версионирование разделено на ДВА репо:
+
+| | Репо | Что | Пуш |
+|---|---|---|---|
+| **Код** | `github.com/Kanaki-K/TG-Agents` (**публичный**) | `core/ agents/ connectors/ tests/ docs/ run_pipeline.py` и пр. | владелец с Windows |
+| **Память** | `github.com/Kanaki-K/tg-agents-memory` (**ПРИВАТНЫЙ**, вложенный `.git` в `memory/`) | крафт: `memory/*.md` + `*.json` (голос/эталоны/уроки/банки/стандарты, scope И флагман) | владелец с Windows |
+
+**КУДА КОММИТИТЬ:**
+- Правка КОДА → коммит в `/workspace` (публичный TG-Agents).
+- Правка ПАМЯТИ/крафта (`memory/…`) → коммит в `/workspace/memory` (приватный tg-agents-memory). Публичный репо игнорит `memory/**` (кроме `README.md` + `journal/.gitkeep`) — крафт туда НЕ попадает.
+
+**ОТКУДА РАНТАЙМ БЕРЁТ ИНФУ:** прогоны читают память с **ЛОКАЛЬНОГО ДИСКА** (`memory/` файлы), GitHub в прогонах НЕ участвует. Git-репо = только **бэкап + история/откат**, не источник для пайплайна.
+
+**КАК ПРОВЕРЯТЬ (перед/после правок):**
+```
+git -C /workspace status                       # репо кода
+git -C /workspace/memory status                # репо памяти
+git -C /workspace/memory remote get-url origin # ДОЛЖЕН быть tg-agents-memory (⚠️ НЕ TG-Agents!)
+git -C /workspace ls-files memory/             # публичный трекает ТОЛЬКО README.md + journal/.gitkeep
+```
+**⚠️ КРАСНАЯ ЛИНИЯ:** origin памяти — ТОЛЬКО приватный. Привяжешь к публичному TG-Agents → пуш сольёт весь IP (голос/эталоны) в открытый доступ. Детальный операционный мануал приватного репо — `memory/MEMORY_REPO.md` (сам приватный).
+
+**memory/ (в ПРИВАТНОМ репо tg-agents-memory, кроме pending/briefs/drafts — см. §6.0):**
 | Файл | Писатель | Читатель |
 |---|---|---|
 | `brand.md` (канон: ниша/голос/линза ценности) | владелец | Скаут, Криейтор (`_system`) |

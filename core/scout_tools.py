@@ -57,8 +57,10 @@ TOOLS = [
         "description": "Свежие твиты КУРИРУЕМЫХ лидеров мнений в X/Twitter (Arthur Hayes, Lyn Alden, "
                        "Glassnode, Raoul Pal, Saylor, Balaji ...) по трекам crypto/ai. ЭДЖ Скаута: "
                        "X не индексируется веб-поиском, дип-ресёрч его НЕ видит — а первичные голоса "
-                       "появляются тут РАНЬШЕ блога/RSS (Тир-1/2 по скорости). Доступ read-only через "
-                       "бёрнер-сессию, объём малый. Цифры из твита без первоисточника → «не подтверждено». "
+                       "появляются тут РАНЬШЕ блога/RSS (быстрый СИГНАЛ, но Тир-3 по НАДЁЖНОСТИ: скорость ≠ "
+                       "достоверность). Доступ read-only через бёрнер-сессию, объём малый. ЛЮБАЯ цифра/факт "
+                       "из твита → «не подтверждено», пока не сверил первоисточник Тир-1/2 (fetch_url); "
+                       "тир твита НЕ повышай. "
                        "Фильтры: track ('crypto'|'ai'), handle (имя аккаунта), limit_per_account.",
         "input_schema": {
             "type": "object",
@@ -287,13 +289,15 @@ def _render_tg(items: list[dict]) -> str:
         if it.get("error"):
             out.append(f"⚠ {it.get('channel', 'TG')}: {it['error']}")
             continue
-        line = f"[{it.get('track', '?')} | {it['channel']}]"
+        line = f"[{it.get('track', '?')} | {it['channel']} · Тир-3]"  # тир от ИНСТРУМЕНТА, не самоназначение LLM
         if it.get("date"):
             line += f" {it['date']}"
         if it.get("text"):
             line += f"\n{it['text']}"
         out.append(line)
-    return untrusted.wrap("\n\n".join(out), "сообщения ТГ-каналов")
+    note = ("⚑ ИСТОЧНИК Telegram-каналы = Тир-3 (МАШИННАЯ метка, НЕ повышай). Цифра/факт отсюда — «не "
+            "подтверждено», пока не сверил Тир-1/2 через fetch_url; в бриф выдумку-цифру Тир-3 хук-цифрой не ставь.")
+    return note + "\n\n" + untrusted.wrap("\n\n".join(out), "сообщения ТГ-каналов (Тир-3)")
 
 
 def _render_x(items: list[dict]) -> str:
@@ -306,7 +310,7 @@ def _render_x(items: list[dict]) -> str:
         if it.get("error"):
             out.append(f"⚠ @{it.get('handle', 'X')}: {it['error']}")
             continue
-        line = f"[{it.get('track', '?')} | @{it['handle']}]"
+        line = f"[{it.get('track', '?')} | @{it['handle']} · Тир-3]"  # тир от ИНСТРУМЕНТА, не самоназначение LLM
         if it.get("date"):
             line += f" {it['date']}"
         metrics = []
@@ -320,7 +324,10 @@ def _render_x(items: list[dict]) -> str:
         if it.get("url"):
             line += f"\n{it['url']}"
         out.append(line)
-    return untrusted.wrap("\n\n".join(out), "твиты X/Twitter")
+    note = ("⚑ ИСТОЧНИК X/Twitter = быстрый сигнал, но Тир-3 по НАДЁЖНОСТИ (МАШИННАЯ метка, НЕ повышай до "
+            "Тир-1/2). Скорость ≠ достоверность: цифра из твита — «не подтверждено», пока не сверил "
+            "первоисточник Тир-1/2 через fetch_url; в бриф хук-цифрой невериф. твит не ставь.")
+    return note + "\n\n" + untrusted.wrap("\n\n".join(out), "твиты X/Twitter (Тир-3 надёжность)")
 
 
 def _save_brief(args: dict) -> str:

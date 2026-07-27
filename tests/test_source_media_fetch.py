@@ -103,5 +103,34 @@ def test_fetch_source_image_happy_path(monkeypatch, tmp_path):
     assert out is not None and out.suffix == ".png"
 
 
+# --- порог РАЗРЕШЕНИЯ обложки (баг 24.07: 8.5КБ мелкая og:image ушла в канал «корявой») -------------
+
+def _png_bytes(w: int, h: int) -> bytes:
+    """Реальный PNG-шум w×h (шум не жмётся → байтовый гейт _MIN_BYTES проходит, проверяем именно пиксели)."""
+    import io
+    import os
+
+    from PIL import Image
+    img = Image.frombytes("RGB", (w, h), os.urandom(w * h * 3))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_download_rejects_low_resolution(monkeypatch, tmp_path):
+    # длинная сторона < _MIN_SIDE (800) → мелкий thumbnail → отклоняем (сработает фолбэк «уйдём текстом»)
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(200, 150), "image/png"))
+    assert fetch.download("https://cdn.x/tiny.png") is None
+
+
+def test_download_accepts_ok_resolution(monkeypatch, tmp_path):
+    # нормальное разрешение (1000×800) → проходит, нормализуется в JPEG-обложку
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(1000, 800), "image/png"))
+    out = fetch.download("https://cdn.x/big.png", name="scope")
+    assert out is not None and out.suffix == ".jpg"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
