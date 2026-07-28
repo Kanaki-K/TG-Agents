@@ -26,6 +26,8 @@ from core import config, untrusted  # config грузит .env; untrusted — с
 
 HERE = Path(__file__).resolve().parent
 LEADERS_FILE = HERE / "leaders.yaml"               # семя: курируемый владельцем стартовый ростер
+if not LEADERS_FILE.exists():                      # свежий клон: падаем на шаблон-пример
+    LEADERS_FILE = HERE / "leaders.example.yaml"
 LEDGER_FILE = HERE.parents[1] / "memory" / "x_authors.json"  # источник правды: тиры + история проверок
 COOKIES_FILE = HERE.parents[1] / "data" / "x_cookies.json"
 TRACKS = ("crypto", "ai")

@@ -20,7 +20,7 @@ def test_make_backup_zips_only_irreplaceable(tmp_path, monkeypatch):
     fake = tmp_path / "root"
     (fake / "data").mkdir(parents=True)
     (fake / ".env").write_text("SECRET=x", encoding="utf-8")
-    (fake / "data" / "evgeniyp.session").write_text("sess", encoding="utf-8")
+    (fake / "data" / "mtproto.session").write_text("sess", encoding="utf-8")
     (fake / "data" / "channel_posts.json").write_text("scratch", encoding="utf-8")  # SCRATCH
     (fake / "memory").mkdir()
     (fake / "memory" / "post_lessons.md").write_text("lesson", encoding="utf-8")
@@ -32,6 +32,6 @@ def test_make_backup_zips_only_irreplaceable(tmp_path, monkeypatch):
     with zipfile.ZipFile(out) as z:
         names = set(z.namelist())
     assert ".env" in names
-    assert "data/evgeniyp.session" in names
+    assert "data/mtproto.session" in names
     assert "memory/post_lessons.md" in names
     assert "data/channel_posts.json" not in names   # скретч НЕ бэкапится

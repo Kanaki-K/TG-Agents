@@ -201,7 +201,7 @@ doc-drift/CI), но НЕ ПОВЕДЕНИЕ. Отдельная ось: прох
   (те же вызовы/дефолты), покрыто `tests/test_analytics_registry.py`. Агент-специфичные tools остались
   в своих файлах.
 - ☑ **P2-14 [ops] Бэкап памяти/данных.** — ✅ СДЕЛАНО 12.07: `backup.py` одной командой архивирует ВСЁ
-  незаменимое (`.env`, `data/evgeniyp.session`, `threads_token`, `gpt_profile`, owner-файлы, `cost_log`, вся
+  незаменимое (`.env`, `data/mtproto.session`, `threads_token`, `gpt_profile`, owner-файлы, `cost_log`, вся
   `memory/`) кросс-платформенно; скретч намеренно пропускает. Рунбук — `docs/OPERATIONS.md` (было закрыто N-5,
   теперь автоматизировано). Тест `tests/test_backup.py`. Версионирование схемы JSON — над-инженерия, не сейчас.
 - ☑ **P2-15 [quality] Наблюдаемость.** — ✅ СДЕЛАНО 12.07: `logging_setup` инъектит `[agent/req]` в КАЖДУЮ
@@ -353,7 +353,7 @@ Workflow `full-audit` (`.claude/workflows/full-audit.js`, 8 read-only ревиз
 - ◐ **N-16 [resilience/P1] Единая MTProto-сессия на 3 коннектора без health-check/супервизора** — ✅ ГЛАВНОЕ
   СДЕЛАНО 09.07 (`run_pipeline` health-check): если ПОСЛЕ попытки тяги выгрузка ≥`STALE_ALERT_HOURS`(24ч) или
   её нет → `logging.critical` + строка в отчёт + best-effort уведомление владельцу (`publish.notify`) с указанием
-  проверить `data/evgeniyp.session`. Больше НЕ молчит на устаревших данных. Поток не менялся (аддитивно).
+  проверить `data/mtproto.session`. Больше НЕ молчит на устаревших данных. Поток не менялся (аддитивно).
   ОСТАЛОСЬ (осознанно, над-инженерия для solo): супервизор/рестарт ботов, разделение read/write MTProto-сессий,
   независимый канал алерта (Bot API — при мёртвой сессии MTProto-уведомление не дойдёт, но лог/отчёт сработают).
 - ☑ **N-17 [product/P1] Threads построен (1353 стр), НЕ подключён** — ✅ СДЕЛАНО 09.07 (`fca648b`): помечен

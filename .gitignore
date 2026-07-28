@@ -43,6 +43,12 @@ agents/*/.history/
 memory/sources.pending.md
 memory/x_leaders.pending.md
 
+# --- Скаут: РЕАЛЬНЫЕ списки источников (личная «кухня») — в публичный репо НЕ идут.
+#     Публичные шаблоны — *.example.yaml (read.py падает на них, если реального нет).
+#     Скопируй пример в реальное имя и впиши свои источники. ---
+connectors/telegram_scan/channels.yaml
+connectors/x_scan/leaders.yaml
+
 # --- Скаут: полные брифы разведки (рабочий материал Криейтора, регенерируются каждый /scan) ---
 memory/briefs/
 

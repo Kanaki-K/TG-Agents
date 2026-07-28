@@ -72,7 +72,7 @@ def _patch_user() -> None:
     except Exception:
         return
     orig_init = _u.User.__init__
-    if getattr(orig_init, "_kanaki_patched", False):
+    if getattr(orig_init, "_scout_patched", False):
         return
 
     def _safe_init(self, client, data):
@@ -87,7 +87,7 @@ def _patch_user() -> None:
             ent.setdefault("url", {}).setdefault("urls", [])
         orig_init(self, client, data)
 
-    _safe_init._kanaki_patched = True
+    _safe_init._scout_patched = True
     _u.User.__init__ = _safe_init
 
 
@@ -99,7 +99,7 @@ def _patch_tweet() -> None:
     except Exception:
         return
     orig_init = _tw.Tweet.__init__
-    if getattr(orig_init, "_kanaki_patched", False):
+    if getattr(orig_init, "_scout_patched", False):
         return
 
     def _safe_init(self, client, data, user=None):
@@ -110,7 +110,7 @@ def _patch_tweet() -> None:
                 legacy.setdefault(k, v)
         orig_init(self, client, data, user)
 
-    _safe_init._kanaki_patched = True
+    _safe_init._scout_patched = True
     _tw.Tweet.__init__ = _safe_init
 
 

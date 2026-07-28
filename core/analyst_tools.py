@@ -271,7 +271,7 @@ def _save_playbook(args: dict) -> str:
     framed = untrusted.reject_if_framed(content)  # N-6: не отмывать внешний контент в плейбук
     if framed:
         return framed
-    header = f"# Плейбук форматов — KANAKI CRYPTO (обновлён {date.today().isoformat()})\n\n"
+    header = f"# Плейбук форматов канала (обновлён {date.today().isoformat()})\n\n"
     PLAYBOOK.parent.mkdir(parents=True, exist_ok=True)
     PLAYBOOK.write_text(header + content + "\n", encoding="utf-8", newline="\n")
     return ("Плейбук форматов сохранён: memory/format_playbook.md. Его подхватит Криейтор "

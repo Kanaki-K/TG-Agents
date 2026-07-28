@@ -125,13 +125,20 @@ tests/         pytest suite
    ```
    Fill in the tokens and keys (see [Configuration](#configuration)).
 
-4. **Run an agent** (see the table above) and message its bot in Telegram, or run the whole chain:
+4. **Seed the recon source lists** (optional — Scout falls back to the shipped `*.example.yaml` templates if you skip this):
+   ```bash
+   cp connectors/telegram_scan/channels.example.yaml connectors/telegram_scan/channels.yaml
+   cp connectors/x_scan/leaders.example.yaml          connectors/x_scan/leaders.yaml
+   ```
+   Fill in the channels / X handles you actually follow. The real lists are git-ignored (personal curation); only the templates are public.
+
+5. **Run an agent** (see the table above) and message its bot in Telegram, or run the whole chain:
    ```bash
    python run_pipeline.py            # Scout → Creator → scheduled post
    python run_pipeline.py --skip-scout   # reuse the latest brief
    ```
 
-5. **Track spend:**
+6. **Track spend:**
    ```bash
    python run_cost_report.py         # token/cost report from data/cost_log.jsonl
    ```

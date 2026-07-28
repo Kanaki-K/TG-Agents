@@ -8,7 +8,7 @@
 
 | Файл | Что на нём | Потеря = |
 |---|---|---|
-| `data/evgeniyp.session` | MTProto-учётка (бёрнер) | вся выгрузка канала + разведка ТГ + **публикация**. Восстановление = повторный логин по SMS + риск для аккаунта |
+| `data/mtproto.session` | MTProto-учётка (бёрнер) | вся выгрузка канала + разведка ТГ + **публикация**. Восстановление = повторный логин по SMS + риск для аккаунта |
 | `.env` | все секреты (токены ботов, API-ключи, X-куки, CMC) | завод не стартует; перевыпуск всех ключей |
 | `data/threads_token.json` | Threads-токен (авто-refresh) | доступ к Threads; нужен повторный OAuth-бутстрап (окно refresh 60 дней) |
 | `data/gpt_profile/` | бёрнер-профиль ChatGPT (обложки флагмана) | повторный логин в веб-ChatGPT |
@@ -37,7 +37,7 @@ python backup.py "D:\Cloud\tg-agents"     # ← путь к облачной п�
 $stamp = Get-Date -Format "yyyy-MM-dd"
 $dst = "$HOME\Backups\tg-agents"
 New-Item -ItemType Directory -Force $dst | Out-Null
-Compress-Archive -Path .env, data\evgeniyp.session, data\threads_token.json, data\gpt_profile, memory `
+Compress-Archive -Path .env, data\mtproto.session, data\threads_token.json, data\gpt_profile, memory `
                  -DestinationPath "$dst\tg-agents-$stamp.zip" -Force
 ```
 

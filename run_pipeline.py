@@ -20,7 +20,7 @@
      22.07 пост обязан быть) → гейт темы (topic_gate) ВСЕГДА выбирает ЛУЧШИЙ повод по свежести+пользе ДО
      генерации, ведёт writer на него (не блуждает к слабому/протухшему); дубль/слабость ловит владелец в отложке;
   2) Криейтор — утверждённая НЕ-повторная тема: пост + обложка (make_image), сохраняет драфт;
-  3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление на @Kanaki_K;
+  3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление владельцу (PUBLISH_NOTIFY);
      вышедший флагман пишется в журнал (flagship_journal) — вход мини-флагмана Threads.
 Дальше проверяешь готовый пост в нативных «Отложенных» канала.
 
@@ -323,13 +323,13 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     if _age is None or _age >= STALE_ALERT_HOURS:
         _alert = (f"Данные канала НЕ обновляются ({'выгрузки нет' if _age is None else f'{_age:.0f}ч'} "
                   f"≥ {STALE_ALERT_HOURS:.0f}ч). Вероятно, MTProto-сессия истекла/забанена — проверь "
-                  f"data/evgeniyp.session (см. docs/OPERATIONS.md). Завод работает на УСТАРЕВШИХ данных.")
+                  f"data/mtproto.session (см. docs/OPERATIONS.md). Завод работает на УСТАРЕВШИХ данных.")
         logging.critical("[health] %s", _alert)
         out("🚨 " + _alert + "\n")
         panel["данные канала"] = "🚨 НЕ обновляются — проверь MTProto-сессию"
         try:
             from core import bot_alert
-            if not bot_alert.notify_owner("🚨 KANAKI-завод: " + _alert):
+            if not bot_alert.notify_owner("🚨 Завод: " + _alert):
                 logging.warning("[health] алерт владельцу не доставлен (проверь токен бота/OWNER_ID)")
         except Exception:
             logging.exception("[health] уведомление владельцу не отправилось")

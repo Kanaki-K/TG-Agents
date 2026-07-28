@@ -12,7 +12,7 @@ from core import agent_runtime, analytics, analyst_tools, config, llm
 AGENT_NAME = "channel-analyst"
 
 WELCOME = (
-    "Я аналитик KANAKI CRYPTO. Сужу по метрикам, что зашло, а что нет, "
+    "Я аналитик канала. Сужу по метрикам, что зашло, а что нет, "
     "помогаю не повторяться и подсказываю, какой контент усиливать.\n"
     "Telegram: /report — обзор, /themes — темы, /best — что зашло, /timing — время/формат, "
     "/classify — разметка форматов, /playbook — плейбук для Криейтора, /update — обновить метрики.\n"

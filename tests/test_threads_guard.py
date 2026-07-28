@@ -51,7 +51,7 @@ def spy(monkeypatch):
 
     def fake_urlopen(req, timeout=None):
         calls.append(req)
-        return _FakeResponse(json.dumps({"id": "42", "username": "kanaki.crypto"}).encode())
+        return _FakeResponse(json.dumps({"id": "42", "username": "example.user"}).encode())
 
     monkeypatch.setattr(_api.urllib.request, "urlopen", fake_urlopen)
     return calls

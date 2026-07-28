@@ -86,7 +86,7 @@ def fetch_page(url: str, limit: int = 4000) -> str:
     reason = _url_blocked_reason(url)
     if reason:
         return f"Ссылку не открыл ({reason})."
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (KanakiScout)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ScoutBot)"})
     try:
         with _SAFE_OPENER.open(req, timeout=15) as resp:
             raw = resp.read(800_000)  # кап на размер тела
@@ -108,7 +108,7 @@ def fetch_bytes(url: str, max_bytes: int = 800_000, timeout: int = 15) -> tuple[
     """
     if _url_blocked_reason(url):
         return None
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (KanakiScout)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ScoutBot)"})
     try:
         with _SAFE_OPENER.open(req, timeout=timeout) as resp:
             return resp.read(max_bytes), (resp.headers.get_content_type() or "")

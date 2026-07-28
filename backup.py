@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent
 # 🔴 НЕЗАМЕНИМОЕ — бэкапим (не пересоздаётся автоматически):
 IRREPLACEABLE = [
     ".env",                              # все секреты (токены, ключи, куки)
-    "data/evgeniyp.session",             # MTProto-учётка (выгрузка + разведка + публикация)
+    "data/mtproto.session",             # MTProto-учётка (выгрузка + разведка + публикация)
     "data/threads_token.json",           # Threads OAuth (авто-refresh, окно 60 дней)
     "data/gpt_profile",                  # бёрнер-профиль ChatGPT (обложки флагмана)
     "data/custom_emoji.json",            # карта кастом-эмодзи (собрана руками)

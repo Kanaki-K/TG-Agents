@@ -309,7 +309,7 @@ git -C /workspace ls-files memory/             # публичный трекае
 | `cost_log.jsonl` | `cost.py` | `run_cost_report.py` |
 | `run_mode.txt` | `runmode.set_*` (любой бот) | `runmode.resolve` (все, каждый ход) |
 | `<agent>_owner.txt` | `agent_runtime._write_owner` | `_periodic_loop` (проактивные отчёты) |
-| `evgeniyp.session` (MTProto, **невосстановима**) | `telegram_export/login.py` | весь MTProto (export/scan/publish) |
+| `mtproto.session` (MTProto, **невосстановима**) | `telegram_export/login.py` | весь MTProto (export/scan/publish) |
 | `gpt_profile/` / `gpt_images/*.png` | `gpt_image/login.py` / `generate.py` | `gpt_image/generate` / `telegram_publish` |
 
 ---
@@ -318,7 +318,7 @@ git -C /workspace ls-files memory/             # публичный трекае
 
 | Коннектор | Что | Креды | Зовёт |
 |---|---|---|---|
-| `telegram_export/` | сбор постов+статистики своего канала, разметка тем | MTProto (`TELEGRAM_API_ID/HASH/PHONE/SESSION`, `data/evgeniyp.session`) | CLI; `_client` импортируют scan+publish |
+| `telegram_export/` | сбор постов+статистики своего канала, разметка тем | MTProto (`TELEGRAM_API_ID/HASH/PHONE/SESSION`, `data/mtproto.session`) | CLI; `_client` импортируют scan+publish |
 | `telegram_scan/` | чтение чужих каналов (Тир-3); `channels.yaml` | та же MTProto-сессия | `scout_tools` |
 | `web_sources/` | RSS/Atom (Тир-2, `sources.yaml`) + `fetch_page` | публичные URL | `scout_tools` |
 | `x_scan/` | твиты X-лидеров (`leaders.yaml`); монки-патч `_twikit_patch` | бёрнер-куки (`X_AUTH_TOKEN/CT0` или `data/x_cookies.json`) | `scout_tools` |

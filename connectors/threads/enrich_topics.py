@@ -17,7 +17,7 @@ from connectors import enrich_common
 ROOT = Path(__file__).resolve().parents[2]
 POSTS_JSON = ROOT / "data" / "threads_posts.json"
 OUT = ROOT / "data" / "threads_topics.json"
-PREAMBLE = "Ты — аналитик Threads-аккаунта про крипту (@kanaki.crypto)."
+PREAMBLE = "Ты — аналитик Threads-аккаунта про крипту."
 
 
 def _load_posts() -> list[dict]:

@@ -11,7 +11,7 @@ QR сохраняется в data/qr.png и обновляется сам. Ст�
 
 Пароль 2FA берётся из .env (TELEGRAM_2FA), а если там пусто — скрипт ждёт
 файл data/2fa.txt (туда пароль кладёт оркестратор/ассистент), читает и СРАЗУ удаляет.
-По успеху сохраняет файл сессии data/evgeniyp.session → дальше collect.
+По успеху сохраняет файл сессии data/mtproto.session → дальше collect.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from core import config
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
-SESSION = str(DATA / "evgeniyp")
+SESSION = str(DATA / "mtproto")
 PNG = DATA / "qr.png"
 TXT = DATA / "qr.txt"
 STATUS = DATA / "qr_status.txt"
