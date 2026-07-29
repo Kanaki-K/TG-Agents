@@ -50,6 +50,31 @@ def test_finale_weak_rewritten(monkeypatch):
     assert saved.get("kind") == "scope" and "content" in saved  # пересохранили драфт
 
 
+def test_finale_defused_from_caveat(monkeypatch):
+    # финал сросся с оговоркой «честно:» в одном абзаце → «РАСШИТЬ» → оговорка и кикер = РАЗНЫЕ абзацы
+    saved: dict = {}
+    fused = "Честно, у медали две стороны. Выгода осела у биржи. Но кто построил вход без порога, забирает клиента раньше"
+    draft = _post(fused)
+    _setup(monkeypatch, draft,
+           "РАСШИТЬ: Честно, у медали две стороны. Выгода осела у биржи @@@ Кто построил вход без порога, забирает клиента раньше", saved)
+    out = sw.fix_finale()
+    paras = [p for p in out.split("\n\n") if p.strip()]
+    assert paras[-1] == FOOTER                                       # футер последний
+    assert paras[-2] == "Кто построил вход без порога, забирает клиента раньше"  # кикер = свой абзац
+    assert paras[-3] == "Честно, у медали две стороны. Выгода осела у биржи"     # оговорка = отдельный абзац выше
+    assert out.split("\n\n")[0] == "**⚡️ Заголовок поста**"          # заголовок цел
+    assert saved.get("kind") == "scope"
+
+
+def test_finale_defuse_bad_envelope_untouched(monkeypatch):
+    # «РАСШИТЬ» без разделителя @@@ (модель напортачила) → оставляем пост как есть
+    saved: dict = {}
+    draft = _post("Честно, минусы есть. Но вывод сильный и приклеен сюда же")
+    _setup(monkeypatch, draft, "РАСШИТЬ: всё слиплось без разделителя", saved)
+    assert sw.fix_finale() == draft
+    assert saved == {}
+
+
 def test_finale_no_footer_untouched(monkeypatch):
     # нет футера → структуру не угадать → не трогаем (пост обязан быть)
     saved: dict = {}
