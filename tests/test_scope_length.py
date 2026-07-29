@@ -27,20 +27,20 @@ def test_noop_under_cap():
 
 
 def test_trims_over_cap_keeps_head_and_footer():
-    t = _post(6, 180)                                   # тело сильно >1000
-    assert _n(t.partition("[[SPLIT]]")[0]) > 1000
+    t = _post(8, 180)                                   # тело сильно >1150
+    assert _n(t.partition("[[SPLIT]]")[0]) > 1150
     out = sw._enforce_scope_len(t)
-    assert _n(out.partition("[[SPLIT]]")[0]) <= 1000     # влезли
+    assert _n(out.partition("[[SPLIT]]")[0]) <= 1150     # влезли
     assert out.split("\n\n")[0] == "**Заголовок поста один**"  # заголовок цел
     assert out.rstrip().endswith(FOOTER)                 # футер (ссылки) цел
 
 
 def test_keeps_split_and_media_tail():
     # медиа-мету после [[SPLIT]] не трогаем (её парсит пайплайн для обложки)
-    t = _post(6, 180) + "\n[[SPLIT]]\n[[MEDIA_SRC]] https://a.com/x"
+    t = _post(8, 180) + "\n[[SPLIT]]\n[[MEDIA_SRC]] https://a.com/x"
     out = sw._enforce_scope_len(t)
     assert "[[SPLIT]]" in out and "https://a.com/x" in out
-    assert _n(out.partition("[[SPLIT]]")[0]) <= 1000
+    assert _n(out.partition("[[SPLIT]]")[0]) <= 1150
 
 
 def test_does_not_empty_minimal_post():

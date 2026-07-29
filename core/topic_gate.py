@@ -180,11 +180,12 @@ def anchor_weak_to_recommend(theme: str, weak: str, recommend: str,
       • анти-повтор без чистой 🆕 (recommend пусто = все повторы) — подменять не на что;
       • гейт и так выбрал рекомендованное (theme == recommend) — менять нечего.
     Возвращает (повод, слабость, подменили?): при подмене — (recommend, '', True)."""
-    if not weak or not recommend or recommend == theme:
-        return theme, weak, False
-    if is_exhausted(verdict) or is_offbrand(verdict):
-        return theme, weak, False
-    return recommend, "", True
+    # ОТКЛЮЧЕНО 29.07: якорь бил В ОБРАТНУЮ — перебивал СИЛЬНЫЙ выбор гейта (💎 bStocks/токен-акции) на
+    # СЛАБУЮ рекомендацию анти-повтора (🚫 carry-шум, который гейт сам отбраковал) из-за мелкой оговорки
+    # «проверить число». Гейт теперь сильный (💎>🚫, свежесть ≤3д, ре-разведка на исчерпании) — доверяем
+    # ЕГО выбору; пометка СЛАБО идёт писателю как ориентир, а не как повод подменить тему. Верификация
+    # числа — работа 2FA, не подмена повода. (Оставлено no-op, чтобы не трогать вызов/тесты.)
+    return theme, weak, False
 
 
 def select(candidates: str, api_key: str | None = None, model: str | None = None,

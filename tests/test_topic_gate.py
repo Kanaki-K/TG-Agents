@@ -120,13 +120,14 @@ def test_select_injects_brand_block_into_prompt(monkeypatch):
 # сожжены. Страж ловит В КОДЕ: слабый выбор гейта + чистая 🆕 от анти-повтора → берём рекомендацию.
 
 def test_anchor_swaps_weak_pick_for_recommend():
-    # тот самый кейс 27.07: гейт пометил выбор СЛАБО, анти-повтор рекомендовал чистую 🆕 → подмена
+    # ОТКЛЮЧЕНО 29.07: якорь БОЛЬШЕ НЕ подменяет — бил в обратную сторону (перебивал сильный выбор гейта
+    # на слабую рекомендацию анти-повтора). Доверяем выбору гейта; СЛАБО идёт писателю ориентиром.
     theme, weak, swapped = topic_gate.anchor_weak_to_recommend(
         "BTC устоял — дневной шум", "скатывается в дневной шум",
         "BTC-кэрри <2% — механизм ухода спекулянтов", "ИСЧЕРПАНО: нет\nОФФ-БРЕНД: нет")
-    assert theme == "BTC-кэрри <2% — механизм ухода спекулянтов"
-    assert weak == ""
-    assert swapped is True
+    assert theme == "BTC устоял — дневной шум"
+    assert weak == "скатывается в дневной шум"
+    assert swapped is False
 
 
 def test_anchor_keeps_strong_pick():
