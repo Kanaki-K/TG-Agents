@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=$( { git -C /workspace status --porcelain 2>/dev/null; git -C /workspace/memory status --porcelain 2>/dev/null; } | grep -v '^??' ); [ -n \"$d\" ] && printf '{\"systemMessage\":\"%s\"}' \"Незакоммиченные правки в коде/памяти. Правило владельца: коммить после КАЖДОЙ существенной правки с подробным причинно-следственным сообщением (git commit, без push). Своё — закоммить; файлы, правленные владельцем, не трогать.\" || true"
+          }
+        ]
+      }
+    ]
+  }
+}
