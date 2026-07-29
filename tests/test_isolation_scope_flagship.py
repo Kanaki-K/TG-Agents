@@ -10,7 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SCOPE_ONLY = {"voice_core.md", "scope_manual.md", "scope_lessons.md", "headline_bank.md"}
+SCOPE_ONLY = {"voice_core.md", "scope_manual.md", "scope_lessons.md", "headline_bank.md",
+              "scope_anchors.md"}
 FLAGSHIP_ONLY = {"content_manual.md", "post_lessons.md", "post_standard.md",
                  "format_playbook.md", "anchor_posts.md", "flagship_topics.md"}
 THREADS_ONLY = {"threads_manual.md", "threads_flagman_anchors.md", "threads_lessons.md"}
