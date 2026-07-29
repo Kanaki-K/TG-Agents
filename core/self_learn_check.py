@@ -141,7 +141,7 @@ def _evaluation(flagships: list[dict]) -> None:
     rows = category_scoring.leaderboard(dps, today=date.today())
     print("\n    " + category_scoring.render(rows).replace("\n", "\n    "))
     pw = category_scoring.picker_weights(dps, today=date.today())
-    print("\n    веса пикера (эксплуатация + разведка → наклон ротации тем):")
+    print("\n    Threads-веса (СПРАВОЧНО, дормант — в боевой пикер НЕ идут; реальные ТГ-веса см. [1.5]):")
     for cat, w in sorted(pw.items(), key=lambda kv: -kv[1]):
         print(f"      {w:>5} × {tc.label(cat)}")
 
@@ -178,12 +178,28 @@ def _evaluation(flagships: list[dict]) -> None:
                  if agree else "сигналы РАЗНЫЕ (Threads ≠ ТГ) — банк на Threads-данных НЕ менять"))
 
 
+def _applied_picker_weights() -> None:
+    """РЕАЛЬНЫЙ наклон пикера флагмана — ТГ-only веса, ровно то, что применяет run_pipeline
+    (self_learn.tg_category_weights). Печатается ВСЕГДА, не завися от Threads-данных: владелец должен
+    видеть тот тилт, что реально крутит ротацию тем, а не Threads-справку из [4]. Threads в пикер НЕ идёт —
+    площадки инвертированы, ТГ учим на ТГ (решение владельца 29.07)."""
+    print("\n[1.5] ВЕСА ПИКЕРА ФЛАГМАНА — ПРИМЕНЯЮТСЯ (ТГ-only, наклон ротации тем)")
+    pw = self_learn.tg_category_weights()
+    if not pw:
+        print("    нейтрально — мало ТГ-данных, наклон самозаглушён (пикер выбирает равномерно).")
+        return
+    for cat, w in sorted(pw.items(), key=lambda kv: -kv[1]):
+        print(f"    {w:>5} × {tc.label(cat)}")
+    print("    (это СОВЕТ ротации: смещает, какие темы попадут на стол; финал за LLM по свежести/рынку.)")
+
+
 def main() -> None:
     print("=" * 70)
     print("ПРОВЕРКА ПЕТЛИ САМО-ОБУЧЕНИЯ (read-only, на реальных данных)")
     print("=" * 70)
     flagships = _load_flagships()
     _bank_distribution()
+    _applied_picker_weights()
     _published_flagships(flagships)
     _distill_journal()
     _evaluation(flagships)
