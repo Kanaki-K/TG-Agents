@@ -79,3 +79,14 @@ def test_plain_numeric_line_is_not_a_warning():
 def test_redline_ignores_lines_without_marker():
     v = "⚠️ «1.5 млрд$» — реально 1.76 млрд$\nИТОГ: 8✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ"
     assert verify.has_redline(v) is False      # числовой конфликт чинится подстановкой, это не выдумка
+
+
+# --- ПОЛНОТА поста-инструкции: неполный список затронутых = красная линия ---
+
+def test_incomplete_scope_reads_as_redline():
+    # 2FA обязан пометить недостающую затронутую модель словом-маркером, чтобы конвейер снёс/поправил,
+    # а не отправил владельцу «мелким нюансом» (случай Coldcard 31.07: пост назвал только Mk3)
+    v = ("⚠️ «Mk3 с firmware 4.0.1+» — не подтверждено, что затронут ТОЛЬКО Mk3: источники называют "
+         "также Mk4, Mk5 и Q\nИТОГ: 8✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ")
+    assert verify.has_redline(v) is True
+    assert verify.has_issues(v) is True

@@ -364,3 +364,34 @@ def test_finale_not_checked_without_footer():
     # футера нет → структуру не угадать → молчим (не выдумываем претензии)
     _, warns = creator_tools._lint("**Заголовок**\n\nтело поста\n\nчто-то ещё?", "scope")
     assert not any("финал-" in w for w in warns)
+
+
+# --- ПОСТ-ИНСТРУКЦИЯ: формат уступает безопасности (случай Coldcard 31.07) ---
+# Завод выпустил пост об утечке 594 BTC с инструкцией по миграции: неверный номер исправленной
+# прошивки и НЕПОЛНЫЙ список затронутых устройств. Читатель с неназванной моделью решил бы, что
+# это не про него. Поймал владелец руками — 2FA сверил цифры поштучно и не спросил про полноту.
+
+def test_detects_advice_post():
+    assert creator_tools.is_advice_post("мигрируйте на новый seed") is True
+    assert creator_tools.is_advice_post("обновитесь на исправленную прошивку") is True
+    assert creator_tools.is_advice_post("считайте скомпрометированным") is True
+
+
+def test_plain_analysis_is_not_advice():
+    assert creator_tools.is_advice_post("фонд купил пакет, механика такая") is False
+    assert creator_tools.is_advice_post("") is False
+
+
+def test_long_advice_post_gets_soft_length_note():
+    long_body = ("Кого касается: Mk3, Mk4, Mk5 и Q. " + "детали механики " * 70 +
+                 "\n\nмигрируйте на новый seed, обновление уже созданный seed не спасает")
+    post = "**⚠️ Заголовок**\n\n" + long_body + "\n\n" + _FOOT
+    _, warns = creator_tools._lint(post, "scope")
+    assert not any("⛔ scope ДЛИННЫЙ" in w for w in warns)      # жёсткого «режь» тут быть не должно
+    assert any("пост-ИНСТРУКЦИЯ" in w for w in warns)           # вместо него — «режь только воду»
+
+
+def test_long_plain_post_still_gets_hard_length_warn():
+    post = "**⚠️ Заголовок**\n\n" + ("разбор механики " * 90) + "\n\n" + _FOOT
+    _, warns = creator_tools._lint(post, "scope")
+    assert any("⛔ scope ДЛИННЫЙ" in w for w in warns)
