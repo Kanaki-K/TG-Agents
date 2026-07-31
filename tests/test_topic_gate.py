@@ -1,90 +1,156 @@
-"""Гейт ТЕМЫ (core/topic_gate) — отбор ЛУЧШЕГО повода ДО генерации по свежести+пользе. ВСЕГДА даёт
-повод (правило владельца 22.07: пост обязан быть, ПРОПУСКА нет). Судейское суждение модели тут не
-проверяем (живой прогон) — проверяем ПЛУМБИНГ: парсинг ПОВОД/СЛАБО, фолбэк на сбое, always-return."""
+"""ВЫБОР ТЕМЫ scope (core/topic_gate) — единственный орган, решающий, о чём будет пост.
+
+Переработка 31.07: сюда слиты анти-повтор, гейт свежести, суд пользы и бренд-фит. Судейское суждение
+модели тут не проверяем (это живой прогон) — проверяем ПЛУМБИНГ контракта: парсинг всех полей, отказы
+для панели владельца, фейл-открыто на сбое, отсутствие лишних вызовов. Запуск:
+python -m pytest tests/test_topic_gate.py"""
 from core import topic_gate
 
+# Полный вердикт по контракту — как его отдаёт модель (с markdown-шумом, который она любит добавлять).
+FULL = (
+    "🆕 «Chainlink+Pangea» — действие от 30.07, возраст 1д; 💎; польза: как LINK зарабатывает комиссию\n"
+    "🔁 «Strategy продала BTC» — действие от 12.06, возраст 49д; 🚫; польза: нет; #454 [2026-07-20]\n"
+    "**ВЫБРАН: «Chainlink подключился к Pangea — как протокол зарабатывает на чужих расчётах»**\n"
+    "ДАТА ДЕЙСТВИЯ: 30.07.2026\n"
+    "ПОЛЬЗА: инвестор видит, откуда у LINK берётся выручка, а не только цена\n"
+    "СЛАБО: нет\n"
+    "ОТКЛОНЕНО: «Strategy продала BTC» — отчёт о июньском действии, 49д; «ETF-приток» — дневной поток\n"
+    "ИСЧЕРПАНО: нет\n"
+    "ОФФ-БРЕНД: нет"
+)
 
-def test_parse_choice_picks_theme():
-    v = "Лучший — BTC-драйвер, событие вчера, эдж про ликвидность.\nПОВОД: «BTC сменил драйвер на ликвидность»"
+
+# --- парсинг контракта ------------------------------------------------------------------------
+
+def test_parses_choice_and_no_weakness():
+    theme, weak = topic_gate.parse_choice(FULL)
+    assert theme.startswith("Chainlink подключился к Pangea")
+    assert weak == ""            # «СЛАБО: нет» — это НЕ слабость, а её отсутствие
+
+
+def test_parses_weakness_when_present():
+    v = "СЛАБО: повод старше 3 дней - подать через механизм\nВЫБРАН: «Индекс принятия банков»"
     theme, weak = topic_gate.parse_choice(v)
-    assert theme == "BTC сменил драйвер на ликвидность"
-    assert weak == ""
+    assert theme == "Индекс принятия банков"
+    assert "старше 3 дней" in weak
 
 
-def test_parse_choice_extracts_weakness():
-    v = ("Свежего мало.\nСЛАБО: повод протух (9д) — подать через долговечный механизм\n"
-         "ПОВОД: «Индекс принятия банков — через механизм кастодии»")
-    theme, weak = topic_gate.parse_choice(v)
-    assert theme == "Индекс принятия банков — через механизм кастодии"
-    assert "протух" in weak
+def test_takes_last_choice_line():
+    v = "ВЫБРАН: «черновик»\nещё думаю...\nВЫБРАН: «финальный повод»"
+    assert topic_gate.parse_choice(v)[0] == "финальный повод"
 
 
-def test_parse_choice_takes_last_povod_line():
-    # контракт: финал — ПОСЛЕДНЯЯ строка ПОВОД (если модель черновала выше)
-    v = "ПОВОД: «черновик»\nещё думаю...\nПОВОД: «финальный повод»"
-    theme, _ = topic_gate.parse_choice(v)
-    assert theme == "финальный повод"
-
-
-def test_parse_choice_no_line_returns_empty():
-    # нет строки ПОВОД (сбой/парсинг) → ('', '') → вызывающий делает фолбэк на recommend
+def test_no_contract_returns_empty():
+    # сбой/непарсибельно → ('', '') → конвейер пишет по брифу сам (пост обязан быть)
     assert topic_gate.parse_choice("бла-бла без вердикта") == ("", "")
     assert topic_gate.parse_choice("") == ("", "")
     assert topic_gate.parse_choice(None) == ("", "")
 
 
-def test_select_empty_candidates_no_model_call(monkeypatch):
-    # нет разбора кандидатов → не зовём модель, отдаём пусто (writer возьмёт повод сам)
+def test_parses_action_date_not_publication_date():
+    # ГЛАВНОЕ правило после провала 31.07: возраст повода = возраст ДЕЙСТВИЯ, не отчёта о нём
+    assert topic_gate.parse_action_date(FULL) == "30.07.2026"
+    assert topic_gate.parse_action_date("ДАТА ДЕЙСТВИЯ: не определена") == ""
+    assert topic_gate.parse_action_date("") == ""
+
+
+def test_parses_usefulness_line():
+    assert "откуда у LINK" in topic_gate.parse_usefulness(FULL)
+
+
+def test_parses_rejected_for_owner_panel():
+    # предохранитель владельца: отклонённые поводы видны строкой, а не только в полном логе
+    rej = topic_gate.parse_rejected(FULL)
+    assert len(rej) == 2
+    assert "отчёт о июньском действии" in rej[0]
+    assert "дневной поток" in rej[1]
+
+
+def test_rejected_empty_when_none():
+    assert topic_gate.parse_rejected("ОТКЛОНЕНО: нет") == []
+    assert topic_gate.parse_rejected("ВЫБРАН: «x»") == []
+
+
+def test_flags_exhausted_and_offbrand_with_markdown():
+    assert topic_gate.is_exhausted(FULL) is False
+    assert topic_gate.is_offbrand(FULL) is False
+    assert topic_gate.is_exhausted("**ИСЧЕРПАНО: да**") is True      # markdown-обёртку терпим
+    assert topic_gate.is_offbrand("ОФФ-БРЕНД: да") is True
+    assert topic_gate.is_exhausted("") is False                       # строки нет → не форсим разведку
+
+
+# --- вызов ------------------------------------------------------------------------------------
+
+def test_empty_brief_no_model_call(monkeypatch):
     calls = []
     monkeypatch.setattr(topic_gate.llm, "reply", lambda *a, **k: calls.append(1))
     theme, weak, verdict = topic_gate.select("")
     assert (theme, weak) == ("", "")
     assert calls == []
-    assert "отбирать не из чего" in verdict
+    assert "выбирать не из чего" in verdict
 
 
 def test_select_parses_model_verdict(monkeypatch):
-    fake = "BTC свежий, польза есть.\nПОВОД: «BTC сменил драйвер»"
-    monkeypatch.setattr(topic_gate.llm, "reply", lambda *a, **k: (fake, None))
-    theme, weak, verdict = topic_gate.select("🆕 «BTC» — событие 20.07", today="2026-07-22")
-    assert theme == "BTC сменил драйвер"
-    assert weak == ""
-    assert verdict == fake
+    monkeypatch.setattr(topic_gate.llm, "reply", lambda *a, **k: (FULL, None))
+    theme, _weak, verdict = topic_gate.select("повод один", today="2026-07-31", digest="")
+    assert theme.startswith("Chainlink")
+    assert verdict == FULL
 
 
 def test_select_failopen_on_model_error(monkeypatch):
-    # сбой модели → ('', '', причина): НЕ роняем конвейер, вызывающий делает фолбэк на recommend
+    # сбой модели → ('', '', причина): конвейер НЕ падает, писатель берёт повод из брифа сам
     def boom(*a, **k):
         raise RuntimeError("api down")
     monkeypatch.setattr(topic_gate.llm, "reply", boom)
-    theme, weak, verdict = topic_gate.select("🆕 что-то", today="2026-07-22")
+    theme, weak, verdict = topic_gate.select("повод", today="2026-07-31", digest="")
     assert (theme, weak) == ("", "")
     assert "не удался" in verdict
 
 
-def test_select_passes_today_into_prompt(monkeypatch):
-    # дата ДОЛЖНА уходить в промпт (гейт считает возраст события) — иначе «понимание даты» сломано
+def test_select_failopen_when_channel_digest_unreadable(monkeypatch):
+    # сводка канала не прочиталась → выбираем БЕЗ неё, но прогон не роняем
     seen = {}
+
+    def boom_digest(**k):
+        raise RuntimeError("нет выгрузки")
+
     def cap(model, system, hist, user, tools, disp, key, thinking, **k):
         seen["user"] = user
-        return ("ПОВОД: «x»", None)
+        return (FULL, None)
+    monkeypatch.setattr(topic_gate.analytics, "topics_digest", boom_digest)
     monkeypatch.setattr(topic_gate.llm, "reply", cap)
-    topic_gate.select("🆕 повод — событие 13.07", today="2026-07-22")
-    assert "2026-07-22" in seen["user"]
+    theme, _w, _v = topic_gate.select("повод", today="2026-07-31")
+    assert theme.startswith("Chainlink")
+    assert "сводка канала недоступна" in seen["user"]
 
 
-# --- бренд-вето офф-темы (баг 24.07: гейт был слеп к бренду → опубликовал DOGE+SHIB) --------------
+def test_select_feeds_raw_brief_digest_recent_and_brand(monkeypatch):
+    """Орган обязан видеть ВСЁ сразу — в этом вся переработка.
 
-def test_is_offbrand_yes_no_absent_markdown():
-    assert topic_gate.is_offbrand("СЛАБО: жидко\nОФФ-БРЕНД: да\nПОВОД: «мемки»") is True
-    assert topic_gate.is_offbrand("ОФФ-БРЕНД: нет\nПОВОД: «BTC»") is False
-    assert topic_gate.is_offbrand("**ОФФ-БРЕНД: да**") is True   # markdown-обёртку терпим (как is_exhausted)
-    assert topic_gate.is_offbrand("ПОВОД: «BTC»") is False       # строки нет → не офф-бренд
-    assert topic_gate.is_offbrand("") is False
+    Раньше гейт получал пересказ дедупа вместо сырого брифа, не видел сводку канала и судил пользу
+    вслепую; три органа знали разные куски и приходили к разным ответам. Тест сторожит вход.
+    """
+    seen = {}
 
+    def cap(model, system, hist, user, tools, disp, key, thinking, **k):
+        seen["user"] = user
+        return (FULL, None)
+    monkeypatch.setattr(topic_gate, "_off_brand_block", lambda: "- Шиткоин-памп, мемкоины ради иксов")
+    monkeypatch.setattr(topic_gate.llm, "reply", cap)
+    topic_gate.select("СЫРОЙ повод от разведки", today="2026-07-31",
+                      digest="#454 [2026-07-20] Orange Juice - BTC-казна",
+                      recent=["Gram-кошелёк"])
+    u = seen["user"]
+    assert "СЫРОЙ повод от разведки" in u          # бриф, а не чужой пересказ
+    assert "#454" in u                              # сводка канала (анти-повтор)
+    assert "Gram-кошелёк" in u                      # недавно написанное
+    assert "мемкоин" in u                           # бренд-фит
+    assert "2026-07-31" in u                        # дата — без неё не посчитать возраст действия
+
+
+# --- бренд-секция -----------------------------------------------------------------------------
 
 def test_off_brand_block_parses_only_that_section(monkeypatch, tmp_path):
-    # извлекаем РОВНО секцию «Что НЕ наше», не соседние (герметично: memory/ gitignored, реального нет в CI)
     (tmp_path / "memory").mkdir()
     (tmp_path / "memory" / "brand.md").write_text(
         "# Бренд\n\n## Голос\nживой голос\n\n## Что НЕ наше (Скаут понижает)\n"
@@ -93,81 +159,9 @@ def test_off_brand_block_parses_only_that_section(monkeypatch, tmp_path):
     monkeypatch.setattr(topic_gate.config, "ROOT", tmp_path)
     block = topic_gate._off_brand_block()
     assert "мемкоин" in block.lower() and "шум" in block.lower()
-    assert "живой голос" not in block and "DCA" not in block   # только своя секция, не соседи
+    assert "живой голос" not in block and "DCA" not in block
 
 
 def test_off_brand_block_missing_file_failopen(monkeypatch, tmp_path):
-    # нет brand.md → '' (fail-open: гейт работает как раньше, конвейер не падает)
     monkeypatch.setattr(topic_gate.config, "ROOT", tmp_path)
     assert topic_gate._off_brand_block() == ""
-
-
-def test_select_injects_brand_block_into_prompt(monkeypatch):
-    # список «что НЕ наше» ДОЛЖЕН уходить в промпт гейта — иначе он слеп к бренду (корень бага 24.07)
-    seen = {}
-    monkeypatch.setattr(topic_gate, "_off_brand_block", lambda: "- Шиткоин-памп, мемкоины ради иксов")
-    def cap(model, system, hist, user, tools, disp, key, thinking, **k):
-        seen["user"] = user
-        return ("ОФФ-БРЕНД: нет\nПОВОД: «x»", None)
-    monkeypatch.setattr(topic_gate.llm, "reply", cap)
-    topic_gate.select("🆕 повод — событие 13.07", today="2026-07-22")
-    assert "ЧТО НЕ НАШЕ" in seen["user"] and "мемкоин" in seen["user"]
-
-
-# --- ЯКОРЬ к анти-повтору: гейт не публикует СЛАБЫЙ выбор при чистой 🆕 (фикс 27.07) ----------------
-# Корень бага: гейт-ре-ранкер принял «BTC устоял» (дневной шум) за структурное, выбрал слабейший из 5
-# поводов, переиграв Скаута И анти-повтор (оба звали #3-кэрри); гейт пользы ниже пометил ПЕРЕСКАЗ — но $2
-# сожжены. Страж ловит В КОДЕ: слабый выбор гейта + чистая 🆕 от анти-повтора → берём рекомендацию.
-
-def test_anchor_swaps_weak_pick_for_recommend():
-    # ОТКЛЮЧЕНО 29.07: якорь БОЛЬШЕ НЕ подменяет — бил в обратную сторону (перебивал сильный выбор гейта
-    # на слабую рекомендацию анти-повтора). Доверяем выбору гейта; СЛАБО идёт писателю ориентиром.
-    theme, weak, swapped = topic_gate.anchor_weak_to_recommend(
-        "BTC устоял — дневной шум", "скатывается в дневной шум",
-        "BTC-кэрри <2% — механизм ухода спекулянтов", "ИСЧЕРПАНО: нет\nОФФ-БРЕНД: нет")
-    assert theme == "BTC устоял — дневной шум"
-    assert weak == "скатывается в дневной шум"
-    assert swapped is False
-
-
-def test_anchor_keeps_strong_pick():
-    # weak пусто (гейт уверен в выборе) → НЕ трогаем, даже если рекомендация другая
-    out = topic_gate.anchor_weak_to_recommend(
-        "сильный структурный повод", "", "другая тема", "ИСЧЕРПАНО: нет")
-    assert out == ("сильный структурный повод", "", False)
-
-
-def test_anchor_noop_when_no_recommend():
-    # анти-повтор без чистой 🆕 (все повторы) → подменять не на что, слабый выбор остаётся как есть
-    out = topic_gate.anchor_weak_to_recommend("слабый повод", "жидкая польза", "", "ИСЧЕРПАНО: нет")
-    assert out == ("слабый повод", "жидкая польза", False)
-
-
-def test_anchor_noop_when_exhausted_or_offbrand():
-    # исчерпан/офф-бренд — свои ветки (ре-разведка/пропуск прогона); якорь НЕ вмешивается
-    assert topic_gate.anchor_weak_to_recommend("x", "слаб", "рек", "ИСЧЕРПАНО: да")[2] is False
-    assert topic_gate.anchor_weak_to_recommend("x", "слаб", "рек", "ОФФ-БРЕНД: да")[2] is False
-
-
-def test_anchor_noop_when_gate_already_picked_recommend():
-    # гейт выбрал ровно рекомендованное (пусть и пометил слабым) → менять не на что, подмены нет
-    theme, weak, swapped = topic_gate.anchor_weak_to_recommend(
-        "BTC-кэрри", "слабовато", "BTC-кэрри", "ИСЧЕРПАНО: нет")
-    assert swapped is False and theme == "BTC-кэрри"
-
-
-# --- «РЕКОМЕНДУЮ» анти-повтора НЕ доходит до гейта (баг Strategy 31.07) ---------------------------
-# Дедуп отвечает на вопрос «повтор или нет», а не «какую тему брать»: у него нет ни суда пользы, ни
-# бренд-фита, ни правила «действие, а не отчёт о нём». Его готовая рекомендация в тексте якорила гейт —
-# 31.07 дедуп назвал 3-го по силе кандидата, гейт повторил его выбор, и завод написал стухшую новость.
-
-def test_select_strips_recommend_line(monkeypatch):
-    seen = {}
-    def cap(model, system, hist, user, tools, disp, key, thinking, **k):
-        seen["user"] = user
-        return ("ПОВОД: «x»", None)
-    monkeypatch.setattr(topic_gate.llm, "reply", cap)
-    topic_gate.select("🆕 кандидат один — событие 30.07\n**РЕКОМЕНДУЮ**: «взять кандидата три»\n"
-                      "🆕 кандидат два — событие 31.07", today="2026-07-31")
-    assert "взять кандидата три" not in seen["user"]      # готовый ответ дедупа снят
-    assert "кандидат один" in seen["user"] and "кандидат два" in seen["user"]   # разбор цел
