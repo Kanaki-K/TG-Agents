@@ -296,3 +296,17 @@ def test_short_repeat_line_kept():
     clean, warns = creator_tools._lint(post, "scope")
     assert clean.count("И всё") == 2
     assert not any("ПОВТОР абзаца" in w for w in warns)
+
+
+# --- шаблонные ИИ-связки (разбор 31.07: «подача как всегда ИИшная») ---
+
+def test_flags_template_connector():
+    post = "**⚠️ Заголовок**\n\nМеханика проста: обязательства тикают каждый квартал\n\n" + "х" * 400
+    _, warns = creator_tools._lint(post, "scope")
+    assert any("ШАБЛОННАЯ ИИ-СВЯЗКА" in w for w in warns)
+
+
+def test_clean_scope_has_no_connector_warn():
+    post = "**⚠️ Заголовок**\n\nОбязательства тикают каждый квартал, а продавать приходится на падении\n\n" + "х" * 400
+    _, warns = creator_tools._lint(post, "scope")
+    assert not any("ШАБЛОННАЯ ИИ-СВЯЗКА" in w for w in warns)
