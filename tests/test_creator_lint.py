@@ -310,3 +310,57 @@ def test_clean_scope_has_no_connector_warn():
     post = "**⚠️ Заголовок**\n\nОбязательства тикают каждый квартал, а продавать приходится на падении\n\n" + "х" * 400
     _, warns = creator_tools._lint(post, "scope")
     assert not any("ШАБЛОННАЯ ИИ-СВЯЗКА" in w for w in warns)
+
+
+# --- ФОРМА ФИНАЛА кодом (заменила снятого судью-модель, переработка 31.07) ---
+# Судья-модель переписывала концовку САМА — она же 31.07 продублировала абзац и вместе с двумя
+# другими судьями стачивала голос. Теперь форму меряет код и возвращает претензию АВТОРУ.
+
+_FOOT = "🖥 [Канал](https://t.me/x) | ▶️ [Медиа](https://linktr.ee/y)"
+
+
+def _post_with_finale(fin: str) -> str:
+    return ("**⚠️ Заголовок поста**\n\nПервый абзац тела с фактом и цифрой\n\n"
+            "Второй абзац - механизм и вывод\n\n" + fin + "\n\n" + _FOOT)
+
+
+def test_finale_question_flagged():
+    _, warns = creator_tools._lint(_post_with_finale("А кто заплатит за это в итоге?"), "scope")
+    assert any("финал-ВОПРОС" in w for w in warns)
+
+
+def test_finale_hedge_flagged():
+    _, warns = creator_tools._lint(_post_with_finale("Посмотрим, что будет дальше"), "scope")
+    assert any("финал-ХЕДЖ" in w for w in warns)
+
+
+def test_finale_fused_with_caveat_flagged():
+    # реальный класс бага bStocks: вывод спрятан внутри абзаца после разворота
+    fin = "Честно, у медали две стороны. Но кто построил вход без порога, забирает клиента раньше"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert any("СЛИПСЯ С ОГОВОРКОЙ" in w for w in warns)
+
+
+def test_finale_long_flagged():
+    fin = "Первое предложение тут. Второе предложение тут. Третье предложение тоже тут"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert any("предложений" in w for w in warns)
+
+
+def test_good_kicker_clean():
+    # самостоятельный кикер: одно утверждение, стоит отдельно — претензий быть не должно
+    _, warns = creator_tools._lint(_post_with_finale("Годами строили под Биткоин, а первым выкупил AI"), "scope")
+    assert not any(w.startswith("scope: финал") for w in warns)
+
+
+def test_kicker_starting_with_turn_is_ok():
+    # кикер, НАЧИНАЮЩИЙСЯ с «Но» — это сам кикер, а не слипание: не трогаем
+    _, warns = creator_tools._lint(
+        _post_with_finale('Но покупателя последней инстанции больше нет'), "scope")
+    assert not any("СЛИПСЯ" in w for w in warns)
+
+
+def test_finale_not_checked_without_footer():
+    # футера нет → структуру не угадать → молчим (не выдумываем претензии)
+    _, warns = creator_tools._lint("**Заголовок**\n\nтело поста\n\nчто-то ещё?", "scope")
+    assert not any("финал-" in w for w in warns)
