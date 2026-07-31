@@ -269,3 +269,30 @@ def test_headline_personification_warns():
 def test_http_link_in_body_warns():
     _, warns = creator_tools._lint("**Тест**\n\nПодробности тут https://example.com в статье", "flagship")
     assert any("ссылка" in w.lower() for w in warns)
+
+
+# --- дословный ПОВТОР абзаца (баг Strategy 31.07: дубль ушёл в отложку) ---
+
+def test_cuts_duplicate_paragraph():
+    # судья финала продублировал абзац при сплайсе → линтер режет дубль на общем пути сохранения
+    post = ("**⚠️ Заголовок**\n\nТезис на BTC не сломался\n\nТезис на BTC не сломался\n\n"
+            "Но покупателя последней инстанции больше нет")
+    clean, warns = creator_tools._lint(post, "scope")
+    assert clean.count("Тезис на BTC не сломался") == 1        # осталось ПЕРВОЕ вхождение
+    assert "Но покупателя последней инстанции больше нет" in clean   # остальное цело
+    assert any("ПОВТОР абзаца" in w for w in warns)            # владелец видит, что резали
+
+
+def test_keeps_distinct_paragraphs():
+    post = "**⚠️ Заголовок**\n\nПервый абзац про механику\n\nВторой абзац про последствие"
+    clean, warns = creator_tools._lint(post, "scope")
+    assert clean.count("\n\n") == post.count("\n\n")           # ничего не вырезано
+    assert not any("ПОВТОР абзаца" in w for w in warns)
+
+
+def test_short_repeat_line_kept():
+    # короткий рефрен (<15 знаков) — намеренный приём, не режем
+    post = "**⚠️ Заголовок**\n\nИ всё\n\nтело поста тут\n\nИ всё"
+    clean, warns = creator_tools._lint(post, "scope")
+    assert clean.count("И всё") == 2
+    assert not any("ПОВТОР абзаца" in w for w in warns)

@@ -590,6 +590,31 @@ FINALE = (
 _FOOTER_MARK = ("🖥", "t.me/", "[Канал]", "linktr")
 
 
+def _norm_para(s: str) -> str:
+    """Нормализация абзаца для СРАВНЕНИЯ (не для записи): вниз-регистр, без markdown-болда/кавычек/
+    пунктуации, пробелы схлопнуты. Нужна судьям, которые сплайсят куски текста от модели: модель
+    возвращает фразу с «своей» пунктуацией/кавычками, а сравнивать надо по СОДЕРЖАНИЮ (иначе проверка
+    «это точно кусок того же абзаца?» ложно проходит и мы дублируем текст — баг Strategy 31.07)."""
+    s = re.sub(r"[*_`«»\"'“”„]+", "", (s or "").lower())
+    s = re.sub(r"[.,;:!?()\[\]—–-]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _dup_para(paras: list) -> bool:
+    """Есть ли в наборе абзацев ДВА одинаковых по содержанию (нормализованно, ≥15 знаков)? Дословный
+    повтор целого абзаца = всегда баг сплайса, а не приём. Судьи, которые режут/вставляют абзацы, обязаны
+    откатываться на этой проверке — в канал такое уходить не должно (баг Strategy 31.07)."""
+    seen = set()
+    for p in paras:
+        k = _norm_para(p)
+        if len(k) < 15:
+            continue
+        if k in seen:
+            return True
+        seen.add(k)
+    return False
+
+
 def fix_finale(api_key: str | None = None) -> str:
     """СУДЬЯ ФИНАЛА — enforcement концовки (самая частая ручная правка владельца 10+ сессий, scope_manual
     §4.5). Advisory-слой (мануал/уроки) финал НЕ держал — писатель оставлял слабую концовку раз за разом,
@@ -626,6 +651,16 @@ def fix_finale(api_key: str | None = None) -> str:
         kicker = kicker.split("\n\n")[0].strip().strip('«»"').rstrip(" .").strip()
         # ENVELOPE: обе части непусты, кикер короткий (1-2 предложения), оговорка реально меняет исходный
         # абзац — иначе модель напортачила, оставляем как есть («пост обязан быть»).
+        # ⚠️ ГЛАВНОЕ (баг Strategy 31.07): расшивать можно ТОЛЬКО то, что реально СРОСЛОСЬ в ПОСЛЕДНЕМ
+        # абзаце. Модель смотрит весь пост и порой отдаёт «оговорку» из ПРЕДЫДУЩЕГО абзаца — код писал её
+        # поверх финального и вставлял кикер ниже, из-за чего абзац ДУБЛИРОВАЛСЯ дословно и уходил в канал
+        # («Тезис на BTC не сломался» дважды подряд). Обе части ОБЯЗАНЫ происходить из paras[fin_i].
+        _orig_fin = _norm_para(paras[fin_i])
+        _from_finale = _norm_para(caveat) in _orig_fin and _norm_para(kicker) in _orig_fin
+        if not _from_finale:
+            logging.warning("scope судья финала: РАСШИТЬ тянет текст ВНЕ последнего абзаца (риск дубля) — "
+                            "оставляю финал как есть")
+            return post
         if caveat and kicker and _n(kicker) <= 260 and caveat != paras[fin_i].strip():
             paras[fin_i] = caveat
             paras.insert(fin_i + 1, kicker)   # кикер = самостоятельный последний абзац перед футером
@@ -633,6 +668,9 @@ def fix_finale(api_key: str | None = None) -> str:
             while _n("\n\n".join(paras)) > 1350 and cut >= 1 and sum(1 for p in paras if p.strip()) > 3:
                 del paras[cut]
                 cut -= 1
+            if _dup_para(paras):              # второй пояс: расшивка не смеет породить два одинаковых абзаца
+                logging.warning("scope судья финала: расшивка дала ДУБЛЬ абзаца — откатываю, финал как есть")
+                return post
             new_post = "\n\n".join(paras) + sep + tail
             creator_tools.dispatch("save_draft", {"content": new_post, "kind": "scope"})
             logging.info("scope судья финала: кикер расшит из сросшегося контр-блока (§4.5, баг bStocks)")
@@ -650,6 +688,9 @@ def fix_finale(api_key: str | None = None) -> str:
     while _n("\n\n".join(paras)) > 1350 and cut >= 1 and sum(1 for p in paras if p.strip()) > 3:
         del paras[cut]
         cut -= 1
+    if _dup_para(paras):   # переписанный финал повторил уже сказанный абзац — хуже исходного, откат
+        logging.warning("scope судья финала: новый финал ДУБЛИРУЕТ абзац поста — откатываю, финал как есть")
+        return post
     new_post = "\n\n".join(paras) + sep + tail
     creator_tools.dispatch("save_draft", {"content": new_post, "kind": "scope"})
     logging.info("scope судья финала: слабый финал переписан кикером (§4.5)")
