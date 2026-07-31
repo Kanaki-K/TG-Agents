@@ -46,3 +46,36 @@ def test_no_contract_lines_falls_back_to_marker():
     assert verify.has_issues("⚠️ цифра расходится") is True
     assert verify.has_issues("всё сошлось") is False
     assert verify.has_issues("") is False
+
+
+# --- красная линия не должна зависеть от оформления (баг 31.07: выдумка ушла в канал) ---
+
+def test_redline_catches_bold_wrapped_warning():
+    # РЕАЛЬНЫЙ вердикт 31.07: строка начиналась с `**`, проверка требовала ⚠ первым символом →
+    # снос не запустился, и непроверённая атрибуция осталась в опубликованном посте
+    v = ("**⚠️ АТРИБУЦИЯ: «сам Coinkite делал AI-аудит за несколько недель до»** — не прослеживается "
+         "ни в брифе, ни в вебе. Репутационный риск - убрать\nИТОГ: 9✅ / 4⚠️ / 0❓\nСТАТУС: ПРАВКИ")
+    assert verify.has_redline(v) is True
+    assert verify.has_issues(v) is True
+
+
+def test_redline_catches_warning_inside_table_row():
+    # в итоговой таблице значок стоит в третьей колонке, а не в начале строки
+    v = "| 11 | АТРИБУЦИЯ: Coinkite сам делал AI-аудит | ⚠️ не прослеживается - убрать |"
+    assert verify.has_redline(v) is True
+
+
+def test_bullet_and_numbered_warnings_count_as_issues():
+    assert verify.has_issues("- ⚠️ цифра расходится") is True
+    assert verify.has_issues("1. ⚠️ цифра расходится") is True
+    assert verify.has_issues("> **⚠️** цифра расходится") is True
+
+
+def test_plain_numeric_line_is_not_a_warning():
+    # строка, начинающаяся с цифр, не должна превращаться в конфликт после снятия мишуры
+    assert verify.has_issues("594 BTC выведено - совпадает с источником") is False
+
+
+def test_redline_ignores_lines_without_marker():
+    v = "⚠️ «1.5 млрд$» — реально 1.76 млрд$\nИТОГ: 8✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ"
+    assert verify.has_redline(v) is False      # числовой конфликт чинится подстановкой, это не выдумка

@@ -97,7 +97,16 @@ def _recent_scope_titles(hours: float = 48.0) -> list[str]:
                     break
         except Exception:
             continue
-    return out[:8]
+    # ДЕДУП СПИСКА (31.07): один прогон пересохраняет драфт несколько раз (писатель → фикс фактов →
+    # бэкстоп), и один и тот же заголовок попадал в список 4 раза подряд — жрал место в промпте суда
+    # и выглядел как поломка в логе. Порядок (свежие сверху) сохраняем.
+    seen, uniq = set(), []
+    for t in out:
+        k = t.lower().strip()
+        if k not in seen:
+            seen.add(k)
+            uniq.append(t)
+    return uniq[:8]
 
 
 def _threaded(fn, *args):
