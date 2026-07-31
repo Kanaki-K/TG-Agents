@@ -154,3 +154,20 @@ def test_anchor_noop_when_gate_already_picked_recommend():
     theme, weak, swapped = topic_gate.anchor_weak_to_recommend(
         "BTC-кэрри", "слабовато", "BTC-кэрри", "ИСЧЕРПАНО: нет")
     assert swapped is False and theme == "BTC-кэрри"
+
+
+# --- «РЕКОМЕНДУЮ» анти-повтора НЕ доходит до гейта (баг Strategy 31.07) ---------------------------
+# Дедуп отвечает на вопрос «повтор или нет», а не «какую тему брать»: у него нет ни суда пользы, ни
+# бренд-фита, ни правила «действие, а не отчёт о нём». Его готовая рекомендация в тексте якорила гейт —
+# 31.07 дедуп назвал 3-го по силе кандидата, гейт повторил его выбор, и завод написал стухшую новость.
+
+def test_select_strips_recommend_line(monkeypatch):
+    seen = {}
+    def cap(model, system, hist, user, tools, disp, key, thinking, **k):
+        seen["user"] = user
+        return ("ПОВОД: «x»", None)
+    monkeypatch.setattr(topic_gate.llm, "reply", cap)
+    topic_gate.select("🆕 кандидат один — событие 30.07\n**РЕКОМЕНДУЮ**: «взять кандидата три»\n"
+                      "🆕 кандидат два — событие 31.07", today="2026-07-31")
+    assert "взять кандидата три" not in seen["user"]      # готовый ответ дедупа снят
+    assert "кандидат один" in seen["user"] and "кандидат два" in seen["user"]   # разбор цел
