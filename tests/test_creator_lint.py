@@ -395,3 +395,36 @@ def test_long_plain_post_still_gets_hard_length_warn():
     post = "**⚠️ Заголовок**\n\n" + ("разбор механики " * 90) + "\n\n" + _FOOT
     _, warns = creator_tools._lint(post, "scope")
     assert any("⛔ scope ДЛИННЫЙ" in w for w in warns)
+
+
+# --- ЭТАЛОН = ПРИЁМ, А НЕ СТРОКА: копия из мануала/банка/своего поста (владелец 03.08) ---
+
+def test_flags_finale_copied_from_manual_bank():
+    # «Деньги меняют убеждения очень быстро» лежит в scope_manual §4.5 как ПРИМЕР приёма «афоризм»
+    # (и была финалом поста про CLARITY 15.07). 03.08 машина взяла её дословно — линтер обязан вернуть.
+    post = ("**⚡️ Заголовок теста**\n\n3 августа банк открыл счёт бирже - деньги клиентов отдельно\n\n"
+            "Деньги меняют убеждения очень быстро\n\n" + _FOOT)
+    _, warns = creator_tools._lint(post, "scope")
+    assert any("СПИСАН" in w for w in warns)
+    assert any("мануал" in w for w in warns)          # сказано, ОТКУДА списано
+
+
+def test_original_lines_are_not_flagged_as_copy():
+    post = ("**⚡️ Свой заголовок**\n\nЛицензированная площадка получила расчётный счёт под клиентские "
+            "средства\n\nСлова главы банка не поменялись - поменялось поведение банка\n\n" + _FOOT)
+    _, warns = creator_tools._lint(post, "scope")
+    assert not any("СПИСАН" in w for w in warns)
+
+
+def test_short_line_never_counts_as_copy():
+    # короткая общая фраза совпадает с эталонами по словам, но приёмом не является — ложняк дороже
+    assert creator_tools._reused_lines("**Заголовок**\n\nЦифры говорят обратное\n\n" + _FOOT) == []
+
+
+def test_reuse_check_survives_missing_sources(monkeypatch, tmp_path):
+    # выгрузки канала/мануала нет (чистая машина, первый запуск) — линтер не падает, просто не сверяет
+    monkeypatch.setattr(creator_tools.config, "ROOT", tmp_path)
+    creator_tools._REUSE_CACHE.clear()
+    out = creator_tools._reused_lines("**Заголовок**\n\nЛюбая строка поста про повод дня\n\n" + _FOOT)
+    assert isinstance(out, list)          # источников нет → сверять не с чем, но линтер живой
+    creator_tools._REUSE_CACHE.clear()

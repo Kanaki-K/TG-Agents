@@ -428,6 +428,105 @@ def _finale_defects(fin: str) -> list:
     return out
 
 
+# ══ ЭТАЛОН — ЭТО ПРИЁМ, А НЕ СТРОКА (владелец 03.08) ══
+# 03.08 короткий пост закрылся строкой «Деньги меняют убеждения очень быстро». Она не выдумана: лежит в
+# scope_manual §4.5 как ПРИМЕР приёма «афоризм», а до того была финалом поста про CLARITY (15.07),
+# который владелец написал руками. Мануал прямо просит «изучи ход мысли, не копируй дословно» — и это
+# ровно та просьба-в-промпте, которую модель уже игнорировала на заголовке и на длине. Владелец: «он
+# должен УМЕТЬ такое делать, а не копировать». Значит меряем КОДОМ и возвращаем претензию АВТОРУ, пока
+# он в контексте (судей текста не воскрешаем — переработка 31.07).
+# Сверяем с ТРЕМЯ корпусами сразу: примеры мануала (учебные строки), банк заголовков (утверждённые
+# крючки) и уже ВЫШЕДШИЕ посты канала (свой же текст дважды = читатель видит самоповтор).
+_REUSE_MIN_TOKENS = 4        # короче — это общая фраза, а не приём (ложняки дороже пропуска)
+_REUSE_JACCARD = 0.7         # та же строка «своими словами» — тоже копия
+_REUSE_LOOKBACK = 80         # своих постов сверяем последние N (≈полгода канала), свежий самоповтор виднее
+_REUSE_CACHE: dict = {}
+
+
+def _reuse_norm(s: str) -> set:
+    """Токены строки для сравнения с эталоном: слова ≥4 букв и числа, без разметки/эмодзи/пунктуации."""
+    return {t.lower() for t in re.findall(r"[0-9]+|[a-zа-яё]{4,}", (s or "").lower(), re.UNICODE)}
+
+
+def _reuse_bank() -> list:
+    """[(токены, откуда)] — строки, которые писателю нельзя выдавать за свои. Кэш по mtime источников.
+
+    Сбой чтения любого источника не роняет линтер: что прочиталось, с тем и сверяем (fail-open).
+    """
+    manual = config.ROOT / "memory" / "scope_manual.md"
+    heads = config.ROOT / "memory" / "headline_bank.md"
+    posts_json = config.ROOT / "data" / "channel_posts.json"
+    key = tuple(p.stat().st_mtime if p.exists() else 0 for p in (manual, heads, posts_json))
+    if _REUSE_CACHE.get("key") == key:
+        return _REUSE_CACHE["bank"]
+    bank: list = []
+
+    def _add(line: str, origin: str) -> None:
+        toks = _reuse_norm(line)
+        if len(toks) >= _REUSE_MIN_TOKENS:
+            bank.append((toks, origin))
+
+    try:
+        for ln in manual.read_text(encoding="utf-8").splitlines():
+            s = ln.strip()
+            if s.startswith(">"):                                   # эталоны §8 — цитата-блоком
+                _add(s.lstrip("> ").strip(), "пример из мануала (§8 эталон)")
+            for frag in re.findall(r"«([^»]{20,})»", s):             # банк финалов §4.5 — в ёлочках
+                _add(frag, "пример из мануала (§4.5 банк финалов)")
+    except Exception:
+        logging.exception("анти-копия: не прочитал scope_manual — сверяю без него")
+    try:
+        for ln in heads.read_text(encoding="utf-8").splitlines():
+            if ln.strip().startswith("- "):
+                _add(ln.strip()[2:], "банк заголовков (уже был на канале)")
+    except Exception:
+        logging.exception("анти-копия: не прочитал headline_bank — сверяю без него")
+    try:
+        posts = [p for p in analytics._load_posts() if p.get("dt")]
+        posts.sort(key=lambda p: p["dt"], reverse=True)
+        for p in posts[:_REUSE_LOOKBACK]:
+            for ln in (p.get("text") or "").splitlines():
+                if not any(m in ln for m in _FOOTER_MARK):
+                    _add(ln, f"пост #{p['id']} от {p['date'][:10]}")
+    except Exception:
+        logging.exception("анти-копия: выгрузка канала недоступна — сверяю только с мануалом/банком")
+    _REUSE_CACHE.update(key=key, bank=bank)
+    return bank
+
+
+def _reused_lines(clean: str, limit: int = 2) -> list:
+    """Претензии по строкам, скопированным с эталона/прошлого поста (для линтера scope).
+
+    Меряем ПОКРЫТИЕ токенов в обе стороны (Жаккар): дословная копия и «та же мысль теми же словами»
+    ловятся одинаково, а нормальное совпадение темы (общие имена/цифры повода) до порога не дотягивает.
+    """
+    body = (clean or "").split("[[SPLIT]]")[0]
+    fin_text = _finale_para(clean)
+    bank = _reuse_bank()
+    if not bank:
+        return []
+    out: list = []
+    for ln in body.splitlines():
+        s = ln.strip()
+        if not s or any(m in s for m in _FOOTER_MARK):
+            continue
+        toks = _reuse_norm(s)
+        if len(toks) < _REUSE_MIN_TOKENS:
+            continue
+        for btoks, origin in bank:
+            inter = len(toks & btoks)
+            if inter and inter / len(toks | btoks) >= _REUSE_JACCARD:
+                where = "ФИНАЛ" if fin_text and s in fin_text else "строка"
+                out.append(
+                    f"scope: {where} СПИСАН с эталона — «{s.replace('**', '')[:70]}» уже есть как "
+                    f"{origin}. Эталон показывает ПРИЁМ (ход мысли), а не текст: напиши СВОЮ строку "
+                    f"на этом приёме. Дословный повтор своей же строки читатель узнаёт")
+                break
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _title_keep_first(head: str) -> str:
     """Оставить в заголовке РОВНО ПЕРВУЮ мысль (владелец 20.07/27.07 СТРОГО: одно утверждение ЛИБО
     вопрос, без двойника — ни через точку, ни через тире). Раньше правило было только warn — модель его
@@ -740,6 +839,9 @@ def _lint(content: str, kind: str = "") -> tuple:
                 head = _one
                 warns.append("scope: заголовок был ДВОЙНЫМ (через точку ИЛИ тире) — оставил РОВНО первую "
                              "мысль (детерминированно, владелец 20.07/27.07). Проверь, что крючок не потерялся.")
+        # КОПИЯ ЭТАЛОНА/СВОЕЙ ЖЕ СТРОКИ (владелец 03.08: «дублировать всё с примеров — плохо, он должен
+        # УМЕТЬ такое делать»). Возвращаем автору, правит он сам — как форму финала.
+        warns.extend(_reused_lines(clean))
         if "💭" in clean or "Вопрос к Вам" in clean:
             warns.append("scope: УБЕРИ флагман-закрытие 💭 «Вопрос к Вам» — в коротком финал это обычная "
                          "строка-вывод, а не отдельный раздел-вопрос")
