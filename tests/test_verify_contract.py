@@ -90,3 +90,21 @@ def test_incomplete_scope_reads_as_redline():
          "также Mk4, Mk5 и Q\nИТОГ: 8✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ")
     assert verify.has_redline(v) is True
     assert verify.has_issues(v) is True
+
+
+# --- расхождение источников ≠ конфликт поста (вред 03.08) --------------------------------------
+
+def test_contract_forbids_edit_when_sources_disagree():
+    # 03.08 2FA потребовал заменить верные 215 млн$ на 206 из витрины-агрегатора, а на перепроверке
+    # сам написал «все репутабельные источники дают 214.7-215». Верное число менять запрещено.
+    for text in (verify.VERIFIER_SYSTEM, verify.SCOPE_SOURCE_CHECK):
+        assert "РАСХОДЯТСЯ" in text.upper()
+    assert "агрегатор" in verify.SCOPE_SOURCE_CHECK.lower()
+    assert "ПЕРВОИСТОЧНИК" in verify.SCOPE_SOURCE_CHECK      # приоритет истины задан явно
+
+
+def test_contract_checks_completeness_of_counting_thesis():
+    # «две точки складываются в линию», а банка было три (DBS, Deutsche Bank, JPMorgan)
+    s = verify.VERIFIER_SYSTEM
+    assert "ПОЛНОТА РЯДА" in s
+    assert "Deutsche Bank" in s
