@@ -165,3 +165,21 @@ def test_off_brand_block_parses_only_that_section(monkeypatch, tmp_path):
 def test_off_brand_block_missing_file_failopen(monkeypatch, tmp_path):
     monkeypatch.setattr(topic_gate.config, "ROOT", tmp_path)
     assert topic_gate._off_brand_block() == ""
+
+
+# --- «как БУДЕТ» — не повод (владелец 03.08) ---------------------------------------------------
+
+def test_contract_bans_future_action():
+    # 03.08 гейт взял BIP-110 («окно откроется 7-15 августа»), сам же назвав это будущим событием,
+    # и отложил в резерв повод с действием «сегодня». Правило должно стоять в контракте явно.
+    s = topic_gate._SYSTEM
+    assert "ЕЩЁ НЕ ПРОИЗОШЛО" in s
+    assert "BIP-110" in s                                   # разобранный случай, а не абстракция
+    assert "самый низ" in s                                 # ранг: ниже старья
+    assert "ИСЧЕРПАНО: да" in s.split("ГРАНИЦА")[1][:600]   # только будущее → идём за свежей разведкой
+
+
+def test_contract_keeps_done_action_with_later_effect():
+    # закон подписан вчера, вступает в силу в январе — это СЛУЧИВШЕЕСЯ действие, повод годен
+    assert "ГРАНИЦА" in topic_gate._SYSTEM
+    assert "вступает в силу" in topic_gate._SYSTEM
