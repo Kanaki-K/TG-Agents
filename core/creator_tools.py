@@ -28,7 +28,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from connectors.telegram_publish import publish
-from core import analytics, analytics_tools, config, content_plan, io_safe, market_tools, untrusted
+from core import (analytics, analytics_tools, config, content_plan, cover_variety, io_safe,
+                  market_tools, untrusted)
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -135,7 +136,9 @@ TOOLS = [
                        "прошлые). Рендер идёт через бёрнер ChatGPT (веб, «руки»). "
                        "Вызывай ОДИН раз, когда чистый текст драфта готов. Передай title (заголовок поста ТОЧНО "
                        "как в посте) и post_text (полный финальный текст). Промпт по стилю канала соберётся сам "
-                       "из шаблона (memory/image_prompt.md) — сам стиль НЕ пиши. Картинка уйдёт владельцу в чат "
+                       "из шаблона (memory/image_prompt.md) — сам стиль НЕ пиши. Композицию кадра тоже задаёт "
+                       "система (анти-повтор: не как на прошлых обложках) — не описывай её в аргументах. "
+                       "Картинка уйдёт владельцу в чат "
                        "отдельным фото. Это «руки», связь живая не всегда: если ChatGPT недоступен/сессия "
                        "протухла/лимит — инструмент вернёт ПОНЯТНУЮ причину и что владельцу сделать; тогда "
                        "проговори это ДОСЛОВНО и ВСЁ РАВНО выдай текст поста — картинка бонус, не блокер.",
@@ -947,10 +950,22 @@ def _clean_title(title: str) -> str:
     return t.strip(" -–—•|").strip()
 
 
-def _build_image_prompt(title: str, post_text: str, palette: str = "") -> str:
+def _put_block(text: str, marker: str, block: str) -> str:
+    """Вставить блок на место маркера. Блок пуст → маркер УБИРАЕМ (в промпт не должен утечь «[КАДР…]»).
+    Маркера в шаблоне нет (владелец переписал его по-своему) → дописываем блок в конец, чтобы
+    анти-повтор не пропал молча."""
+    if marker in text:
+        return text.replace(marker, block if block else "").strip()
+    return f"{text}\n\n{block}" if block else text
+
+
+def _build_image_prompt(title: str, post_text: str, palette: str = "",
+                        shot_block: str = "", forbid_block: str = "") -> str:
     """Собрать промпт картинки: шаблон стиля (memory/image_prompt.md) + заголовок, текст, палитра.
 
     palette необязательна: пусто → шаблон сам берёт НЕЙТРАЛЬНУЮ по умолчанию.
+    shot_block/forbid_block — анти-повтор кадра от core.cover_variety (какие схемы композиции
+    брать в этот раз и что не повторять с прошлых обложек). Пусто → промпт как раньше.
     """
     try:
         tpl = IMAGE_PROMPT.read_text(encoding="utf-8") if IMAGE_PROMPT.exists() else _DEFAULT_IMAGE_PROMPT
@@ -965,7 +980,9 @@ def _build_image_prompt(title: str, post_text: str, palette: str = "") -> str:
     palette = (palette or "").strip()
     if palette:  # явный выбор владельца перекрывает строку ПАЛИТРА в шаблоне
         out = re.sub(r"(?m)^ПАЛИТРА:.*$", f"ПАЛИТРА: {palette}", out, count=1)
-    return out
+    out = _put_block(out, "[КАДР В ЭТОТ РАЗ]", shot_block)
+    out = _put_block(out, "[НЕ ПОВТОРЯТЬ]", forbid_block)
+    return re.sub(r"\n{3,}", "\n\n", out)  # после выреза пустых маркеров не оставляем дыр
 
 
 def _make_image(args: dict) -> str:
@@ -980,7 +997,21 @@ def _make_image(args: dict) -> str:
     post_text = str(args.get("post_text", "") or "").strip()
     if not title or not post_text:
         return "Для обложки нужны и заголовок (title), и полный текст поста (post_text)."
-    prompt = _build_image_prompt(title, post_text, str(args.get("palette", "") or ""))
+    # Анти-повтор кадра: код выбирает схемы композиции, которых не было на последних обложках, и
+    # перечисляет залипшие признаки в запрет. Всё в try — сломанный банк/журнал не должен лишать
+    # поста картинки (мягкая деградация, как и вся эта функция).
+    offered: list[str] = []
+    shot_block = forbid_block = ""
+    try:
+        history = cover_variety.recent()
+        shot_block, forbid_block, offered = cover_variety.build_blocks(cover_variety.load_shots(), history)
+        if offered:
+            logging.info("[cover] кадры в этот раз: %s | запрет: %s",
+                         ", ".join(offered), cover_variety.stuck_traits(history) or "—")
+    except Exception:
+        logging.exception("[cover] анти-повтор кадра не собрался — рисую обложку без него")
+    prompt = _build_image_prompt(title, post_text, str(args.get("palette", "") or ""),
+                                 shot_block, forbid_block)
     try:
         from connectors.gpt_image import generate as gpt_image
     except Exception as e:  # коннектор/зависимости не на месте — не валим пост
@@ -998,6 +1029,13 @@ def _make_image(args: dict) -> str:
         return (f"⚠️ Обложку сделать не вышло — неожиданный сбой связи с ChatGPT ({e}).\n"
                 "Выдай владельцу текст поста без обложки. При повторе пусть проверит вход: "
                 "python -m connectors.gpt_image.login check")
+    # Обратная связь анти-повтора: смотрим на ГОТОВУЮ картинку дешёвым vision и пишем в журнал, что
+    # вышло НА САМОМ ДЕЛЕ (а не что просили) — иначе штамп протечёт снова: ChatGPT рисует спину и
+    # закат даже там, где мы их не заказывали. Vision недоступен → запись без признаков, не беда.
+    try:
+        cover_variety.log_cover(offered, cover_variety.describe(path), title)
+    except Exception:
+        logging.exception("[cover] журнал обложек не обновился — анти-повтор будет слепее")
     try:  # кладём путь в аутбокс — рантайм отправит фото в чат после этого хода
         MEDIA_OUTBOX.parent.mkdir(parents=True, exist_ok=True)
         with open(MEDIA_OUTBOX, "a", encoding="utf-8") as f:
