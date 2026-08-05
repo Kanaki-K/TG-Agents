@@ -40,7 +40,7 @@ from pathlib import Path
 
 from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
                   logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools,
-                  self_learn, topic_category, topic_gate, verify)
+                  self_learn, text_match, topic_category, topic_gate, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
@@ -67,6 +67,9 @@ def _latest_brief_age_hours() -> float | None:
         return None
     newest = max(p.stat().st_mtime for p in files)
     return (time.time() - newest) / 3600.0
+
+
+_clip = text_match.clip  # обрезка панели по границе слова (core/text_match: покрыта тестом)
 
 
 def _latest_draft_mtime() -> float:
@@ -441,7 +444,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # сделанного, чтобы он не сдрейфовал в уже написанное.
         avoid = "; ".join(_recent[:6])
         if scope_rec:
-            panel["🎯 тема"] = scope_rec[:52] + (f"  ⚠{scope_weak[:34]}" if scope_weak else "")
+            panel["🎯 тема"] = _clip(scope_rec, 52) + (f"  ⚠{_clip(scope_weak, 34)}" if scope_weak else "")
             _use = topic_gate.parse_usefulness(tg_verdict)
             if _use:
                 panel["💡 польза"] = _use[:60]
@@ -451,7 +454,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             # молча, и увидеть, что система выбросила сильный повод, можно было только вычитав весь лог.
             _rej = topic_gate.parse_rejected(tg_verdict)
             if _rej:
-                panel["🗑 отклонено"] = "; ".join(r[:30] for r in _rej[:2])
+                panel["🗑 отклонено"] = "; ".join(_clip(r, 30) for r in _rej[:2])
                 out("🗑 Отклонённые поводы (проверь, не выброшено ли лучшее):")
                 for _r in _rej:
                     out(f"   • {_r}")
@@ -500,12 +503,27 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             sv = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=fkey,
                                     scope=True, web=True)
             out("🔎 [2FA scope · ВЕБ-сверка с Тир-1] Проверка опубликуемого драфта:\n" + str(sv) + "\n")
-            if verify.has_issues(sv):
+            # ПОЛНОТА РЯДА — ВЛАДЕЛЬЦУ, НЕ В АВТО-ПРАВКУ (вред 05.08). Это единственный класс замечаний,
+            # который просит ДОПИСАТЬ участника, и цена его ошибки обратная всем прочим: неполный ряд
+            # ослабляет тезис, вписанное непроверенное имя = фабрикация в канале. 05.08 вердикт требовал
+            # дополнить список операторов Arc с пяти до десяти ПО БРИФУ (сам оговорившись, что веб анонс
+            # не подтвердил), правка послушно вписала — и в отложку уехали Sumitomo и Standard Chartered,
+            # инвесторы предпродажи, никогда не бывшие операторами. Дописывать людей решает человек.
+            _gaps = verify.completeness_notes(sv)
+            _before_fix = (verify.latest_draft() or "").split("[[SPLIT]]")[0]
+            if verify.has_issues(sv) and verify.only_completeness(sv):
+                # ЕДИНСТВЕННОЕ замечание — «ряд неполон». Править нечего: дописывать участников решает
+                # владелец, а гонять круг Sonnet с вердиктом, из которого всё вычищено, — плата за ноль.
+                panel["🔎 2FA scope"] = "цифры чисты; 2FA считает ряд неполным — решай сам"
+                out("✅ Расхождений с реальными источниками нет. Единственное замечание — полнота ряда "
+                    "(ниже), пост не правил.\n")
+            elif verify.has_issues(sv):
                 out("🛠 2FA: цифры расходятся с реальными источниками — правлю по ВЕБ-проверенным значениям "
                     "(бриф мог врать):")
-                post = _threaded(scope_writer.fix_facts, sv, fkey) or post
+                post = _threaded(scope_writer.fix_facts, verify.strip_completeness(sv), fkey) or post
                 sv2 = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=fkey,
                                          scope=True, web=True)
+                _gaps += verify.completeness_notes(sv2)
                 # КРАСНАЯ ЛИНИЯ (владелец 29.07: выдумывание фактов = абсолютный стоп). Непроверённый
                 # УЧАСТНИК/атрибуция — не «мелкий нюанс», его нельзя публиковать даже пометкой (баг 29.07:
                 # пост ушёл с невериф. «BlackRock — клиент DTA»). Числовой конфликт fix_facts чинит
@@ -518,11 +536,30 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 if verify.has_redline(sv2):
                     out("⛔ 2FA: остался НЕПРОВЕРЕННЫЙ участник/источник (красная линия — выдумку публиковать "
                         "нельзя) — сношу прицельно:")
-                    post = _threaded(scope_writer.fix_facts, sv2, fkey) or post
-                    panel["🔎 2FA scope"] = "⛔ был невериф. участник — снёс; ПРОВЕРЬ глазами до одобрения"
-                    out("⛔ ВНИМАНИЕ: в посте был непроверённый участник/источник. Снёс прицельным проходом, "
-                        "но повторно вебом НЕ сверял — глянь в «Отложенных», что сущность действительно "
-                        "ушла:\n" + str(sv2) + "\n")
+                    _targets = verify.redline_targets(sv2)
+                    post = _threaded(scope_writer.fix_facts, verify.strip_completeness(sv2), fkey) or post
+                    # СНОС ПРОВЕРЯЕМ КОДОМ, А НЕ НА СЛОВО (05.08). Веб-сверку третьим кругом не возвращаем
+                    # (её сняли 31.07 за $0.2 — решение в силе), но убедиться, что помеченный фрагмент
+                    # ИСЧЕЗ из текста, стоит ноль. Раньше проверки не было вообще: пайплайн печатал «снёс»,
+                    # не заглянув в результат, — и 05.08 соврал владельцу, потому что проход не только не
+                    # снёс, но и дописал непроверенных участников. Осталась цель — ещё один прицельный
+                    # проход (~$0.04, без веба); осталась и после него — говорим прямо, что снос НЕ удался.
+                    _left = verify.targets_left((post or "").split("[[SPLIT]]")[0], _targets)
+                    if _left:
+                        out(f"⛔ Снос НЕ подтверждён кодом (в тексте осталось: {'; '.join(_left)}) — "
+                            "повторяю прицельный проход:")
+                        post = _threaded(scope_writer.fix_facts, verify.strip_completeness(sv2), fkey) or post
+                        _left = verify.targets_left((post or "").split("[[SPLIT]]")[0], _targets)
+                    if _left:
+                        panel["🔎 2FA scope"] = ("⛔ ВЫДУМКА НЕ СНЕСЕНА (" + _clip("; ".join(_left), 40) +
+                                                ") — НЕ одобряй, правь руками")
+                        out("⛔⛔ КРАСНАЯ ЛИНИЯ ОСТАЛАСЬ В ТЕКСТЕ после двух проходов: " +
+                            "; ".join(_left) + "\nПост в отложке НЕ одобряй, пока не уберёшь это руками.\n")
+                    else:
+                        panel["🔎 2FA scope"] = "⛔ был невериф. участник — снёс (проверено кодом); глянь глазами"
+                        out("⛔ ВНИМАНИЕ: в посте был непроверённый участник/источник. Снёс прицельным "
+                            "проходом; код подтвердил, что помеченный фрагмент из текста ушёл. Повторно "
+                            "вебом НЕ сверял — глянь в «Отложенных»:\n" + str(sv2) + "\n")
                 elif verify.has_issues(sv2):
                     # ОСТАТОЧНЫЙ ЧИСЛОВОЙ ⚠️ (не красная линия) — не стопаем (урок 22.07: стоп на педантичном
                     # нюансе «The Open Platform ≠ TON Foundation» = $1.3 и ноль). Герой-цифры уже приведены к
@@ -534,8 +571,28 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                     panel["🔎 2FA scope"] = "цифры сверены с вебом (Тир-1), расхождения исправлены"
                     out("✅ Цифры приведены к реально подтверждённым (веб):")
                 out((post or "").split("[[SPLIT]]")[0].strip()[:600] + "\n")
+                # СТРАЖ НОВЫХ ИМЁН — детерминированно, поверх всех авто-правок (05.08). Класс ошибки
+                # «правка внесла в пост сущность, которой там не было» раньше ловился только глазами
+                # владельца — а это и есть фабрикация в канале. Код не судит, выдумка это или законная
+                # замена: он называет новые имена, решает человек. Как find_attributions — показать, КУДА
+                # смотреть. Пост не блокируем: 2FA мог законно заменить неверное имя на верное.
+                _added = verify.new_entities(_before_fix, (post or "").split("[[SPLIT]]")[0])
+                if _added:
+                    panel["🆕 правка вписала"] = _clip(", ".join(_added), 46) + " — сверь с источником"
+                    out("🆕 ВНИМАНИЕ: авто-правка ДОПИСАЛА в пост имена, которых в нём не было: " +
+                        ", ".join(_added) + "\n   Проверь по первоисточнику, что каждое реально участвует "
+                        "И ИМЕННО В ЭТОЙ РОЛИ (05.08 так уехали инвесторы предпродажи, записанные в "
+                        "операторы сети).\n")
             else:
                 panel["🔎 2FA scope"] = "✓ цифры сверены с реальными источниками (веб)"
+            # ПОЛНОТА РЯДА — отдельной строкой владельцу, постом никто не правит (см. выше).
+            if _gaps:
+                panel["➕ полнота ряда"] = "2FA считает, ряд неполон — решай сам"
+                out("➕ 2FA считает, что в считающем тезисе не хватает участников (пост НЕ правил — "
+                    "дописывать решаешь ты, проверив по первоисточнику):")
+                for _g in _gaps[:4]:
+                    out(f"   • {_g[:300]}")
+                out("")
         except Exception:
             logging.exception("2FA веб-сверка scope упала — пропускаю (сбой не блокирует публикацию)")
         # СНЯТЫ 31.07 — ТРИ СУДЬИ ТЕКСТА (редактура, завершённость мыслей, судья финала).

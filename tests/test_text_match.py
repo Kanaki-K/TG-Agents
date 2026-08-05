@@ -18,3 +18,30 @@ def test_coverage_identical_and_disjoint():
 def test_coverage_partial():
     # 2 из 3 токенов короткого покрыты длинным
     assert tm.coverage("иксы врут случайность", "иксы врут доходность") == 2 / 3
+
+
+# --- обрезка для ИТОГ-панели: обрыв посреди слова врал владельцу (05.08) ------------------------
+
+def test_clip_cuts_on_word_boundary():
+    # было: «Circle объявила валидаторов Arc — BlackRock, Visa, D» — обрыв посреди имени
+    s = "Circle объявила валидаторов Arc - BlackRock, Visa, DTCC становятся узлами"
+    out = tm.clip(s, 52)
+    assert out.endswith("…")
+    assert len(out) <= 53
+    assert not out.rstrip("…").endswith(("D", ","))     # ни обрубка слова, ни висячей запятой
+
+
+def test_clip_keeps_short_text_untouched():
+    assert tm.clip("короткая тема", 52) == "короткая тема"
+    assert tm.clip("", 10) == ""
+    assert tm.clip(None, 10) == ""
+
+
+def test_clip_normalizes_whitespace():
+    assert tm.clip("две   строки\nв одной", 40) == "две строки в одной"
+
+
+def test_clip_handles_single_long_word():
+    # одно слово длиннее лимита — режем жёстко, но обрыв всё равно помечаем
+    out = tm.clip("A" * 80, 10)
+    assert out == "A" * 10 + "…"

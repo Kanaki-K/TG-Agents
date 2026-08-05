@@ -183,3 +183,24 @@ def test_contract_keeps_done_action_with_later_effect():
     # закон подписан вчера, вступает в силу в январе — это СЛУЧИВШЕЕСЯ действие, повод годен
     assert "ГРАНИЦА" in topic_gate._SYSTEM
     assert "вступает в силу" in topic_gate._SYSTEM
+
+
+def test_rejected_split_survives_semicolon_inside_reason():
+    # Баг 05.08: причина отказа сама содержала «;» («продукт "coming soon"; тезис верный, но слабее
+    # Arc»), наивный split по «;» разорвал её пополам — владелец увидел в отчёте ПЯТЬ отклонённых
+    # поводов вместо четырёх, причём один был обрывком причины предыдущего. Граница — «;» ПЕРЕД
+    # кавычкой следующего повода, как и велит контракт.
+    v = ('ОТКЛОНЕНО: «Cloudflare Wallets» — продукт «coming soon», архитектура без работающего '
+         'продукта; тезис верный, но слабее Arc по конкретности действия; «500-Day Rule» — действие '
+         '(халвинг) 2+ года назад; «EIP-8363» — дата действия не определена')
+    rej = topic_gate.parse_rejected(v)
+    assert len(rej) == 3
+    assert rej[0].startswith("Cloudflare Wallets")
+    assert "тезис верный" in rej[0]          # причина осталась ЦЕЛОЙ, а не стала отдельным «поводом»
+    assert rej[1].startswith("500-Day Rule")
+    assert rej[2].startswith("EIP-8363")
+
+
+def test_rejected_falls_back_when_model_gave_no_quotes():
+    # контракт не соблюдён (кавычек нет) — лучше грубо разбить, чем показать одной простынёй
+    assert len(topic_gate.parse_rejected("ОТКЛОНЕНО: поток ETF; повтор темы; старьё")) == 3

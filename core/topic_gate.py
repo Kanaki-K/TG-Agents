@@ -206,8 +206,23 @@ def parse_rejected(verdict: str) -> list:
             body = m.group(1).strip().strip("*").strip()
             if body.lower().startswith(("нет", "—", "-")) and len(body) < 12:
                 return []
-            return [p.strip().strip("«»\"' ") for p in body.split(";") if p.strip()]
+            return _split_rejected(body)
     return []
+
+
+# Разделитель поводов — «;» ПЕРЕД открывающей кавычкой следующего повода, а не любая «;».
+# Баг 05.08: причина отказа сама содержала «;» («продукт "coming soon"; тезис верный, но слабее Arc»),
+# и наивный split по «;» разорвал её пополам — владелец увидел в отчёте ПЯТЬ отклонённых поводов вместо
+# четырёх, причём один был обрывком причины предыдущего. Контракт (_SYSTEM) велит писать поводы как
+# «<повод>» — причина; «<повод>» — причина, поэтому кавычка и есть надёжная граница.
+_REJ_SPLIT_RE = re.compile(r";\s*(?=[«\"])")
+
+
+def _split_rejected(body: str) -> list:
+    """Строку ОТКЛОНЕНО → список поводов. Нет ни одной кавычки (модель не соблюла контракт) — фолбэк
+    на старое поведение: лучше показать грубо разбитым, чем одной простынёй."""
+    parts = _REJ_SPLIT_RE.split(body) if "«" in body or '"' in body else body.split(";")
+    return [p.strip().strip("«»\"' ").strip() for p in parts if p.strip()]
 
 
 def parse_usefulness(verdict: str) -> str:
