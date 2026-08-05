@@ -428,3 +428,50 @@ def test_reuse_check_survives_missing_sources(monkeypatch, tmp_path):
     out = creator_tools._reused_lines("**Заголовок**\n\nЛюбая строка поста про повод дня\n\n" + _FOOT)
     assert isinstance(out, list)          # источников нет → сверять не с чем, но линтер живой
     creator_tools._REUSE_CACHE.clear()
+
+
+# --- дыры в детекторах, найденные редактурой владельца 05.08 (пост про Cloudflare Wallets) ---
+# Ни одной фактической ошибки в посте не было (2FA дал 7✅/0⚠), но три правки владельца попадали в
+# классы, которые линтер УЖЕ умеет ловить и пропустил из-за узких мест — регистра и словарей.
+
+def test_eto_ne_x_eto_y_caught_after_dash():
+    # штамп сидел не в начале предложения, а в хвосте через тире — детектор требовал заглавной «Это»
+    # в ОБЕИХ половинах и такую форму пропускал: «...для агентного интернета - это не пилот. Это фундамент»
+    body = ("**⚡️ Заголовок поста тут**\n\nКогда такая компания выбирает платёжную архитектуру для "
+            "агентного интернета - это не пилот. Это фундамент\n\nхвост поста")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("Это не X. Это Y" in w for w in warns)
+
+
+def test_eto_ne_x_eto_y_still_caught_at_sentence_start():
+    body = "**⚡️ Заголовок**\n\nЭто не эксперимент. Это архитектура расчётов\n\nхвост"
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("Это не X. Это Y" in w for w in warns)
+
+
+def test_plain_negation_inside_one_sentence_not_flagged():
+    # обычное «это не так, это иначе» внутри фразы штампом не считаем (вторая часть без заглавной)
+    body = "**⚡️ Заголовок**\n\nДля инвестора это не мелочь, это меняет расклад\n\nхвост"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("Это не X. Это Y" in w for w in warns)
+
+
+def test_solo_label_lead_in_warns_for_scope():
+    # «Честно:» — тот же ярлык-раздел, только в одно слово; список ловил лишь составные («риск честно»)
+    body = ("**⚡️ Заголовок поста тут**\n\nтело поста\n\nЧестно: пока открылось только резервирование, "
+            "реальные платежи обещают позже\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("подводку-ярлык" in w for w in warns)
+
+
+def test_honest_inside_line_is_not_a_label():
+    # «честно» живой строкой — норма (мануал прямо велит вплетать оговорку в фразу)
+    body = ("**⚡️ Заголовок поста тут**\n\nповод честно позитивный, и оптика тут честно в плюс\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("подводку-ярлык" in w for w in warns)
+
+
+def test_handle_anglicism_warns():
+    body = "**⚡️ Заголовок**\n\nПока открылось только резервирование handle\n\nфинал"
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("англицизмы" in w and "handle" in w for w in warns)
