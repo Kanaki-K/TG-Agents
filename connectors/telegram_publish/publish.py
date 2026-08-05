@@ -239,6 +239,41 @@ def scheduled_times(channel: str) -> list:
     return asyncio.run(_scheduled_async((channel or "").strip()))
 
 
+async def _scheduled_texts_async(channel: str) -> list:
+    """Тексты отложенных постов канала (для анти-повтора). Сбой/нет сессии → [] (fail-open)."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return []
+        try:
+            entity = await _resolve_entity(client, channel)
+            msgs = await client.get_messages(entity, scheduled=True, limit=100)
+        except Exception:
+            logging.exception("[публикатор] не смог прочитать тексты отложенных")
+            return []
+        return [m.message for m in msgs if getattr(m, "message", None)]
+    finally:
+        await client.disconnect()
+
+
+def scheduled_texts(channel: str) -> list:
+    """Синхронно: тексты постов, лежащих в отложке канала.
+
+    Зачем отдельно от scheduled_times (баг 05.08): анти-повтор смотрел только в ЧЕРНОВИКИ на диске, а
+    отложка — это ИСТИНА о том, что реально выйдет. Отличия критичны: (1) владелец правит пост уже В
+    ОТЛОЖКЕ, и его финальный заголовок черновику неизвестен; (2) слоты уходят на 3-5 дней вперёд, то
+    есть пост живёт в очереди дольше, чем окно свежести черновиков. Из-за этого канал получил два поста
+    про валидаторов сети Arc подряд. Никогда не бросает: нет сессии/сети → [], гейт отработает на
+    черновиках.
+    """
+    try:
+        return asyncio.run(_scheduled_texts_async((channel or "").strip()))
+    except Exception:
+        logging.exception("[публикатор] чтение отложенных упало — анти-повтор пойдёт по черновикам")
+        return []
+
+
 async def _notify_async(user: str, text: str) -> dict:
     """Отправить ЛС от аккаунта-публикатора пользователю (мейну владельца). user — @username/t.me/id."""
     client = _client()

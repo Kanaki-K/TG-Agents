@@ -38,6 +38,7 @@ import sys
 import time
 from pathlib import Path
 
+from connectors.telegram_publish import publish
 from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
                   logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools,
                   self_learn, text_match, topic_category, topic_gate, verify)
@@ -79,25 +80,42 @@ def _latest_draft_mtime() -> float:
     return files[0].stat().st_mtime if files else 0.0
 
 
+_post_gist = text_match.post_gist  # заголовок+лид поста для анти-повтора (core/text_match: покрыт тестом)
+
+
 def _recent_scope_titles(hours: float = 48.0) -> list[str]:
-    """Заголовки постов, СГЕНЕРированных за последние `hours` (черновики на диске) — чтобы гейт темы НЕ
-    выбрал ту же тему повторно. Баг 22.07: дедуп сверяет с ОПУБЛИКОВАННЫМ каналом (channel_posts.json), а
-    свежие драфты/отложка прошлых прогонов ему НЕВИДИМЫ → 3 прогона на одном брифе дали Gram-кошелёк 3× в
-    отложку. Читаем первую значимую строку (заголовок) свежих драфтов — гейт исключает эти темы."""
+    """Суть постов, которые УЖЕ сделаны, но ещё не вышли, — чтобы гейт темы не выбрал их повторно.
+
+    ДВА ИСТОЧНИКА, и порядок важен:
+      1) ОТЛОЖКА КАНАЛА — истина о том, что реально выйдет. Владелец правит пост уже в отложке (его
+         финальный заголовок черновику неизвестен), а слоты уходят на 3-5 дней вперёд — дольше, чем
+         окно свежести черновиков. Без этого источника пост, лежащий в очереди четвёртые сутки,
+         становился для гейта невидимым;
+      2) ЧЕРНОВИКИ за `hours` — страховка на случай, когда публикация не удалась или сессии нет.
+    Баг 22.07 (исходный): дедуп сверял только с ОПУБЛИКОВАННЫМ каналом, и три прогона на одном брифе
+    дали Gram-кошелёк 3× в отложку.
+    """
+    out: list[str] = []
+    _chan = config.get_optional("PUBLISH_CHANNEL")
+    if _chan:
+        try:  # отложка — сеть; недоступна → работаем на черновиках, прогон не роняем
+            for _t in publish.scheduled_texts(_chan):
+                g = _post_gist(_t)
+                if g:
+                    out.append(g)
+        except Exception:
+            logging.exception("Анти-повтор: отложку канала не прочитал — сверяюсь только с черновиками")
     d = creator_tools.DRAFTS_DIR
     if not d.exists():
-        return []
+        return out[:8]
     cutoff = time.time() - hours * 3600
-    out: list[str] = []
     for p in sorted(d.glob("*.md"), key=lambda x: x.stat().st_mtime, reverse=True):
         if p.stat().st_mtime < cutoff:
             break
         try:
-            for ln in p.read_text(encoding="utf-8").splitlines():
-                s = ln.strip().lstrip("*# ").rstrip("*").strip()
-                if s and "[[" not in s:          # первая значимая строка = заголовок (не мета [[...]])
-                    out.append(s[:120])
-                    break
+            g = _post_gist(p.read_text(encoding="utf-8"))
+            if g:
+                out.append(g)
         except Exception:
             continue
     # ДЕДУП СПИСКА (31.07): один прогон пересохраняет драфт несколько раз (писатель → фикс фактов →
