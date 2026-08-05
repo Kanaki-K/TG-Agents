@@ -231,3 +231,57 @@ def test_status_only_verdict_falls_back_to_the_edit():
     # модель не дала построчных ⚠️ — не считаем это «только полнотой», иначе правка молча пропадёт
     assert verify.only_completeness("ИТОГ: 8✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ") is False
     assert verify.only_completeness("") is False
+
+
+# --- МЕХАНИКА: цифры целы, устройство описано неверно (вред 05.08) ------------------------------
+# Пост ушёл в отложку с двумя такими ошибками, а панель назвала их «числовой нюанс»: код знал ровно два
+# класса — красная линия и «остаточный нюанс». Неточная цифра читателя не обманывает, неверный механизм
+# обманывает — ради механизма пост и написан.
+
+_MECH_T2 = ('⚠️ МЕХАНИКА: «расчёт в USDC вместо традиционного T+2» — источники говорят о расчёте ВНЕ '
+            'DTC, а не о замене T+2 внутри неё; переформулировать (CNBC, пресс-релиз DTCC)')
+_MECH_STAKE = ('⚠️ МЕХАНИКА: «стейкует их как оператор своей же сети» — источник пишет «can participate», '
+               'стейкинг ещё не запущен, мейннет 16 сентября; право подано в настоящем времени')
+
+
+def test_mechanics_conflict_is_its_own_class():
+    v = _MECH_T2 + "\nИТОГ: 7✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ"
+    assert verify.has_mechanics(v) is True
+    assert verify.has_issues(v) is True
+    assert verify.has_redline(v) is False        # это не выдумка — сносить нечего, надо переписать
+    assert verify.only_completeness(v) is False
+
+
+def test_mechanics_targets_quote_the_disputed_wording():
+    v = _MECH_T2 + "\n" + _MECH_STAKE
+    targets = verify.mechanics_targets(v)
+    assert "расчёт в USDC вместо традиционного T+2" in targets
+    assert "стейкует их как оператор своей же сети" in targets
+
+
+def test_untouched_wording_reads_as_failed_edit():
+    # механику чинят ПЕРЕПИСЫВАНИЕМ: уцелевшая дословно строка = правка не состоялась
+    targets = verify.mechanics_targets(_MECH_T2)
+    post_same = "DTCC будет токенизировать бумаги - расчёт в USDC вместо традиционного T+2"
+    post_fixed = "DTCC будет токенизировать бумаги, а расчёт в USDC пойдёт вне депозитария"
+    assert verify.targets_left(post_same, targets) == targets
+    assert verify.targets_left(post_fixed, targets) == []
+
+
+def test_plain_number_conflict_is_not_mechanics():
+    # обычное расхождение значения по-прежнему идёт пометкой, а не на круг переписывания
+    v = "⚠️ «222 млн$» — реально 215 млн$\nИТОГ: 8✅ / 1⚠️ / 0❓\nСТАТУС: ПРАВКИ"
+    assert verify.has_mechanics(v) is False
+
+
+def test_completeness_is_not_mechanics():
+    # полнота просит ДОПИСАТЬ участника, а не переписать механизм — классы не пересекаются
+    assert verify.has_mechanics(_COMPLETENESS_LINE) is False
+    assert verify.mechanics_targets(_COMPLETENESS_LINE) == []
+
+
+def test_contract_names_the_mechanics_class():
+    s = verify.VERIFIER_SYSTEM
+    assert "МЕХАНИКА" in s
+    assert "T+2" in s                 # разобранный случай 05.08 в контракте
+    assert "Право ≠ действие" in s
