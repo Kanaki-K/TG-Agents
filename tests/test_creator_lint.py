@@ -360,6 +360,14 @@ def test_kicker_starting_with_turn_is_ok():
     assert not any("СЛИПСЯ" in w for w in warns)
 
 
+def test_word_ending_in_no_is_not_a_turn():
+    # КОРЕНЬ провала 07.08: «но » ловилось внутри слов («имен-но », «нуж-но ») → ложная претензия
+    # «финал слипся с оговоркой» → автор перестал верить линтеру и отмахнулся заодно от ВЕРНОЙ.
+    fin = "Архитектура закладывается именно сейчас. Правила задаёт тот, кто держит ключи"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert not any("СЛИПСЯ" in w for w in warns)
+
+
 def test_finale_not_checked_without_footer():
     # футера нет → структуру не угадать → молчим (не выдумываем претензии)
     _, warns = creator_tools._lint("**Заголовок**\n\nтело поста\n\nчто-то ещё?", "scope")
@@ -475,3 +483,82 @@ def test_handle_anglicism_warns():
     body = "**⚡️ Заголовок**\n\nПока открылось только резервирование handle\n\nфинал"
     _, warns = creator_tools._lint(body, "scope")
     assert any("англицизмы" in w and "handle" in w for w in warns)
+
+
+# --- ПОДАЧА: структура абзацев и скрытый вопрос в финале (правки владельца 07.08, MetaMask) ---
+# Пост уехал в отложку с абзацем на 415 знаков (четыре мысли через «;») и финалом-вопросом без «?».
+# Владелец разнёс абзацы и переписал финал руками — оба класса теперь меряет код.
+
+def test_finale_question_without_mark_flagged():
+    fin = "Архитектура закладывается именно сейчас. Чьи правила окажутся у AI в кармане - банка или Ваши"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert any("БЕЗ знака вопроса" in w for w in warns)
+
+
+def test_finale_alternative_tail_flagged():
+    # хвост-выбор «- А или Б» — тот же вопрос, даже без вопросительного слова в начале
+    _, warns = creator_tools._lint(
+        _post_with_finale("Платит за это в итоге кто-то один - держатель токена или сама сеть"), "scope")
+    assert any("БЕЗ знака вопроса" in w for w in warns)
+
+
+def test_statement_kicker_with_ili_not_flagged():
+    # «или» внутри утверждения — норма, претензии быть не должно (0 ложных на 277 финалах канала)
+    _, warns = creator_tools._lint(
+        _post_with_finale("Такие сделки закрывают банки или биржи, а платит всегда клиент"), "scope")
+    assert not any("БЕЗ знака вопроса" in w for w in warns)
+
+
+def test_owner_rewritten_finale_is_clean():
+    # финал, который владелец написал взамен: утверждение, стоит само → линтер молчит
+    fin = ("Человеку в системе можно доверять или нет. Коду доверять не нужно - он либо пропускает "
+           "операцию, либо нет")
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert not any(w.startswith("scope: финал") for w in warns)
+
+
+def test_wall_paragraph_flagged():
+    wall = ("Два режима: Guard Mode - агент работает по одобренному списку протоколов и лимитам, выход "
+            "за правила - двухфакторка владельцу; Beast Mode - минимум прерываний, но принудительная 2FA "
+            "на транзакциях, помеченных как вредоносные, сохраняется. Каждая транзакция проходит "
+            "симуляцию и проверку угроз до исполнения. Убыток, если защита не сработала - покрывается "
+            "до 10 000$ в месяц. За кошельком - 100 млн пользователей MetaMask")
+    _, warns = creator_tools._lint(_post_with_finale(wall + "\n\nфинал строкой"), "scope")
+    assert any("ПРОСТЫНЯ" in w for w in warns)
+
+
+def test_semicolon_enumeration_flagged():
+    body = ("**⚡️ Заголовок**\n\nДва режима: Guard Mode - по списку протоколов; Beast Mode - без "
+            "остановок\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("СЛЕПЛЕНО В СТРОКУ" in w for w in warns)
+
+
+def test_normal_paragraphs_not_flagged_as_wall():
+    # разнесённая владельцем версия тех же фактов — претензий к структуре нет
+    body = ("**⚡️ AI получил кошелёк**\n\nДва режима:\n\nGuard Mode - агент работает по одобренному "
+            "списку протоколов и лимитам, выход за правила - 2FA владельцу\n\nBeast Mode - минимум "
+            "прерываний, но принудительная 2FA на вредоносных транзакциях\n\nКстати, у МетаМаск более "
+            "100 млн пользователей\n\nфинал строкой")
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("ПРОСТЫНЯ" in w or "СЛЕПЛЕНО" in w for w in warns)
+
+
+def test_list_block_not_counted_as_wall():
+    # маркированный список-блок (3+ строки в абзаце) длинный ПО ПРИРОДЕ — не простыня
+    lst = "\n".join("🔸 " + "пункт списка канала про архитектуру сети и экономику токена" for _ in range(4))
+    _, warns = creator_tools._lint("**⚡️ Заголовок**\n\n" + lst + "\n\nфинал", "scope")
+    assert not any("ПРОСТЫНЯ" in w for w in warns)
+
+
+def test_term_jitter_flagged():
+    body = ("**⚡️ Заголовок**\n\nВыход за правила - двухфакторка владельцу, а на вредоносных "
+            "транзакциях 2FA принудительная\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("ДВУМЯ ИМЕНАМИ" in w for w in warns)
+
+
+def test_single_term_is_clean():
+    body = "**⚡️ Заголовок**\n\nВыход за правила - 2FA владельцу, на вредоносных 2FA принудительная\n\nфинал"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("ДВУМЯ ИМЕНАМИ" in w for w in warns)
