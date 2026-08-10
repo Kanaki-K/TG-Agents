@@ -395,14 +395,19 @@ def test_long_advice_post_gets_soft_length_note():
                  "\n\nмигрируйте на новый seed, обновление уже созданный seed не спасает")
     post = "**⚠️ Заголовок**\n\n" + long_body + "\n\n" + _FOOT
     _, warns = creator_tools._lint(post, "scope")
-    assert not any("⛔ scope ДЛИННЫЙ" in w for w in warns)      # жёсткого «режь» тут быть не должно
+    assert not any("длинноват" in w or "РАЗДУЛСЯ" in w for w in warns)   # общего «режь» тут быть не должно
     assert any("пост-ИНСТРУКЦИЯ" in w for w in warns)           # вместо него — «режь только воду»
 
 
-def test_long_plain_post_still_gets_hard_length_warn():
+def test_long_plain_post_gets_length_note_not_hard_stop():
+    """Правка 10.08: между целью формата и раздуванием — СОВЕТ, а не ⛔. Жёсткий запрет тут заставлял
+    писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110). ⛔ живёт выше, с
+    SCOPE_BLOAT_CAP — это проверяет test_bloat_is_hard_stop."""
     post = "**⚠️ Заголовок**\n\n" + ("разбор механики " * 90) + "\n\n" + _FOOT
     _, warns = creator_tools._lint(post, "scope")
-    assert any("⛔ scope ДЛИННЫЙ" in w for w in warns)
+    assert creator_tools.SCOPE_TOTAL_CAP < len(post.encode("utf-16-le")) // 2 <= creator_tools.SCOPE_BLOAT_CAP
+    assert any("длинноват" in w for w in warns)
+    assert not any("РАЗДУЛСЯ" in w for w in warns)
 
 
 # --- ЭТАЛОН = ПРИЁМ, А НЕ СТРОКА: копия из мануала/банка/своего поста (владелец 03.08) ---
