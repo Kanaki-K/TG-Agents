@@ -60,8 +60,8 @@ python run_pipeline.py --scope     # вся цепь: Скаут (по гейт�
 ОТДЕЛЬНО от флагман-`/feedback` (тот пишет в `post_lessons.md` на полном контексте) — короткий учится сам,
 не мешая флагману. Урок-инструмент даётся модели ТОЛЬКО в режиме фидбэка, не при генерации.
 
-> ⚠️ Качество scope требует боевой модели: запускай на `/main` (→ Sonnet). На `/test` (Haiku) формат
-> плывёт — это потолок модели, не промпта.
+> ⚠️ Качество scope требует боевой модели: запускай на `/main` (→ Opus 4.8, с 10.08; до этого Sonnet).
+> На `/test` (Haiku) формат плывёт — это потолок модели, не промпта.
 
 ---
 
@@ -71,7 +71,7 @@ python run_pipeline.py --scope     # вся цепь: Скаут (по гейт�
 СКАУТ /scan → бриф с флагом формата 🔭 (memory/briefs/)            ★ШИНА★
       ▼
 scope_writer.write():
-  лёгкий _system() (scope_manual + brand + уроки, БЕЗ content_manual) на SCOPE_MODEL (Sonnet; /test→Haiku)
+  лёгкий _system() (scope_manual + brand + уроки, БЕЗ content_manual) на SCOPE_MODEL (Opus 4.8; /test→Haiku)
   → read_brief('latest'), пишет короткий по scope_manual
   → save_draft(kind='scope') → _lint (длина/фурнитура/срез <cite>)  ★ШИНА★ (+ data/creator_last_kind.txt)
   → ВСТРОЕННЫЙ 2FA: verify.verify_post → есть замечания → правит сам (FIX: только помеченное,
@@ -101,7 +101,7 @@ scope_writer.write():
 | Правила | `content_manual.md` | `scope_manual.md` |
 | Код | `creator_bot` / `_run_creator` | `core/scope_writer.py` |
 | Контекст `_system` | мануал + обложка + плейбук + стандарт + уроки | персона + scope_manual + brand + уроки (лёгкий) |
-| Модель | Opus | Sonnet (`SCOPE_MODEL`) |
+| Модель | Opus | Opus 4.8 (`SCOPE_MODEL`, с 10.08; было Sonnet) |
 | Обложка | `make_image` (обязательна) | нет (инструмент не подключён) |
 | Длина | 2800–4096, 15–30 цифр | ТЕЛО ≤500 (+футер ТГ-only), 1–3 цифры |
 | Структура | ДАННЫЕ→МЕХАНИКА→МОРАЛЬ, 💡/💭, футер | приёмы подачи без фурнитуры (см. scope_manual §3–4) |
