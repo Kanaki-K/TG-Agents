@@ -562,3 +562,45 @@ def test_single_term_is_clean():
     body = "**⚡️ Заголовок**\n\nВыход за правила - 2FA владельцу, на вредоносных 2FA принудительная\n\nфинал"
     _, warns = creator_tools._lint(body, "scope")
     assert not any("ДВУМЯ ИМЕНАМИ" in w for w in warns)
+
+
+# --- код-жаргон без расшифровки (владелец 10.08: «не понятна сама проблема») ---
+
+def test_protocol_code_flagged():
+    """Пост 10.08 назвал BIP-110 четырежды и ни разу не сказал, что тот предлагал. Имя стандарта
+    читателю канала не говорит ничего — линтер возвращает автору вопрос, а не правит текст."""
+    body = ("**🌐 Заголовок поста**\n\n8 августа сеть раскололась. Правило BIP-110 включилось и "
+            "потребовало, чтобы майнеры под него подписались\n\nфинал стоит сам")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("КОД-ЖАРГОН" in w and "BIP-110" in w for w in warns)
+
+
+def test_known_code_not_flagged():
+    # GPT-5 аудитория знает без расшифровки — на таком не дёргаем (замер: шаблон и так <1% постов)
+    body = "**⚡️ Заголовок**\n\nGPT-5 вышел вчера и стоит денег\n\nфинал стоит сам"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("КОД-ЖАРГОН" in w for w in warns)
+
+
+def test_no_code_no_warning():
+    body = "**⚡️ Заголовок**\n\nБиржа купила блокчейн-компанию за 400 млн usd\n\nфинал стоит сам"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("КОД-ЖАРГОН" in w for w in warns)
+
+
+# --- длина scope: цель ≠ раздувание (правка 10.08) ---
+
+def test_over_target_is_advice_not_hard_stop():
+    """Между целью формата и раздуванием линтер СОВЕТУЕТ резать воду, но не запрещает: жёсткий ⛔
+    здесь заставлял писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110)."""
+    body = "**⚡️ Заголовок**\n\n" + ("тело " * 260) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
+    _, warns = creator_tools._lint(body, "scope")
+    long_w = [w for w in warns if "длинноват" in w or "РАЗДУЛСЯ" in w]
+    assert long_w and "РАЗДУЛСЯ" not in long_w[0]
+    assert "ОСТАВЬ" in long_w[0]        # объяснение предмета длину оправдывает
+
+
+def test_bloat_is_hard_stop():
+    body = "**⚡️ Заголовок**\n\n" + ("тело " * 400) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("РАЗДУЛСЯ" in w for w in warns)
