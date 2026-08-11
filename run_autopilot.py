@@ -3,6 +3,7 @@
     python run_autopilot.py            # ОДНА проверка и выход — для Планировщика задач Windows
     python run_autopilot.py --daemon   # живой процесс: проверяет раз в 10 минут
     python run_autopilot.py --status   # показать вердикт и настройки, НИЧЕГО не запускать
+    python run_autopilot.py --log      # хвост своего лога (data/autopilot.log) — «что случилось»
 
 Что делает, когда «пора» (вердикт даёт core/schedule): ставит метку «сегодня гоняли» → гонит
 `run_pipeline.run_cycle` (тема из банка → Криейтор → 2FA → обложка → нативная отложка канала) →
@@ -48,6 +49,7 @@ def _prepare_unattended() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:  # noqa: BLE001 — нет reconfigure (перехваченный поток): не повод падать
             pass
+    logging_setup.set_agent("autopilot")   # метка [autopilot/…] в КАЖДОЙ строке (конвенция P2-15)
     logging_setup.add_file_log(LOG_FILE)
 
 
@@ -83,35 +85,65 @@ def _digest(report: str) -> str:
     return out[:TG_ALERT_LIMIT]
 
 
+def _emit(line: str = "") -> None:
+    """Куда пайплайн рассказывает о себе: в консоль И в лог-файл.
+
+    Без этого лог автопилота был БЕСПОЛЕЗЕН для ремонта: пайплайн ведёт рассказ через print (86 мест),
+    а в logging пишет три строки — то есть на диске оставались обрывки, по которым не понять, где
+    прогон встал. Теперь каждая строка прогона есть в data/autopilot.log с временем: видно и ГДЕ
+    остановилось, и КОГДА. Многострочные блоки (готовый пост, итог-панель) разбиваем — иначе одна
+    запись лога на 4000 знаков нечитаема.
+    """
+    print(line)
+    for part in str(line).splitlines():
+        if part.strip():
+            log.info("прогон | %s", part.rstrip())
+
+
+def _published_ok(report: str) -> bool:
+    """Реально ли пост лёг в отложку. Прогон может «закончиться» и без публикации (нет повода, отказ
+    планировщика) — тогда честный значок ⚠️, а не ✅: иначе владелец решит, что пост в очереди."""
+    return "Поставил в отложенные" in report
+
+
 def _run(kind: str, slot) -> None:
     """Реальный прогон: метка → пайплайн → отчёт владельцу. Исключения не пробрасываем наружу."""
     import run_pipeline  # ленивый импорт: --status не должен тянуть весь пайплайн
 
-    logging_setup.set_agent("autopilot")
     logging_setup.new_request()
     schedule.mark_run(kind)   # ЗАЯВКА до прогона: падение не даст перезапускать и жечь деньги
     when = content_plan.human(slot)
-    log.info("[автопилот] старт прогона '%s', слот %s", kind, when)
+    log.info("=== СТАРТ прогона '%s' → выход %s (режим боевой) ===", kind, when)
     bot_alert.notify_owner(f"🚀 Автопилот: запускаю {content_plan.kind_label(kind)} — "
                            f"выход в канал на {when}. Отчёт пришлю, как закончу (~10-20 мин).")
     try:
-        report = run_pipeline.run_cycle(scope=False, evergreen=True, emit=print)
+        report = run_pipeline.run_cycle(scope=False, evergreen=True, emit=_emit)
     except Exception as e:  # noqa: BLE001 — падение прогона обязано ДОЙТИ до владельца, а не в лог
-        log.exception("[автопилот] прогон упал")
+        log.exception("=== ПРОГОН УПАЛ: %s ===", type(e).__name__)
+        schedule.mark_result(kind, f"❌ упал: {type(e).__name__}: {e}"[:300])
         bot_alert.notify_owner(f"❌ Автопилот: прогон упал — {type(e).__name__}: {e}\n\n"
-                               f"В канал ничего не ушло. Подробности — в data/autopilot.log; "
-                               f"повторить руками: python run_pipeline.py")
+                               f"В канал ничего не ушло. Что смотреть: последние строки "
+                               f"data/autopilot.log (или `run_autopilot.py --log`). "
+                               f"Повторить руками: python run_pipeline.py")
         return
-    bot_alert.notify_owner(f"✅ Автопилот: прогон закончен ({when}).\n\n{_digest(report)}")
+    ok = _published_ok(report)
+    schedule.mark_result(kind, f"{'✅ в отложке на ' + when if ok else '⚠️ прогон прошёл, но пост НЕ поставлен'}")
+    log.info("=== ПРОГОН ЗАВЕРШЁН: %s ===", "пост в отложке" if ok else "пост НЕ поставлен")
+    bot_alert.notify_owner(f"{'✅' if ok else '⚠️'} Автопилот: прогон закончен "
+                           f"({'пост в отложке на ' + when if ok else 'пост НЕ поставлен'}).\n\n{_digest(report)}")
 
 
 def check_once() -> str:
     """Одна проверка. Возвращает короткий код исхода (для логов и --daemon): off/test/no-channel/skip/run."""
     if not schedule.enabled():
+        # Пишем и в лог: строка «проверка была, но автопилот выключен» отвечает на половину вопросов
+        # «почему в канале тишина» — видно, что задача Планировщика жива, а выключатель снят.
+        log.info("выключен (нет файла %s) — ничего не делаю", schedule.ON_FILE.name)
         print(f"⏸ Автопилот ВЫКЛЮЧЕН (нет файла {schedule.ON_FILE.name}) — ничего не делаю.")
         return "off"
     channel = config.get_optional("PUBLISH_CHANNEL")
     if not channel:
+        log.error("канал публикации не задан — прогон не начинаю")
         print("❌ PUBLISH_CHANNEL не задан — публиковать некуда, прогон не начинаю.")
         if not schedule.warned_today("no-channel"):   # проверки частые: алерт один раз в день, не спам
             bot_alert.notify_owner("❌ Автопилот: канал публикации не задан (PUBLISH_CHANNEL) — выход пропущен.")
@@ -122,11 +154,11 @@ def check_once() -> str:
     # каждые 10 минут в понедельник незачем: и лишняя активность аккаунта, и медленно).
     verdict = schedule.due("flagship")
     if not verdict["go"]:
-        log.info("[автопилот] пропуск: %s", verdict["why"])
+        log.info("пропуск: %s", verdict["why"])
         print(f"⏭ {verdict['why']}")
         return "skip"
     verdict = schedule.due("flagship", busy_dates=_busy_dates(channel))
-    log.info("[автопилот] вердикт: %s — %s", "пора" if verdict["go"] else "пропуск", verdict["why"])
+    log.info("вердикт: %s — %s", "пора" if verdict["go"] else "пропуск", verdict["why"])
     print(f"{'✅' if verdict['go'] else '⏭'} {verdict['why']}")
     if not verdict["go"]:
         return "skip"
@@ -134,6 +166,7 @@ def check_once() -> str:
     if mode["mode"] == "test":
         # /test = дешёвая модель для проверки механики. Такой пост в канал ставить нельзя.
         # Метку НЕ ставим: вернёшь /main внутри окна — прогон состоится в эту же проверку.
+        log.warning("режим /test (модель %s) — публикацию не делаю", mode.get("model") or "?")
         print("🧪 Режим /test — публикацию НЕ делаю (в канал ушёл бы Haiku-пост). Верни /main.")
         if not schedule.warned_today("test-mode"):
             bot_alert.notify_owner("🧪 Автопилот: пора гнать флагман, но завод в режиме /test — "
@@ -154,8 +187,30 @@ def status() -> None:
     print(f"\nвыключатель: {schedule.ON_FILE}")
 
 
+def tail_log(n: int = 60) -> None:
+    """Показать хвост своего лога — «чинить оперативно» без раскопок файлов на Windows.
+
+    Отдельная команда, потому что смотреть лог приходится ИМЕННО когда что-то не так, и в этот момент
+    искать путь к файлу — лишний шаг. Полный файл: data/autopilot.log.
+    """
+    if not LOG_FILE.exists():
+        print(f"Лога ещё нет ({LOG_FILE}) — автопилот ни разу не запускался в этом окружении.")
+        return
+    try:
+        lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        print(f"Не смог прочитать {LOG_FILE}: {e}")
+        return
+    print(f"=== {LOG_FILE} — последние {min(n, len(lines))} из {len(lines)} строк ===")
+    for ln in lines[-n:]:
+        print(ln)
+
+
 def main() -> None:
     _prepare_unattended()   # кодировка вывода + файловый лог: ДО первого print/лога, см. функцию
+    if "--log" in sys.argv:
+        tail_log()
+        return
     if "--status" in sys.argv:
         status()
         return

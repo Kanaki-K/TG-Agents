@@ -10,7 +10,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, time, timedelta, timezone
 
@@ -39,20 +38,32 @@ def settings() -> dict:
 
 
 def save_settings(data: dict) -> None:
-    """Записать настройки плана (полный словарь). Бросает — вызывающий обязан сообщить владельцу."""
-    SETTINGS_FILE.parent.mkdir(exist_ok=True)
-    SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Записать настройки плана (полный словарь). Бросает — вызывающий обязан сообщить владельцу.
+
+    Атомарно (io_safe.dump_json): обрыв на середине записи оставил бы битый JSON, а битый читается как
+    «настроек нет» — расписание владельца молча вернулось бы к дефолту. Тут это цена ошибки.
+    """
+    io_safe.dump_json(SETTINGS_FILE, data)
 
 
 def source_of(key: str, env_key: str = "") -> str:
-    """Откуда взято значение — «из чата» / «из .env» / «дефолт кода».
+    """Откуда взято ЭФФЕКТИВНОЕ значение — «из чата» / «из .env» / «дефолт кода».
 
     Нужно, чтобы в /autopilot было видно ПОЧЕМУ выход в 16:00: сам поменял в чате, стоит в .env или
     так в коде. Без этого три источника = «почему стоит не то, что я думал».
+
+    ВАЖНО: смотрим не «задано ли значение», а «взяли ли мы его». Опечатка в .env («16-00») даёт откат
+    на дефолт — и панель обязана сказать «дефолт кода», иначе она врёт ровно там, где владелец ей верит.
     """
-    if settings().get(key) not in (None, ""):
+    validate = _hhmm if key.endswith("_time") else (lambda v: v)   # для времени проверяем разбор
+    chat = settings().get(key)
+    if chat not in (None, "") and validate(chat):
         return "из чата"
-    return "из .env" if (env_key and config.get_optional(env_key)) else "дефолт кода"
+    env_raw = config.get_optional(env_key) if env_key else ""
+    if env_raw and validate(env_raw):
+        return "из .env"
+    bad = (chat not in (None, "")) or bool(env_raw)   # значение задано, но мы его НЕ взяли
+    return "дефолт кода — заданное значение не разобрал!" if bad else "дефолт кода"
 
 
 def tz():
@@ -79,14 +90,32 @@ def time_env_key(kind: str) -> str:
     return "PUBLISH_FLAGSHIP_TIME" if kind == "flagship" else "PUBLISH_SHORT_TIME"
 
 
+def _hhmm(raw: str):
+    """«16:00» → time(16, 0). Непонятное → None (мусор в .env не должен ронять план)."""
+    raw = str(raw or "").strip()
+    if not raw or ":" not in raw:
+        return None
+    try:
+        h, m = raw.split(":")[:2]
+        return time(int(h), int(m))
+    except ValueError:
+        return None
+
+
 def _slot_time(kind: str) -> time:
-    raw = str(settings().get(f"{kind}_time") or "").strip() or config.get_optional(time_env_key(kind))
-    if raw and ":" in raw:
-        try:
-            h, m = raw.split(":")
-            return time(int(h), int(m))
-        except ValueError:
-            pass
+    """Время выхода: правка из чата > .env > дефолт кода. Неразобранное значение — ГРОМКО в лог.
+
+    Молчать нельзя (нашёл на аудите 11.08): при опечатке в .env («16-00») время тихо становилось
+    дефолтным, а панель /autopilot честно писала «из .env» — владелец видел бы 17:00 и не понимал, почему.
+    """
+    for value, where in ((settings().get(f"{kind}_time"), "правке из чата"),
+                         (config.get_optional(time_env_key(kind)), f".env ({time_env_key(kind)})")):
+        if str(value or "").strip():
+            t = _hhmm(value)
+            if t:
+                return t
+            logging.warning("[план] время '%s' в %s не разобрал — беру дефолт кода. Формат: «16:00»",
+                            value, where)
     h, m = DEFAULT_FLAGSHIP_TIME if kind == "flagship" else DEFAULT_SHORT_TIME
     return time(h, m)
 
@@ -113,6 +142,9 @@ def days_for(kind: str) -> tuple:
     raw = settings().get(f"{kind}_days")
     if isinstance(raw, list) and raw and all(isinstance(x, int) and 0 <= x <= 6 for x in raw):
         return tuple(sorted(set(raw)))
+    if raw not in (None, "", []):   # значение есть, но кривое (правка файла руками) — не молчим
+        logging.warning("[план] дни '%s' в plan_settings.json не разобрал — беру канон %s",
+                        raw, "Вт/Чт" if kind == "flagship" else "Пн/Ср/Пт")
     return FLAGSHIP_DAYS if kind == "flagship" else SHORT_DAYS
 
 

@@ -149,6 +149,34 @@ def test_last_run_survives_broken_state(tmp_path, monkeypatch):
     assert schedule.last_run("flagship") is None
 
 
+def test_settings_write_is_atomic_and_leaves_no_temp(tmp_path, monkeypatch):
+    """Обрыв записи оставил бы битый JSON, а битый читается как «настроек нет» — расписание владельца
+    молча вернулось бы к дефолту. Пишем через temp+replace: на диске либо старое целиком, либо новое."""
+    monkeypatch.setattr(cp, "SETTINGS_FILE", tmp_path / "plan_settings.json")
+    assert schedule.apply_params({"flagship_time": "16:00"})["ok"]
+    assert schedule.apply_params({"flagship_time": "18:00"})["ok"]
+    assert cp.settings()["flagship_time"] == "18:00"
+    assert list(tmp_path.glob("*.tmp")) == []      # временный файл не остался мусором
+    assert (tmp_path / "plan_settings.json").read_text(encoding="utf-8").strip().endswith("}")
+
+
+def test_mark_result_shows_in_panel(tmp_path, monkeypatch):
+    """Итог последнего прогона владелец должен видеть В ТЕЛЕФОНЕ (панель), а не только в логе машины."""
+    monkeypatch.setattr(schedule, "STATE_FILE", tmp_path / "autopilot_state.json")
+    assert schedule.last_result("flagship") == "— ни разу"
+    schedule.mark_result("flagship", "❌ упал: TimeoutError")
+    assert "TimeoutError" in schedule.last_result("flagship")
+    assert "TimeoutError" in schedule.status_text("flagship")
+
+
+def test_mark_result_does_not_break_run_mark(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule, "STATE_FILE", tmp_path / "autopilot_state.json")
+    d = _slot_day()
+    schedule.mark_run("flagship", d)
+    schedule.mark_result("flagship", "✅ в отложке")
+    assert schedule.last_run("flagship") == d      # метки живут рядом и не затирают друг друга
+
+
 def test_warned_once_per_day(tmp_path, monkeypatch):
     """Проверки идут каждые 10-30 мин: алерт «завод в /test» обязан прийти ОДИН раз, иначе спам."""
     monkeypatch.setattr(schedule, "STATE_FILE", tmp_path / "autopilot_state.json")
@@ -291,6 +319,28 @@ def test_status_text_shows_state_and_sources():
     assert "вердикт сейчас" in txt
 
 
+def test_panel_does_not_lie_about_broken_value(monkeypatch):
+    """Опечатка в конфиге («16-00») даёт откат на дефолт. Панель обязана сказать «не разобрал», а не
+    «из .env» — иначе она врёт ровно там, где владелец ей верит, решая, включать ли автопилот."""
+    monkeypatch.setenv("PUBLISH_FLAGSHIP_TIME", "16-00")
+    assert cp.source_of("flagship_time", "PUBLISH_FLAGSHIP_TIME").startswith("дефолт кода")
+    assert "не разобрал" in cp.source_of("flagship_time", "PUBLISH_FLAGSHIP_TIME")
+    assert "не разобрал" in schedule.status_text("flagship")
+    monkeypatch.setenv("PUBLISH_FLAGSHIP_TIME", "16:00")
+    assert cp.source_of("flagship_time", "PUBLISH_FLAGSHIP_TIME") == "из .env"
+    assert cp.slot_time("flagship").strftime("%H:%M") == "16:00"
+
+
+def test_broken_days_in_file_fall_back_to_canon(tmp_path, monkeypatch):
+    """Файл правят руками — кривые дни не должны менять ритм молча (канон + предупреждение в лог)."""
+    from core import io_safe
+
+    p = tmp_path / "plan_settings.json"
+    io_safe.dump_json(p, {"flagship_days": "вт,чт"})     # строка вместо списка чисел
+    monkeypatch.setattr(cp, "SETTINGS_FILE", p)
+    assert cp.days_for("flagship") == cp.FLAGSHIP_DAYS
+
+
 def test_status_text_marks_chat_edit():
     schedule.apply_params({"flagship_time": "18:00"}, by="чат Криейтора")
     txt = schedule.status_text("flagship")
@@ -325,6 +375,30 @@ def test_autopilot_digest_survives_empty_report():
     import run_autopilot
 
     assert run_autopilot._digest("") == ""
+
+
+def test_autopilot_recognises_whether_post_was_published():
+    """«Прогон закончен» ≠ «пост в отложке»: писатель мог отказаться (нет повода). Владельцу нельзя
+    показывать ✅, если в канал ничего не встало — он решит, что пост в очереди, и не проверит."""
+    import run_autopilot
+
+    assert run_autopilot._published_ok("✅ Поставил в отложенные канала: флагман (Ф1) на Вт 16:00") is True
+    assert run_autopilot._published_ok("⛔ Свежего поста в этом прогоне НЕ создано") is False
+
+
+def test_autopilot_emit_goes_to_log_not_only_console(caplog):
+    """Смысл файлового лога: рассказ ПАЙПЛАЙНА (он идёт через print) обязан попасть в лог, иначе по
+    логу не понять, где прогон встал. Многострочный блок разбиваем — одна запись на 4000 знаков нечитаема."""
+    import logging as _logging
+
+    import run_autopilot
+
+    with caplog.at_level(_logging.INFO):
+        run_autopilot._emit("🧭 Тема выбрана: стейблкоины")
+        run_autopilot._emit("строка один\n\nстрока два")
+    logged = [r.getMessage() for r in caplog.records]   # getMessage — уже с подставленными args
+    assert any("Тема выбрана" in m for m in logged)
+    assert sum("строка один" in m or "строка два" in m for m in logged) == 2   # разбито на две записи
 
 
 @pytest.mark.parametrize("raw,expect", [("2", 2.0), ("2,5", 2.5), ("мусор", schedule.DEFAULT_LEAD_HOURS)])

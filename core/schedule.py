@@ -13,7 +13,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date, datetime, timedelta
 
@@ -90,10 +89,13 @@ def last_run(kind: str = "flagship") -> date | None:
 
 
 def _save_state(data: dict) -> None:
-    """Записать состояние. Не бросает: сорванная запись метки не должна ронять прогон (о ней — в лог)."""
+    """Записать состояние АТОМАРНО. Не бросает: сорванная запись метки не должна ронять прогон.
+
+    Атомарность тут не про «красиво»: битая метка «сегодня гоняли» читается как «не гоняли», и
+    следующая проверка запустила бы ВТОРОЙ прогон — второй пост в отложке и лишние $1.6.
+    """
     try:
-        STATE_FILE.parent.mkdir(exist_ok=True)
-        STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        io_safe.dump_json(STATE_FILE, data)
     except OSError:
         log.exception("[автопилот] не смог записать состояние в %s", STATE_FILE)
 
@@ -262,6 +264,28 @@ def apply_params(changes: dict, by: str = "чат") -> dict:
 
 # --- ОКНО и ВЕРДИКТ ---------------------------------------------------------------------------
 
+def mark_result(kind: str, text: str) -> None:
+    """Запомнить ИТОГ последнего автопрогона одной строкой (для панели /autopilot).
+
+    Зачем: владелец смотрит в телефон, а не в лог на машине. «Последний прогон: ❌ упал: TimeoutError»
+    в панели — это разница между «чинить прямо сейчас» и «узнать через два дня по молчанию канала».
+    """
+    data = _state()
+    data[f"result_{kind}"] = text
+    data[f"result_at_{kind}"] = datetime.now(content_plan.tz()).isoformat(timespec="minutes")
+    _save_state(data)
+
+
+def last_result(kind: str = "flagship") -> str:
+    """Итог последнего автопрогона с временем («— ни разу», если автопилот ещё не работал)."""
+    data = _state()
+    text = data.get(f"result_{kind}")
+    if not text:
+        return "— ни разу"
+    when = data.get(f"result_at_{kind}", "")
+    return f"{text} ({when})" if when else str(text)
+
+
 def warned_today(key: str) -> bool:
     """Уже предупреждали владельца про это сегодня? Проверки идут каждые 10–30 мин, и алерт «завод в
     /test» без этого превратился бы в спам — а спам перестают читать, и настоящий алерт потеряется."""
@@ -357,6 +381,7 @@ def status_text(kind: str = "flagship") -> str:
         f"({content_plan.source_of('margin_minutes', 'AUTOPILOT_MARGIN_MINUTES')})",
         f"• окно старта   : {f'{win[0]:%H:%M}–{win[1]:%H:%M}' if win else '— сегодня не день формата'}",
         f"• последний авто: {last_run(kind) or '— ни разу'}",
+        f"• чем кончился : {last_result(kind)}",
         f"• следующий выход: {content_plan.human(nxt)}",
         f"• вердикт сейчас: {'✅ пора' if v['go'] else '⏭ пропуск'} — {v['why']}",
     ]

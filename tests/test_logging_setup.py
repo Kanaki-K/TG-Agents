@@ -88,6 +88,28 @@ def test_add_file_log_survives_bad_path(tmp_path):
     assert ls.add_file_log(blocker / "sub" / "autopilot.log") is False
 
 
+def test_dump_json_is_atomic(tmp_path):
+    """io_safe.dump_json — пара к load_json: пишем через temp+replace, чтобы читатель (другой процесс)
+    никогда не увидел полуфабрикат, а обрыв записи не превратил настройки в «как будто их нет»."""
+    from core import io_safe
+
+    p = tmp_path / "sub" / "state.json"
+    io_safe.dump_json(p, {"ключ": "значение", "число": 3})
+    assert io_safe.load_json(p, {}) == {"ключ": "значение", "число": 3}
+    assert list(p.parent.glob("*.tmp")) == []      # временный файл убран (os.replace), мусора нет
+    io_safe.dump_json(p, {"ключ": "новое"})        # перезапись поверх существующего
+    assert io_safe.load_json(p, {}) == {"ключ": "новое"}
+
+
+def test_load_json_falls_back_on_truncated_file(tmp_path):
+    """Обрезанный JSON (как после обрыва прямой записи) читается как default — вот почему нужна атомарность."""
+    from core import io_safe
+
+    p = tmp_path / "state.json"
+    p.write_text('{"ключ": "знач', encoding="utf-8")
+    assert io_safe.load_json(p, {"дефолт": True}) == {"дефолт": True}
+
+
 def test_file_log_keeps_agent_context(tmp_path):
     """В формате есть %(agent)s: без контекст-фильтра запись из под-модуля уронила бы форматирование."""
     p = tmp_path / "autopilot.log"
