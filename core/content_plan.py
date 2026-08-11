@@ -55,7 +55,13 @@ def source_of(key: str, env_key: str = "") -> str:
     ВАЖНО: смотрим не «задано ли значение», а «взяли ли мы его». Опечатка в .env («16-00») даёт откат
     на дефолт — и панель обязана сказать «дефолт кода», иначе она врёт ровно там, где владелец ей верит.
     """
-    validate = _hhmm if key.endswith("_time") else (lambda v: v)   # для времени проверяем разбор
+    if key.endswith("_time"):
+        validate = _hhmm            # время должно РАЗБИРАТЬСЯ, иначе источник — не оно
+    elif key == "tz":
+        validate = zone             # пояс должен СУЩЕСТВОВАТЬ в базе, иначе мы взяли не его
+    else:
+        def validate(v):
+            return v
     chat = settings().get(key)
     if chat not in (None, "") and validate(chat):
         return "из чата"
@@ -66,19 +72,35 @@ def source_of(key: str, env_key: str = "") -> str:
     return "дефолт кода — заданное значение не разобрал!" if bad else "дефолт кода"
 
 
+def zone(name):
+    """ZoneInfo по имени пояса или None (нет базы/кривое имя). Не бросает — план не должен падать."""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name)
+    except Exception:  # noqa: BLE001 — нет tzdata или опечатка в имени: решает вызывающий
+        return None
+
+
+def tz_name() -> str:
+    """Имя пояса, которое ДЕЙСТВУЕТ: правка из чата > PUBLISH_TZ. Пусто — работаем на смещении."""
+    return str(settings().get("tz") or "").strip() or config.get_optional("PUBLISH_TZ")
+
+
 def tz():
     """Часовой пояс контент-плана.
 
-    Приоритет — ИМЯ пояса PUBLISH_TZ (напр. Europe/Berlin): zoneinfo учитывает переход на летнее/
-    зимнее время сам. Фолбэк — фиксированное смещение PUBLISH_UTC_OFFSET (по умолч. +3, без DST).
+    Приоритет — ИМЯ пояса (правка из чата, затем PUBLISH_TZ; напр. Europe/Berlin): zoneinfo учитывает
+    переход на летнее/зимнее время сам. Фолбэк — фиксированное смещение PUBLISH_UTC_OFFSET (+3, без DST).
     """
-    name = config.get_optional("PUBLISH_TZ")
+    name = tz_name()
     if name:
-        try:
-            from zoneinfo import ZoneInfo
-            return ZoneInfo(name)
-        except Exception:  # нет zoneinfo/tzdata или кривое имя — откатываемся на смещение
-            logging.warning("[план] не смог взять пояс '%s' (нужен пакет tzdata?) — беру PUBLISH_UTC_OFFSET", name)
+        z = zone(name)
+        if z is not None:
+            return z
+        logging.warning("[план] не смог взять пояс '%s' (нужен пакет tzdata?) — беру PUBLISH_UTC_OFFSET", name)
     try:
         off = float(config.get_optional("PUBLISH_UTC_OFFSET") or 3)
     except ValueError:
@@ -188,9 +210,9 @@ def human(dt: datetime) -> str:
 
 
 def tz_label() -> str:
-    """Пояс плана с РЕАЛЬНЫМ текущим смещением — чтобы видеть, подхватился ли PUBLISH_TZ.
+    """Пояс плана с РЕАЛЬНЫМ текущим смещением — чтобы видеть, подхватился ли заданный пояс.
     Напр. «Europe/Berlin (сейчас UTC+02:00)» либо «UTC+03:00» (фолбэк на смещение)."""
-    name = config.get_optional("PUBLISH_TZ")
+    name = tz_name()   # действующее имя: правка из чата > PUBLISH_TZ
     try:
         off = datetime.now(tz()).utcoffset() or timedelta(0)
         secs = off.total_seconds()

@@ -303,6 +303,54 @@ def test_parse_time_rejects_unreasonable(raw):
         schedule.parse_time(raw)
 
 
+@pytest.mark.parametrize("raw,expect", [
+    ("по берлину", "Europe/Berlin"),
+    ("берлин", "Europe/Berlin"),
+    ("Europe/Berlin", "Europe/Berlin"),
+    ("по москве", "Europe/Moscow"),
+    ("во времени киев", "Europe/Kyiv"),
+    ("UTC", "UTC"),
+])
+def test_parse_zone_understands_owner_phrasing(raw, expect):
+    """Владелец говорит «по берлину», zoneinfo хочет «Europe/Berlin» — перевод делает код, не владелец."""
+    assert schedule.parse_zone(raw) == expect
+
+
+@pytest.mark.parametrize("raw", ["по бердску", "Europe/Berlinn", "", "по-нашему"])
+def test_parse_zone_rejects_unknown(raw):
+    """Красивое, но несуществующее имя записать нельзя: расписание молча уехало бы на фолбэк-смещение."""
+    with pytest.raises(ValueError):
+        schedule.parse_zone(raw)
+
+
+def test_timezone_from_chat_beats_env(monkeypatch):
+    monkeypatch.setenv("PUBLISH_TZ", "Europe/Moscow")
+    assert cp.tz_name() == "Europe/Moscow"
+    assert schedule.apply_params({"timezone": "по берлину"})["ok"]
+    assert cp.tz_name() == "Europe/Berlin"
+    assert cp.source_of("tz", "PUBLISH_TZ") == "из чата"
+    assert "Europe/Berlin" in schedule.status_text("flagship")
+
+
+def test_owner_whole_phrase_in_one_call():
+    """«включи автопилот для флагмана вт/чт на 16:00 по берлину» = ОДИН набор параметров, не три шага."""
+    res = schedule.apply_params({"flagship_days": "вт/чт", "flagship_time": "16:00",
+                                 "timezone": "по берлину"}, by="чат Криейтора")
+    assert res["ok"], res["error"]
+    assert cp.days_for("flagship") == (1, 3)
+    assert cp.slot_time("flagship").strftime("%H:%M") == "16:00"
+    assert cp.tz_name() == "Europe/Berlin"
+    assert {k for k, _, _ in res["diff"]} == {"flagship_days", "flagship_time", "tz"}
+
+
+def test_bad_zone_in_phrase_writes_nothing():
+    """Ошибка в ОДНОМ параметре фразы не должна записать остальные наполовину."""
+    before = cp.settings()
+    res = schedule.apply_params({"flagship_time": "16:00", "timezone": "по бердску"})
+    assert res["ok"] is False
+    assert cp.settings() == before
+
+
 # --- НАСТРОЙКА ИЗ ЧАТА: запись и предохранители ----------------------------------------------
 
 def test_apply_params_writes_and_reports_diff():

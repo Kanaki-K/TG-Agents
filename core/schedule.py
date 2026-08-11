@@ -174,6 +174,41 @@ def parse_time(raw) -> str:
     return f"{h:02d}:{m:02d}"
 
 
+# Пояса живой речью: владелец говорит «по берлину», а zoneinfo хочет «Europe/Berlin».
+# Список короткий НАМЕРЕННО — города, где владелец реально бывает/о которых говорит. Полное имя пояса
+# («Europe/Berlin») принимается всегда, так что список — удобство, а не ограничение.
+TZ_ALIASES = {
+    "берлин": "Europe/Berlin", "берлину": "Europe/Berlin", "берлине": "Europe/Berlin",
+    "berlin": "Europe/Berlin", "германия": "Europe/Berlin", "цет": "Europe/Berlin",
+    "москва": "Europe/Moscow", "москве": "Europe/Moscow", "мск": "Europe/Moscow",
+    "moscow": "Europe/Moscow", "msk": "Europe/Moscow",
+    "киев": "Europe/Kyiv", "киеву": "Europe/Kyiv", "kyiv": "Europe/Kyiv", "kiev": "Europe/Kyiv",
+    "лондон": "Europe/London", "лондону": "Europe/London", "london": "Europe/London",
+    "варшава": "Europe/Warsaw", "варшаве": "Europe/Warsaw", "warsaw": "Europe/Warsaw",
+    "дубай": "Asia/Dubai", "дубаю": "Asia/Dubai", "dubai": "Asia/Dubai",
+    "утс": "UTC", "utc": "UTC", "гмт": "UTC", "gmt": "UTC",
+}
+
+
+def parse_zone(raw) -> str:
+    """«по берлину» / «Berlin» / «Europe/Berlin» → «Europe/Berlin». Непонятное/нет базы — ValueError.
+
+    Проверяем ПО ФАКТУ (zoneinfo находит пояс), а не по виду строки: иначе можно записать красивое имя,
+    которого нет в базе, и расписание молча уедет на фолбэк-смещение.
+    """
+    s = str(raw or "").strip().strip(".,")
+    for junk in ("по ", "во ", "в ", "времени ", "время ", "часовой пояс ", "пояс "):
+        if s.lower().startswith(junk):
+            s = s[len(junk):].strip()
+    if not s:
+        raise ValueError("не понял, какой пояс — напиши, например, «по берлину» или «Europe/Berlin»")
+    name = TZ_ALIASES.get(s.lower(), s)
+    if content_plan.zone(name) is None:
+        raise ValueError(f"пояс «{raw}» не нашёл в базе часовых поясов — попробуй «Europe/Berlin» "
+                         f"или город: берлин / москва / киев / лондон / варшава / дубай")
+    return name
+
+
 def parse_number(raw, what: str) -> float:
     """«3» / «3,5» / «3 часа» → 3.0. Внятная ошибка вместо питоновского «could not convert string»."""
     s = str(raw or "").strip().replace(",", ".")
@@ -191,6 +226,8 @@ def _validated(changes: dict) -> dict:
         out["flagship_time"] = parse_time(changes["flagship_time"])
     if "flagship_days" in changes:
         out["flagship_days"] = parse_days(changes["flagship_days"])
+    if "timezone" in changes:
+        out["tz"] = parse_zone(changes["timezone"])
     if "lead_hours" in changes:
         v = parse_number(changes["lead_hours"], "за сколько часов до выхода стартовать")
         if not (0.5 <= v <= 12):
@@ -226,6 +263,8 @@ def describe_param(key: str, value) -> str:
 
 def current_param(key: str):
     """Текущее ЭФФЕКТИВНОЕ значение параметра (с учётом всех источников)."""
+    if key == "tz":
+        return content_plan.tz_name() or "смещение PUBLISH_UTC_OFFSET"
     if key == "flagship_days":
         return list(content_plan.days_for("flagship"))
     if key == "flagship_time":
@@ -386,7 +425,8 @@ def status_text(kind: str = "flagship") -> str:
     # Пары (подпись, значение), а колонку ровняет ljust: подписи руками не выравниваем — на живом
     # выводе 11.08 «чем кончился» и «следующий выход» съехали, и панель стало неудобно читать.
     rows = [
-        ("сейчас", f"{content_plan.human(now)} · пояс {content_plan.tz_label()}"),
+        ("сейчас", f"{content_plan.human(now)}"),
+        ("пояс канала", f"{content_plan.tz_label()} ({content_plan.source_of('tz', 'PUBLISH_TZ')})"),
         ("режим завода", "🧪 test — публиковать нельзя" if mode["mode"] == "test" else "боевой /main"),
         ("канал", config.get_optional("PUBLISH_CHANNEL") or "❌ не задан"),
         ("дни выхода", f"{days} ({content_plan.source_of(f'{kind}_days')})"),

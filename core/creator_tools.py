@@ -257,9 +257,18 @@ TOOLS = [
                        "сейчас, откуда взята каждая настройка. Вызывай ВСЕГДА, когда спрашивают про "
                        "расписание/автозапуск, и ПОСЛЕ любой правки — показать результат.\n"
                        "• 'set' — поменять параметры: flagship_time («16:00»), flagship_days («вт,чт»), "
-                       "lead_hours (за сколько часов до выхода стартовать), margin_minutes (минимальный "
-                       "запас до слота). Передавай ТОЛЬКО то, что владелец назвал; проверку диапазонов "
-                       "делает код и вернёт «было → стало» — покажи это владельцу дословно.\n"
+                       "timezone (пояс канала: «по берлину» / «Europe/Berlin»), lead_hours (за сколько "
+                       "часов до выхода стартовать), margin_minutes (минимальный запас до слота). "
+                       "Передавай ТОЛЬКО то, что владелец назвал, СВОИМИ СЛОВАМИ владельца (код сам "
+                       "разберёт «по берлину», «вт/чт», «за 3 часа»); проверку диапазонов делает код и "
+                       "вернёт «было → стало» — покажи это владельцу дословно.\n"
+                       "⚡ ВАЖНО: параметры можно передать В ТОМ ЖЕ вызове, что 'on'. Владелец говорит "
+                       "одной фразой — «включи автопилот для флагмана вт/чт на 16:00 по берлину» = ОДИН "
+                       "вызов action='on' + flagship_days='вт,чт' + flagship_time='16:00' + "
+                       "timezone='берлин' + reason='<его формулировка>'. Не разбивай на два шага и не "
+                       "переспрашивай то, что он уже назвал. «выключи автопилот» = action='off'.\n"
+                       "Формат пока только флагман (Ф1). Просит автозапуск короткого 🔭 scope — скажи, "
+                       "что он остаётся ручным (там гейт свежести повода), и не выдумывай параметров.\n"
                        "• 'on' / 'off' — включить/выключить автозапуск ЦЕЛИКОМ: 'on' ставит и разрешение, "
                        "и будильник в Планировщике задач Windows (владельцу не нужно ничего делать "
                        "руками — это контракт «одна фраза = работает»), 'off' снимает и то, и другое. "
@@ -277,7 +286,8 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {
             "action": {"type": "string", "description": "status | set | on | off"},
             "flagship_time": {"type": "string", "description": "время выхода флагмана, «16:00»"},
-            "flagship_days": {"type": "string", "description": "дни выхода, «вт,чт»"},
+            "flagship_days": {"type": "string", "description": "дни выхода, «вт,чт» (можно фразой «по вт и чт»)"},
+            "timezone": {"type": "string", "description": "пояс канала: «по берлину» / «Europe/Berlin»"},
             "lead_hours": {"type": "number", "description": "за сколько часов до выхода стартовать (0.5–12)"},
             "margin_minutes": {"type": "number", "description": "минимальный запас до слота, мин (10–240)"},
             "reason": {"type": "string", "description": "зачем включаем — обязательно для action='on'"},
@@ -1488,6 +1498,19 @@ def _publish_now(args: dict | None = None) -> str:
             f"Сообщи владельцу слот; проверить/поправить/отменить — в нативных «Отложенных» канала.")
 
 
+def _rhythm_note(changes: dict) -> str:
+    """Предупреждение о рассинхроне с памятью, если меняли ДНИ выхода.
+
+    Ритм недели описан ещё и в memory/post_standard.md — его читает ПИСАТЕЛЬ. Файл памяти молча не
+    правлю (это канон, его ведёт владелец), но и промолчать нельзя: иначе код и стандарт разъедутся,
+    а писатель будет считать, что канал выходит по-старому.
+    """
+    if "flagship_days" not in changes:
+        return ""
+    return ("\n\n📌 Учти: ритм недели описан и в memory/post_standard.md (его читаю я, когда пишу). "
+            "Сам файл памяти я не правил — скажи, если синхронизировать.")
+
+
 def _autopilot(args: dict | None = None) -> str:
     """Пульт автопилота ИЗ ЧАТА: посмотреть расписание, поменять параметры, включить/выключить.
 
@@ -1500,6 +1523,18 @@ def _autopilot(args: dict | None = None) -> str:
 
     args = args or {}
     action = str(args.get("action", "status")).strip().lower()
+    # Настройки, названные В ТОЙ ЖЕ фразе, применяем ДО включения. Владелец говорит одним предложением
+    # («включи автопилот для флагмана вт/чт на 16:00 по берлину») — разбивать это на два шага значит
+    # вернуть ему нашу внутреннюю кухню. Ошибка в параметре ⇒ НЕ включаем: пусть лучше уточнит.
+    changes = {k: args[k] for k in ("flagship_time", "flagship_days", "lead_hours", "margin_minutes",
+                                    "timezone") if args.get(k) not in (None, "")}
+    applied = ""
+    if changes and action in ("set", "on"):
+        res = schedule.apply_params(changes, by="чат Криейтора")
+        if not res["ok"]:
+            return (f"⛔ Ничего не менял и НЕ включал: {res['error']}\n"
+                    f"Уточни этот параметр — остальное я запомнил.\n\n{schedule.status_text('flagship')}")
+        applied = "\n".join(f"  • {k}: было «{was}» → стало «{now}»" for k, was, now in res["diff"])
     if action in ("status", "", "show"):
         return schedule.status_text("flagship")
     if action == "off":
@@ -1536,28 +1571,20 @@ def _autopilot(args: dict | None = None) -> str:
         warn = ""
         if runmode.get()["mode"] == "test":
             warn = "\n⚠️ Завод в режиме 🧪 /test — автопилот публикацию НЕ сделает. Верни /main.\n"
+        setup = f"⚙️ Заодно записал, что ты назвал:\n{applied}\n" if applied else ""
         return (f"✅ Готово. Автопилот включён, будильник поставлен ({alarm['detail']}) — больше ничего "
-                f"делать не нужно.\n"
+                f"делать не нужно.\n" + setup +
                 f"🗓 Следующий выход: {nxt}. Прогон начнётся за {schedule.lead_hours():g} ч до него, "
                 f"пост встанет в «Отложенные», я напишу сюда.\n"
                 f"⚠️ Посты пойдут в канал БЕЗ твоего «ок» — у тебя есть окно вето в «Отложенных». "
                 f"Выключить мгновенно: скажи «выключи автопилот».\n" + warn + "\n"
-                + schedule.status_text("flagship"))
+                + schedule.status_text("flagship") + _rhythm_note(changes))
     if action == "set":
-        changes = {k: args[k] for k in ("flagship_time", "flagship_days", "lead_hours", "margin_minutes")
-                   if args.get(k) not in (None, "")}
-        res = schedule.apply_params(changes, by="чат Криейтора")
-        if not res["ok"]:
-            return f"⛔ Не менял ничего: {res['error']}\n\nСейчас:\n{schedule.status_text('flagship')}"
-        diff = "\n".join(f"  • {k}: было «{was}» → стало «{now}»" for k, was, now in res["diff"])
-        note = ""
-        if "flagship_days" in changes:
-            # Ритм недели описан ещё и в memory/post_standard.md — его читает ПИСАТЕЛЬ. Файл памяти я
-            # молча не правлю (это канон, его ведёт владелец), но и промолчать нельзя: иначе код и
-            # стандарт разъедутся, а писатель будет считать, что канал выходит по-старому.
-            note = ("\n\n📌 Учти: ритм недели описан и в memory/post_standard.md (его читаю я, когда пишу). "
-                    "Сам файл памяти я не правил — скажи, если синхронизировать.")
-        return f"✅ Расписание обновлено:\n{diff}\n\n{schedule.status_text('flagship')}{note}"
+        if not applied:
+            return (f"Не понял, что менять. Скажи словами: «выход в 16:00», «выходим по вт и чт», "
+                    f"«старт за 3 часа», «по берлину».\n\n{schedule.status_text('flagship')}")
+        return (f"✅ Расписание обновлено:\n{applied}\n\n"
+                f"{schedule.status_text('flagship')}{_rhythm_note(changes)}")
     return (f"Не понял действие «{action}». Умею: status (показать), set (поменять параметр), "
             f"on/off (включить/выключить автозапуск).")
 
