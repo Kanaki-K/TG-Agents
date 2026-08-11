@@ -1495,7 +1495,11 @@ def _autopilot(args: dict | None = None) -> str:
     if action in ("status", "", "show"):
         return schedule.status_text("flagship")
     if action == "off":
-        schedule.turn_off()
+        try:
+            schedule.turn_off()
+        except OSError as e:   # диск/права: владелец должен УЗНАТЬ, что стоп-кран не сработал
+            return (f"❌ НЕ смог выключить автопилот: {e}\n"
+                    f"Он остался ВКЛЮЧЁННЫМ. Удали файл руками: data/autopilot_on")
         return ("⏸ Автопилот ВЫКЛЮЧЕН — сам больше не запускается, посты только по твоей команде.\n"
                 "Пост, который УЖЕ стоит в «Отложенных», это не убирает — удали его в канале, если не нужен.\n\n"
                 + schedule.status_text("flagship"))
@@ -1504,10 +1508,13 @@ def _autopilot(args: dict | None = None) -> str:
         if not reason:
             return ("Скажи одной фразой, зачем включаем (пишу её в файл — потом будет видно, зачем): "
                     "например «обкатка в тестовом канале».")
-        schedule.turn_on(f"{reason} (из чата Криейтора)")
+        try:
+            schedule.turn_on(f"{reason} (из чата Криейтора)")
+        except OSError as e:
+            return f"❌ НЕ смог включить автопилот (не записался файл-выключатель): {e}"
         warn = ""
         if runmode.get()["mode"] == "test":
-            warn = "\n⚠️ Завод в режиме 🧪 /test — автопилот publish НЕ сделает. Верни /main.\n"
+            warn = "\n⚠️ Завод в режиме 🧪 /test — автопилот публикацию НЕ сделает. Верни /main.\n"
         return ("✅ Автопилот ВКЛЮЧЁН.\n"
                 "⚠️ Важно: посты будут уходить в канал БЕЗ твоего «ок» — у тебя есть окно вето в "
                 "«Отложенных» (по умолчанию ~4 часа между прогоном и выходом). Выключить мгновенно: "
@@ -1520,7 +1527,14 @@ def _autopilot(args: dict | None = None) -> str:
         if not res["ok"]:
             return f"⛔ Не менял ничего: {res['error']}\n\nСейчас:\n{schedule.status_text('flagship')}"
         diff = "\n".join(f"  • {k}: было «{was}» → стало «{now}»" for k, was, now in res["diff"])
-        return f"✅ Расписание обновлено:\n{diff}\n\n{schedule.status_text('flagship')}"
+        note = ""
+        if "flagship_days" in changes:
+            # Ритм недели описан ещё и в memory/post_standard.md — его читает ПИСАТЕЛЬ. Файл памяти я
+            # молча не правлю (это канон, его ведёт владелец), но и промолчать нельзя: иначе код и
+            # стандарт разъедутся, а писатель будет считать, что канал выходит по-старому.
+            note = ("\n\n📌 Учти: ритм недели описан и в memory/post_standard.md (его читаю я, когда пишу). "
+                    "Сам файл памяти я не правил — скажи, если синхронизировать.")
+        return f"✅ Расписание обновлено:\n{diff}\n\n{schedule.status_text('flagship')}{note}"
     return (f"Не понял действие «{action}». Умею: status (показать), set (поменять параметр), "
             f"on/off (включить/выключить автозапуск).")
 

@@ -13,6 +13,8 @@ from __future__ import annotations
 import contextvars
 import itertools
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 _configured = False
 
@@ -48,6 +50,32 @@ def setup(level: int = logging.INFO) -> None:
     for h in logging.getLogger().handlers:
         h.addFilter(ctx_filter)
     _configured = True
+
+
+def add_file_log(path, *, max_bytes: int = 1_000_000, backups: int = 3) -> bool:
+    """Дублировать лог в ФАЙЛ. Для процессов без консоли (автопилот под Планировщиком задач Windows).
+
+    Зачем: basicConfig пишет в stderr, а у фоновой задачи stderr уходит в никуда — при тихом падении
+    не остаётся никаких следов («упавший бот молча мёртв», AUDIT N-45). Формат и контекст-фильтр те же,
+    что у консольного хендлера (иначе %(agent)s в формате упадёт на записях из под-модулей).
+    Идемпотентно, как setup(): повторный вызов на тот же файл — no-op. Ротация, чтобы файл не рос вечно.
+    """
+    p = Path(path)
+    root = logging.getLogger()
+    for h in root.handlers:
+        if isinstance(h, RotatingFileHandler) and Path(h.baseFilename) == p:
+            return True
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(p, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+    except OSError:
+        logging.getLogger(__name__).warning("не смог открыть файл лога %s — работаю без него", p,
+                                           exc_info=True)
+        return False
+    fh.setFormatter(logging.Formatter(_FORMAT))
+    fh.addFilter(_ContextFilter())
+    root.addHandler(fh)
+    return True
 
 
 def set_agent(name: str) -> None:

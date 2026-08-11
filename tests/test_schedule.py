@@ -128,7 +128,7 @@ def test_due_goes_when_queue_unknown_but_says_so():
     v = schedule.due("flagship", now=_at(d, schedule.lead_hours() - 0.5),
                      busy_dates=None, last=None)
     assert v["go"] is True
-    assert "проверить не удалось" in v["why"]
+    assert "не проверена" in v["why"]
 
 
 # --- состояние и выключатель -----------------------------------------------------------------
@@ -222,7 +222,10 @@ def test_apply_params_accepts_spoken_numbers():
     assert schedule.lead_hours() == 3.0
 
 
-@pytest.mark.parametrize("raw,expect", [("16:00", "16:00"), ("16", "16:00"), ("9.30", "09:30")])
+@pytest.mark.parametrize("raw,expect", [
+    ("16:00", "16:00"), ("16", "16:00"), ("9.30", "09:30"),
+    ("в 16:00", "16:00"), ("выход в 17:30", "17:30"),   # модель может передать фразу владельца как есть
+])
 def test_parse_time_normalises(raw, expect):
     assert schedule.parse_time(raw) == expect
 

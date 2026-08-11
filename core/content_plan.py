@@ -91,6 +91,11 @@ def _slot_time(kind: str) -> time:
     return time(h, m)
 
 
+def slot_time(kind: str) -> time:
+    """Время выхода формата (публичное имя для других модулей — автопилот/панель состояния)."""
+    return _slot_time(kind)
+
+
 def infer_kind(text: str) -> str:
     """Формат поста по длине: длинный ⇒ флагман (Ф1), короткий ⇒ короткий (Ф5)."""
     return "flagship" if len(text or "") >= FLAGSHIP_MIN_CHARS else "short"

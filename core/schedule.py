@@ -154,8 +154,13 @@ def parse_days(raw) -> list[int]:
 
 
 def parse_time(raw) -> str:
-    """«16:00» / «16» / «16.30» → «16:00». Вне 05:00–23:59 — отказ (ночная публикация = промах)."""
+    """«16:00» / «16» / «16.30» / «в 16:00» → «16:00». Вне 05:00–23:59 — отказ (ночью не публикуем).
+
+    Терпим служебные слова живой речи, как parse_days: владелец говорит «выход в 16:00», и модель
+    может передать фразу как есть — спотыкаться об «в» нельзя.
+    """
     s = str(raw or "").strip().replace(".", ":").replace("-", ":")
+    s = "".join(ch for ch in s if ch.isdigit() or ch == ":").strip(":")
     if s.isdigit():
         s = f"{int(s)}:00"
     try:
@@ -222,7 +227,7 @@ def current_param(key: str):
     if key == "flagship_days":
         return list(content_plan.days_for("flagship"))
     if key == "flagship_time":
-        return f"{content_plan._slot_time('flagship'):%H:%M}"
+        return f"{content_plan.slot_time('flagship'):%H:%M}"
     if key == "lead_hours":
         return lead_hours()
     if key == "margin_minutes":
@@ -314,7 +319,10 @@ def due(kind: str = "flagship", *, now: datetime | None = None,
     if busy_dates and today in busy_dates:
         return {"go": False, "slot": slot,
                 "why": "на сегодня в «Отложенных» канала пост уже стоит — второй не нужен"}
-    note = "" if busy_dates is not None else " (отложку канала проверить не удалось — иду по плану)"
+    # Формулировка нейтральная НАМЕРЕННО: None приходит и когда отложку прочесть не смогли (мёртвая
+    # сессия — тогда это в логах), и когда её просто не смотрели (панель /autopilot). «Не удалось» в
+    # панели читалось бы как поломка, поэтому говорим ровно то, что правда в обоих случаях.
+    note = "" if busy_dates is not None else " (занятость слота не проверена — иду по плану)"
     return {"go": True, "slot": slot,
             "why": f"пора: «{label}» выходит сегодня в {slot:%H:%M}, окно старта "
                    f"{start:%H:%M}–{deadline:%H:%M}{note}"}
@@ -341,7 +349,7 @@ def status_text(kind: str = "flagship") -> str:
         f"• режим завода  : {'🧪 test — публиковать нельзя' if mode['mode'] == 'test' else 'боевой /main'}",
         f"• канал         : {config.get_optional('PUBLISH_CHANNEL') or '❌ не задан'}",
         f"• дни выхода    : {days} ({content_plan.source_of(f'{kind}_days')})",
-        f"• время выхода  : {content_plan._slot_time(kind):%H:%M} "
+        f"• время выхода  : {content_plan.slot_time(kind):%H:%M} "
         f"({content_plan.source_of(f'{kind}_time', content_plan.time_env_key(kind))})",
         f"• старт прогона : за {lead_hours():g} ч до выхода "
         f"({content_plan.source_of('lead_hours', 'AUTOPILOT_LEAD_HOURS')})",

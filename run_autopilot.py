@@ -30,6 +30,25 @@ logging_setup.setup()
 log = logging.getLogger(__name__)
 
 TG_ALERT_LIMIT = 3500   # запас под лимит Telegram (4096) — алерт не должен упасть на длинном отчёте
+LOG_FILE = config.ROOT / "data" / "autopilot.log"
+
+
+def _prepare_unattended() -> None:
+    """Подготовить процесс к работе БЕЗ человека. Два конкретных провала, которых иначе не видно.
+
+    1) КОДИРОВКА. Машина владельца — русский Windows (cp1251). Под Планировщиком задач вывод не в
+       консоль, и Python берёт кодировку локали: первый же print с эмодзи (а их тут и в пайплайне
+       много) упал бы с UnicodeEncodeError — прогон умер бы на печати, а не на деле.
+    2) ЛОГИ. Общий logging пишет в stderr, который у задачи Планировщика уходит в никуда: при падении
+       ДО отправки алерта не осталось бы никаких следов. Дублируем лог в data/autopilot.log
+       (с ротацией, чтобы файл не рос вечно) — есть куда посмотреть после тихого сбоя.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — нет reconfigure (перехваченный поток): не повод падать
+            pass
+    logging_setup.add_file_log(LOG_FILE)
 
 
 def _busy_dates(channel: str):
@@ -80,8 +99,8 @@ def _run(kind: str, slot) -> None:
     except Exception as e:  # noqa: BLE001 — падение прогона обязано ДОЙТИ до владельца, а не в лог
         log.exception("[автопилот] прогон упал")
         bot_alert.notify_owner(f"❌ Автопилот: прогон упал — {type(e).__name__}: {e}\n\n"
-                               f"В канал ничего не ушло. Подробности в логах; повторить руками: "
-                               f"python run_pipeline.py")
+                               f"В канал ничего не ушло. Подробности — в data/autopilot.log; "
+                               f"повторить руками: python run_pipeline.py")
         return
     bot_alert.notify_owner(f"✅ Автопилот: прогон закончен ({when}).\n\n{_digest(report)}")
 
@@ -98,7 +117,16 @@ def check_once() -> str:
             bot_alert.notify_owner("❌ Автопилот: канал публикации не задан (PUBLISH_CHANNEL) — выход пропущен.")
             schedule.mark_warned("no-channel")
         return "no-channel"
+    # ДВА ЗАХОДА, дешёвый сначала. Первый — без сети: день недели, окно, «сегодня уже гоняли». Только
+    # если он говорит «пора», лезем в «Отложенные» канала (это MTProto-сессия бёрнера — трогать её
+    # каждые 10 минут в понедельник незачем: и лишняя активность аккаунта, и медленно).
+    verdict = schedule.due("flagship")
+    if not verdict["go"]:
+        log.info("[автопилот] пропуск: %s", verdict["why"])
+        print(f"⏭ {verdict['why']}")
+        return "skip"
     verdict = schedule.due("flagship", busy_dates=_busy_dates(channel))
+    log.info("[автопилот] вердикт: %s — %s", "пора" if verdict["go"] else "пропуск", verdict["why"])
     print(f"{'✅' if verdict['go'] else '⏭'} {verdict['why']}")
     if not verdict["go"]:
         return "skip"
@@ -127,6 +155,7 @@ def status() -> None:
 
 
 def main() -> None:
+    _prepare_unattended()   # кодировка вывода + файловый лог: ДО первого print/лога, см. функцию
     if "--status" in sys.argv:
         status()
         return
