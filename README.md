@@ -43,6 +43,7 @@ The guiding idea is **"brains vs. hands"**: LLM reasoning is cheap and uniform, 
 | **Channel analyst** | Judges content by channel metrics (inbound) | `python run_analyst.py` | Haiku 4.5 |
 | **Publisher** | Not a bot — the `/schedule` command inside Creator; a userbot posts the file into the channel's native *Scheduled* queue via MTProto | — | — |
 | **Full pipeline** | Scout → Creator → scheduled post, in one command | `python run_pipeline.py` | — |
+| **Autopilot** | Not a bot — runs the flagship pipeline **on schedule** (its publish days, starting 4h before the slot) and reports to the owner in Telegram. Off by default; configured by chatting with Creator (`/autopilot`) | `python run_autopilot.py` | — |
 
 > The three content agents (Scout, Creator, Analyst) are the whole team. Earlier standalone bots — a personal assistant and a "developer" agent — were removed to keep the focus on the content factory; their code is recoverable from git history.
 
@@ -78,6 +79,33 @@ PUBLISHER  /schedule   (deterministic, no LLM, $0)
 ```
 
 Publishing is done **as a file** (photo + caption via MTProto), with no external image hosting or link previews — a deliberate, hard-won choice. `run_pipeline.py --skip-scout` reuses the latest brief; `--scope` runs a shorter analytical post format. See [`docs/scope.md`](docs/scope.md).
+
+### Autopilot: the same run, without a human trigger
+
+Once the flagship format ran a month without a single owner edit, the missing piece was no longer quality
+but **punctuality**. `run_autopilot.py` starts the *same* pipeline 4 hours before the publish slot, so the
+post sits in the native *Scheduled* queue with a wide review window, and the owner gets a Telegram report
+either way. The decision ("is it time?") is a pure function of time and on-disk state (`core/schedule.py`),
+so it is unit-tested without spending money on real runs; the executor only obeys the verdict.
+
+Gates are **in code, not in a prompt**: a file switch (`data/autopilot_on`, absent by default), a start
+*window* rather than an instant, "already ran today", "the slot is already taken", and a hard stop in
+cheap-model test mode. The schedule itself is configured **by chatting with the Creator bot**
+(`/autopilot`) — values arrive from a model, so ranges and a "the window can't be empty" cross-check are
+enforced by the validator, and every change is echoed back as *before → after*. Full owner-facing guide:
+[`docs/AUTOPILOT.md`](docs/AUTOPILOT.md).
+
+**Known limitations** (documented rather than hidden — all of them are consequences of running unattended):
+
+| Limitation | Why it happens / what to expect |
+|---|---|
+| Owner's veto still consumes a bank topic | The topic is marked *used* when the post enters the queue, not when it publishes. Deleting the queued post keeps the topic out of rotation (~6 months). Fine at ~200 topics; needs a "return on veto" path if vetoing becomes common |
+| Veto doesn't retract the published-flagships journal entry | That journal feeds the Threads distiller, so a vetoed post can still be distilled later. Visible while Threads is manual; must be wired before Threads is automated |
+| A failed run still costs money | If it breaks after the writing stage, ~$1.4 is spent with no post, and there's no same-day retry (the "ran today" mark is set *before* the run, on purpose — otherwise a crash loop burns cash) |
+| Chat control needs the bot alive | `/autopilot` works only while `run_creator.py` runs. The autopilot itself is independent; without the bot the panel is terminal-only (`--status`) |
+| Host timezone ≠ channel timezone | The channel schedule is timezone-pinned (`PUBLISH_TZ`), but the OS scheduler fires on host local time. Travel moves the host clock, so the recipe uses a frequent alarm and lets the code decide — extra firings exit in milliseconds without touching the network |
+| Cover generation is the fragile link | Covers come from a browser-automated ChatGPT burner profile. Expired session → the post ships **as text** with a warning in the report |
+| No file log means no post-mortem | Background processes have nowhere to write stderr, so the autopilot mirrors its log to `data/autopilot.log` (`--log` tails it) and streams the pipeline narrative into it — otherwise a silent failure leaves no trace |
 
 ## Architecture at a glance
 
@@ -136,6 +164,7 @@ tests/         pytest suite
    ```bash
    python run_pipeline.py            # Scout → Creator → scheduled post
    python run_pipeline.py --skip-scout   # reuse the latest brief
+   python run_autopilot.py --status  # what the scheduler thinks right now (no side effects)
    ```
 
 6. **Track spend:**
@@ -153,7 +182,8 @@ All secrets live in `.env` (never committed; `.env.example` is the template). Ke
 | `SECRETARY_BOT_TOKEN`, `SCOUT_BOT_TOKEN`, `CREATOR_BOT_TOKEN`, `ANALYST_BOT_TOKEN`, `DEVELOPER_BOT_TOKEN` | Telegram bot tokens (one per agent) |
 | `OWNER_ID` | Comma-separated Telegram user IDs allowed to use the bots (empty = open to everyone, with a loud startup warning; find yours via `/whoami`) |
 | `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` / `TELEGRAM_PHONE` | MTProto credentials for channel export, scanning, and publishing |
-| `PUBLISH_CHANNEL` / `PUBLISH_NOTIFY` / `PUBLISH_TZ` | Publishing target, owner notifications, timezone |
+| `PUBLISH_CHANNEL` / `PUBLISH_NOTIFY` / `PUBLISH_TZ` | Publishing target, owner notifications, timezone (an IANA name such as `Europe/Berlin`, so DST is handled) |
+| `PUBLISH_FLAGSHIP_TIME` / `PUBLISH_SHORT_TIME` | Publish time per format, `HH:MM` in `PUBLISH_TZ`. Live edits made by chatting with Creator land in `data/plan_settings.json` and take precedence; `run_autopilot.py --status` prints which source won |
 | `COINMARKETCAP_API_KEY` | Live price/market-cap for fact-checking numbers |
 | `X_AUTH_TOKEN` / `CT0` | Burner cookies for read-only X recon (Scout) |
 
@@ -173,6 +203,9 @@ All secrets live in `.env` (never committed; `.env.example` is the template). Ke
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — engineering map: layers, data flow, fragility points, extension checklists
 - [`docs/AUDIT.md`](docs/AUDIT.md) — maturity assessment and prioritised backlog
 - [`docs/scope.md`](docs/scope.md) — the 🔭 short analytical post format
+- [`docs/flagship.md`](docs/flagship.md) — the long educational post format (topic bank, voice anchors, run flow)
+- [`docs/AUTOPILOT.md`](docs/AUTOPILOT.md) — scheduled autonomous runs: setup, safety gates, logs, known limitations
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — backups, "is the factory alive?", stop-cocks
 - [`CLAUDE.md`](CLAUDE.md) — working context for Claude Code
 </content>
 </invoke>
