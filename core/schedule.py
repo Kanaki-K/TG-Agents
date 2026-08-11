@@ -333,10 +333,18 @@ def due(kind: str = "flagship", *, now: datetime | None = None,
     if now < start:
         return {"go": False, "slot": slot,
                 "why": f"рано: окно старта с {start:%H:%M} (выход в {slot:%H:%M})"}
-    if now > deadline:
+    # Две РАЗНЫЕ причины, а не одна «поздно» (баг, вскрытый живым выводом 11.08 в 19:13: панель писала
+    # «до выхода в 16:00 меньше 60 мин», когда слот прошёл ТРИ ЧАСА назад). Формально пропуск верный в
+    # обоих случаях, но объяснение — единственное, по чему владелец понимает, почему в канале тишина.
+    if now >= slot:
         return {"go": False, "slot": slot,
-                "why": f"поздно: до выхода в {slot:%H:%M} меньше {margin_minutes():.0f} мин — "
-                       f"прогон не успеет, сегодня пропускаю"}
+                "why": f"выход в {slot:%H:%M} уже прошёл — сегодня поезд ушёл "
+                       f"(окно старта было {start:%H:%M}–{deadline:%H:%M})"}
+    if now > deadline:
+        left = (slot - now).total_seconds() / 60
+        return {"go": False, "slot": slot,
+                "why": f"поздно: до выхода в {slot:%H:%M} осталось {left:.0f} мин (нужен запас "
+                       f"{margin_minutes():.0f}) — прогон не успеет, сегодня пропускаю"}
     prev = last_run(kind) if last is _UNSET else last
     if prev == today:
         return {"go": False, "slot": slot, "why": "сегодня уже запускался (метка в autopilot_state.json)"}
@@ -365,26 +373,28 @@ def status_text(kind: str = "flagship") -> str:
     st = content_plan.settings()
     v = due(kind, busy_dates=None)
     nxt = content_plan.next_slot(kind)
-    lines = [
-        f"🤖 АВТОПИЛОТ — {'✅ ВКЛЮЧЁН' if enabled() else '⏸ ВЫКЛЮЧЕН'}"
-        f"{'' if enabled() else ' (сам не запускается)'}",
-        "",
-        f"• сейчас        : {content_plan.human(now)} · пояс {content_plan.tz_label()}",
-        f"• режим завода  : {'🧪 test — публиковать нельзя' if mode['mode'] == 'test' else 'боевой /main'}",
-        f"• канал         : {config.get_optional('PUBLISH_CHANNEL') or '❌ не задан'}",
-        f"• дни выхода    : {days} ({content_plan.source_of(f'{kind}_days')})",
-        f"• время выхода  : {content_plan.slot_time(kind):%H:%M} "
-        f"({content_plan.source_of(f'{kind}_time', content_plan.time_env_key(kind))})",
-        f"• старт прогона : за {lead_hours():g} ч до выхода "
-        f"({content_plan.source_of('lead_hours', 'AUTOPILOT_LEAD_HOURS')})",
-        f"• запас до слота: {margin_minutes():g} мин "
-        f"({content_plan.source_of('margin_minutes', 'AUTOPILOT_MARGIN_MINUTES')})",
-        f"• окно старта   : {f'{win[0]:%H:%M}–{win[1]:%H:%M}' if win else '— сегодня не день формата'}",
-        f"• последний авто: {last_run(kind) or '— ни разу'}",
-        f"• чем кончился : {last_result(kind)}",
-        f"• следующий выход: {content_plan.human(nxt)}",
-        f"• вердикт сейчас: {'✅ пора' if v['go'] else '⏭ пропуск'} — {v['why']}",
+    # Пары (подпись, значение), а колонку ровняет ljust: подписи руками не выравниваем — на живом
+    # выводе 11.08 «чем кончился» и «следующий выход» съехали, и панель стало неудобно читать.
+    rows = [
+        ("сейчас", f"{content_plan.human(now)} · пояс {content_plan.tz_label()}"),
+        ("режим завода", "🧪 test — публиковать нельзя" if mode["mode"] == "test" else "боевой /main"),
+        ("канал", config.get_optional("PUBLISH_CHANNEL") or "❌ не задан"),
+        ("дни выхода", f"{days} ({content_plan.source_of(f'{kind}_days')})"),
+        ("время выхода", f"{content_plan.slot_time(kind):%H:%M} "
+                         f"({content_plan.source_of(f'{kind}_time', content_plan.time_env_key(kind))})"),
+        ("старт прогона", f"за {lead_hours():g} ч до выхода "
+                          f"({content_plan.source_of('lead_hours', 'AUTOPILOT_LEAD_HOURS')})"),
+        ("запас до слота", f"{margin_minutes():g} мин "
+                           f"({content_plan.source_of('margin_minutes', 'AUTOPILOT_MARGIN_MINUTES')})"),
+        ("окно старта", f"{win[0]:%H:%M}–{win[1]:%H:%M}" if win else "— сегодня не день формата"),
+        ("последний авто", str(last_run(kind) or "— ни разу")),
+        ("чем кончился", last_result(kind)),
+        ("следующий слот", content_plan.human(nxt)),
+        ("вердикт сейчас", f"{'✅ пора' if v['go'] else '⏭ пропуск'} — {v['why']}"),
     ]
     if st.get("updated"):
-        lines.append(f"• правил из чата: {st['updated']} ({st.get('updated_by', '?')})")
-    return "\n".join(lines)
+        rows.append(("правил из чата", f"{st['updated']} ({st.get('updated_by', '?')})"))
+    width = max(len(k) for k, _ in rows)
+    head = (f"🤖 АВТОПИЛОТ — {'✅ ВКЛЮЧЁН' if enabled() else '⏸ ВЫКЛЮЧЕН'}"
+            f"{'' if enabled() else ' (сам не запускается)'}")
+    return "\n".join([head, ""] + [f"• {k.ljust(width)} : {v}" for k, v in rows])

@@ -85,6 +85,24 @@ def test_due_too_late_near_slot():
                      busy_dates=set(), last=None)
     assert v["go"] is False
     assert "поздно" in v["why"]
+    assert "осталось 30 мин" in v["why"]          # СКОЛЬКО осталось, а не абстрактное «меньше N»
+
+
+def test_due_says_slot_already_passed_not_almost_here():
+    """Баг с живого вывода 11.08 в 19:13: слот 16:00 прошёл 3 часа назад, а панель писала «до выхода
+    меньше 60 мин». Пропуск был верный, объяснение — нет; а объяснение и есть весь смысл строки."""
+    d = _slot_day()
+    v = schedule.due("flagship", now=_at(d, -3), busy_dates=set(), last=None)   # 3 часа ПОСЛЕ слота
+    assert v["go"] is False
+    assert "уже прошёл" in v["why"]
+    assert "меньше" not in v["why"]
+
+
+def test_panel_columns_are_aligned():
+    """Панель — основной интерфейс (её читают с телефона): подписи ровняет ljust, а не пробелы руками."""
+    body = [ln for ln in schedule.status_text("flagship").splitlines() if ln.startswith("• ")]
+    assert len(body) >= 12
+    assert len({ln.index(" : ") for ln in body}) == 1     # двоеточие в одной колонке у ВСЕХ строк
 
 
 def test_due_skips_non_flagship_day():
