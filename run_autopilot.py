@@ -93,8 +93,10 @@ def check_once() -> str:
         return "off"
     channel = config.get_optional("PUBLISH_CHANNEL")
     if not channel:
-        print("❌ PUBLISH_CHANNEL не задан в .env — публиковать некуда, прогон не начинаю.")
-        bot_alert.notify_owner("❌ Автопилот: PUBLISH_CHANNEL не задан в .env — выход пропущен.")
+        print("❌ PUBLISH_CHANNEL не задан — публиковать некуда, прогон не начинаю.")
+        if not schedule.warned_today("no-channel"):   # проверки частые: алерт один раз в день, не спам
+            bot_alert.notify_owner("❌ Автопилот: канал публикации не задан (PUBLISH_CHANNEL) — выход пропущен.")
+            schedule.mark_warned("no-channel")
         return "no-channel"
     verdict = schedule.due("flagship", busy_dates=_busy_dates(channel))
     print(f"{'✅' if verdict['go'] else '⏭'} {verdict['why']}")
@@ -105,8 +107,10 @@ def check_once() -> str:
         # /test = дешёвая модель для проверки механики. Такой пост в канал ставить нельзя.
         # Метку НЕ ставим: вернёшь /main внутри окна — прогон состоится в эту же проверку.
         print("🧪 Режим /test — публикацию НЕ делаю (в канал ушёл бы Haiku-пост). Верни /main.")
-        bot_alert.notify_owner("🧪 Автопилот: пора гнать флагман, но завод в режиме /test — "
-                               "публикацию не делаю. Верни /main, если выход нужен сегодня.")
+        if not schedule.warned_today("test-mode"):
+            bot_alert.notify_owner("🧪 Автопилот: пора гнать флагман, но завод в режиме /test — "
+                                   "публикацию не делаю. Верни /main, если выход нужен сегодня.")
+            schedule.mark_warned("test-mode")
         return "test"
     _run("flagship", verdict["slot"])
     return "run"

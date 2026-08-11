@@ -89,20 +89,24 @@ def last_run(kind: str = "flagship") -> date | None:
         return None
 
 
+def _save_state(data: dict) -> None:
+    """Записать состояние. Не бросает: сорванная запись метки не должна ронять прогон (о ней — в лог)."""
+    try:
+        STATE_FILE.parent.mkdir(exist_ok=True)
+        STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        log.exception("[автопилот] не смог записать состояние в %s", STATE_FILE)
+
+
 def mark_run(kind: str, d: date | None = None) -> None:
     """Пометить, что формат сегодня уже запускался.
 
     Ставим метку ДО прогона (заявка, не отчёт): если прогон упадёт на середине, автопилот не станет
     перезапускать его каждые 10 минут и жечь деньги. Владелец увидит алерт о падении и решит сам.
     """
-    d = d or datetime.now(content_plan.tz()).date()
     data = _state()
-    data[kind] = d.isoformat()
-    try:
-        STATE_FILE.parent.mkdir(exist_ok=True)
-        STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        log.exception("[автопилот] не смог записать состояние в %s", STATE_FILE)
+    data[kind] = (d or datetime.now(content_plan.tz()).date()).isoformat()
+    _save_state(data)
 
 
 # --- НАСТРОЙКА ИЗ ЧАТА: валидация в КОДЕ, не в промпте ---------------------------------------
@@ -122,15 +126,22 @@ DOW_ALIASES = {
 }
 
 
+# Служебные слова живой речи: владелец скажет «по вт и пт», модель может передать фразу как есть —
+# спотыкаться об «по» нельзя, иначе «настройка разговором» превращается в угадывание формата.
+DOW_FILLER = {"по", "и", "в", "во", "на", "каждый", "каждую", "дни", "день", "выходим", "только", "-", "—"}
+
+
 def parse_days(raw) -> list[int]:
-    """«вт,чт» / «Вторник и четверг» / [1,3] → [1, 3]. Непонятное — ValueError с внятным текстом."""
+    """«вт,чт» / «по вт и пт» / [1,3] → [1, 3]. Непонятное — ValueError с внятным текстом."""
     if isinstance(raw, (list, tuple)):
         items = [str(x) for x in raw]
     else:
-        items = [p for p in str(raw or "").replace(" и ", ",").replace("/", ",").replace(" ", ",").split(",") if p]
+        items = [p for p in str(raw or "").replace("/", ",").replace(" ", ",").split(",") if p]
     out: list[int] = []
     for it in items:
         s = it.strip().lower().strip(".")
+        if not s or s in DOW_FILLER:
+            continue
         if s.isdigit() and 0 <= int(s) <= 6:
             out.append(int(s))
         elif s in DOW_ALIASES:
@@ -138,7 +149,7 @@ def parse_days(raw) -> list[int]:
         else:
             raise ValueError(f"не понял день «{it}» — пиши днями недели: «вт,чт»")
     if not out:
-        raise ValueError("список дней пустой — без дней выхода расписание не имеет смысла")
+        raise ValueError("не увидел ни одного дня недели — напиши, например, «вт,чт»")
     return sorted(set(out))
 
 
@@ -156,6 +167,16 @@ def parse_time(raw) -> str:
     return f"{h:02d}:{m:02d}"
 
 
+def parse_number(raw, what: str) -> float:
+    """«3» / «3,5» / «3 часа» → 3.0. Внятная ошибка вместо питоновского «could not convert string»."""
+    s = str(raw or "").strip().replace(",", ".")
+    keep = "".join(ch for ch in s if ch.isdigit() or ch == ".")   # «3 часа» → «3»
+    try:
+        return float(keep)
+    except ValueError:
+        raise ValueError(f"не понял число в «{raw}» ({what}) — напиши цифрой, например «3»") from None
+
+
 def _validated(changes: dict) -> dict:
     """Проверить пачку правок целиком. Возвращает готовые к записи значения; бросает ValueError."""
     out: dict = {}
@@ -164,12 +185,12 @@ def _validated(changes: dict) -> dict:
     if "flagship_days" in changes:
         out["flagship_days"] = parse_days(changes["flagship_days"])
     if "lead_hours" in changes:
-        v = float(str(changes["lead_hours"]).replace(",", "."))
+        v = parse_number(changes["lead_hours"], "за сколько часов до выхода стартовать")
         if not (0.5 <= v <= 12):
             raise ValueError(f"старт за {v:g} ч до выхода — вне разумного (0.5–12 ч)")
         out["lead_hours"] = v
     if "margin_minutes" in changes:
-        v = float(str(changes["margin_minutes"]).replace(",", "."))
+        v = parse_number(changes["margin_minutes"], "запас до слота в минутах")
         if not (10 <= v <= 240):
             raise ValueError(f"запас {v:g} мин — вне разумного (10–240 мин)")
         out["margin_minutes"] = v
@@ -235,6 +256,18 @@ def apply_params(changes: dict, by: str = "чат") -> dict:
 
 
 # --- ОКНО и ВЕРДИКТ ---------------------------------------------------------------------------
+
+def warned_today(key: str) -> bool:
+    """Уже предупреждали владельца про это сегодня? Проверки идут каждые 10–30 мин, и алерт «завод в
+    /test» без этого превратился бы в спам — а спам перестают читать, и настоящий алерт потеряется."""
+    return _state().get(f"warned_{key}") == datetime.now(content_plan.tz()).date().isoformat()
+
+
+def mark_warned(key: str) -> None:
+    data = _state()
+    data[f"warned_{key}"] = datetime.now(content_plan.tz()).date().isoformat()
+    _save_state(data)
+
 
 def window(kind: str, d: date) -> tuple[datetime, datetime] | None:
     """Окно старта в конкретный день: (когда можно начинать, крайний срок). None — не день формата.

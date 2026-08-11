@@ -149,6 +149,25 @@ def test_last_run_survives_broken_state(tmp_path, monkeypatch):
     assert schedule.last_run("flagship") is None
 
 
+def test_warned_once_per_day(tmp_path, monkeypatch):
+    """Проверки идут каждые 10-30 мин: алерт «завод в /test» обязан прийти ОДИН раз, иначе спам."""
+    monkeypatch.setattr(schedule, "STATE_FILE", tmp_path / "autopilot_state.json")
+    assert schedule.warned_today("test-mode") is False
+    schedule.mark_warned("test-mode")
+    assert schedule.warned_today("test-mode") is True
+    assert schedule.warned_today("no-channel") is False     # ключи независимы
+
+
+def test_warning_mark_does_not_eat_run_mark(tmp_path, monkeypatch):
+    """Метки предупреждений и метка прогона живут в одном файле — не должны затирать друг друга."""
+    monkeypatch.setattr(schedule, "STATE_FILE", tmp_path / "autopilot_state.json")
+    d = _slot_day()
+    schedule.mark_run("flagship", d)
+    schedule.mark_warned("test-mode")
+    assert schedule.last_run("flagship") == d
+    assert schedule.warned_today("test-mode") is True
+
+
 def test_switch_off_by_default_and_toggles(tmp_path, monkeypatch):
     monkeypatch.setattr(schedule, "ON_FILE", tmp_path / "autopilot_on")
     assert schedule.enabled() is False          # по умолчанию ВЫКЛЮЧЕН — включает только владелец
@@ -175,10 +194,32 @@ def test_parse_days_understands_owner_phrasing(raw, expect):
     assert schedule.parse_days(raw) == expect
 
 
-@pytest.mark.parametrize("raw", ["вторнник", "", "8", "каждый день"])
+@pytest.mark.parametrize("raw", ["по вт и пт", "выходим по вт, пт", "каждый вт и пт"])
+def test_parse_days_ignores_speech_filler(raw):
+    """Модель может передать фразу владельца как есть — «по» и «каждый» не должны ломать настройку."""
+    assert schedule.parse_days(raw) == [1, 4]
+
+
+@pytest.mark.parametrize("raw", ["вторнник", "", "8", "каждый день", "по и в"])
 def test_parse_days_rejects_garbage(raw):
     with pytest.raises(ValueError):
         schedule.parse_days(raw)
+
+
+@pytest.mark.parametrize("raw,expect", [("3", 3.0), ("3,5", 3.5), ("3 часа", 3.0), ("за 2 часа", 2.0)])
+def test_parse_number_understands_speech(raw, expect):
+    assert schedule.parse_number(raw, "тест") == expect
+
+
+def test_parse_number_explains_instead_of_crashing():
+    with pytest.raises(ValueError, match="не понял число"):
+        schedule.parse_number("рано утром", "тест")
+
+
+def test_apply_params_accepts_spoken_numbers():
+    res = schedule.apply_params({"lead_hours": "3 часа"}, by="тест")
+    assert res["ok"], res["error"]
+    assert schedule.lead_hours() == 3.0
 
 
 @pytest.mark.parametrize("raw,expect", [("16:00", "16:00"), ("16", "16:00"), ("9.30", "09:30")])
