@@ -1,14 +1,52 @@
-"""Тесты файлового лога (core/logging_setup.add_file_log).
-
-Зачем покрыто: этим логом живёт АВТОПИЛОТ — процесс без консоли (Планировщик задач Windows). Его
-stderr уходит в никуда, и файл на диске — единственный след после тихого сбоя. Если хендлер тихо не
-подключится или начнёт дублироваться на каждый прогон, мы этого никак не увидим в работе.
-"""
+"""Тесты наблюдаемости (P2-15): метки agent/req в логах через contextvars + фильтр (core/logging_setup)."""
+import contextvars
 import logging
 import logging.handlers   # явно: без этого logging.handlers может быть недоступен как атрибут
 
-from core import logging_setup
+from core import logging_setup as ls
 
+
+def test_defaults_are_dash():
+    # вне запроса/агента метки — «-» (стартовый/фоновый код), а не падение форматтера.
+    # Свежий Context: не зависим от того, что другие тесты уже выставили set_agent/new_request.
+    ctx = contextvars.Context()
+    assert ctx.run(ls._agent_var.get) == "-"
+    assert ctx.run(ls._req_var.get) == "-"
+
+
+def test_set_agent():
+    ls.set_agent("creator")
+    assert ls._agent_var.get() == "creator"
+    ls.set_agent("")           # пусто → «-», не пустая строка
+    assert ls._agent_var.get() == "-"
+
+
+def test_new_request_monotonic_and_tag():
+    r1 = ls.new_request()
+    r2 = ls.new_request("777")
+    assert r1 != r2
+    assert r2.endswith("-777")           # метка (uid) приклеена
+    assert ls._req_var.get() == r2       # contextvar обновлён
+
+
+def test_filter_injects_fields_onto_record():
+    ls.set_agent("scout")
+    ls.new_request("42")
+    rec = logging.LogRecord("core.test", logging.INFO, __file__, 1, "msg", None, None)
+    assert ls._ContextFilter().filter(rec) is True
+    assert rec.agent == "scout"
+    assert rec.req.endswith("-42")
+
+
+def test_setup_idempotent():
+    ls.setup()
+    ls.setup()   # повторный вызов безвреден (не бросает, не дублирует хендлеры)
+
+
+# --- ФАЙЛОВЫЙ ЛОГ (add_file_log) --------------------------------------------------------------
+# Этим логом живёт АВТОПИЛОТ — процесс без консоли (Планировщик задач Windows). Его stderr уходит в
+# никуда, и файл на диске — единственный след после тихого сбоя. Если хендлер не подключится или
+# начнёт дублироваться на каждый прогон, в работе мы этого не увидим.
 
 def _detach(path):
     """Снять наши файловые хендлеры с КОРНЕВОГО логгера — иначе тест течёт в остальные тесты."""
@@ -22,7 +60,7 @@ def _detach(path):
 def test_add_file_log_writes_record(tmp_path):
     p = tmp_path / "autopilot.log"
     try:
-        assert logging_setup.add_file_log(p) is True
+        assert ls.add_file_log(p) is True
         logging.getLogger("test.autopilot").warning("проверка записи")
         assert p.exists()
         assert "проверка записи" in p.read_text(encoding="utf-8")
@@ -35,9 +73,9 @@ def test_add_file_log_is_idempotent(tmp_path):
     p = tmp_path / "autopilot.log"
     try:
         before = len(logging.getLogger().handlers)
-        assert logging_setup.add_file_log(p) is True
+        assert ls.add_file_log(p) is True
         added = len(logging.getLogger().handlers)
-        assert logging_setup.add_file_log(p) is True
+        assert ls.add_file_log(p) is True
         assert len(logging.getLogger().handlers) == added == before + 1
     finally:
         _detach(p)
@@ -47,18 +85,18 @@ def test_add_file_log_survives_bad_path(tmp_path):
     """Не смогли открыть файл — работаем без него и НЕ роняем прогон (лог не важнее публикации)."""
     blocker = tmp_path / "not_a_dir"
     blocker.write_text("я файл, а не папка", encoding="utf-8")
-    assert logging_setup.add_file_log(blocker / "sub" / "autopilot.log") is False
+    assert ls.add_file_log(blocker / "sub" / "autopilot.log") is False
 
 
 def test_file_log_keeps_agent_context(tmp_path):
     """В формате есть %(agent)s: без контекст-фильтра запись из под-модуля уронила бы форматирование."""
     p = tmp_path / "autopilot.log"
     try:
-        assert logging_setup.add_file_log(p) is True
-        logging_setup.set_agent("autopilot")
+        assert ls.add_file_log(p) is True
+        ls.set_agent("autopilot")
         logging.getLogger("core.dedup").warning("из под-модуля")
         text = p.read_text(encoding="utf-8")
         assert "autopilot" in text and "из под-модуля" in text
     finally:
-        logging_setup.set_agent("-")
+        ls.set_agent("-")
         _detach(p)
