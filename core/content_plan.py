@@ -66,6 +66,23 @@ def kind_label(kind: str) -> str:
     return "флагман (Ф1)" if kind == "flagship" else "короткий (Ф5)"
 
 
+def days_for(kind: str) -> tuple:
+    """Дни недели формата (weekday(): Пн=0). Один источник правды о ритме — план И автопилот."""
+    return FLAGSHIP_DAYS if kind == "flagship" else SHORT_DAYS
+
+
+def slot_on(d, kind: str) -> datetime | None:
+    """Слот КОНКРЕТНОГО дня (tz-aware) или None, если в этот день формат не выходит.
+
+    Нужен автопилоту (core/schedule): его вопрос — «во сколько выход СЕГОДНЯ», а next_slot отвечает
+    на другой — «какой слот следующий» (тот может уехать на другой день, и автопилот запустил бы
+    прогон не в свой день).
+    """
+    if d.weekday() not in days_for(kind):
+        return None
+    return datetime.combine(d, _slot_time(kind), tz())
+
+
 def next_slot(kind: str, *, now: datetime | None = None, busy_dates: set | None = None) -> datetime:
     """Ближайший подходящий слот для формата по ритму недели (tz-aware datetime).
 
