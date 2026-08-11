@@ -22,7 +22,6 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from datetime import datetime
 
 from connectors.telegram_publish import publish
 from core import bot_alert, config, content_plan, logging_setup, runmode, schedule
@@ -114,24 +113,13 @@ def check_once() -> str:
 
 
 def status() -> None:
-    """Что автопилот думает прямо сейчас — без побочных действий (для чек-листа перед включением)."""
-    now = datetime.now(content_plan.tz())
-    win = schedule.window("flagship", now.date())
-    print("=== Автопилот: состояние ===")
-    print(f"  выключатель   : {'✅ ВКЛЮЧЁН' if schedule.enabled() else '⏸ выключен'} "
-          f"({schedule.ON_FILE})")
-    print(f"  сейчас        : {content_plan.human(now)} · пояс {content_plan.tz_label()}")
-    mode = runmode.get()
-    label = f"🧪 test ({mode['model'] or ''})" if mode["mode"] == "test" else "боевой /main"
-    print(f"  режим завода  : {label}")
-    print(f"  канал         : {config.get_optional('PUBLISH_CHANNEL') or '❌ не задан (PUBLISH_CHANNEL)'}")
-    days = "/".join(content_plan.RU_DOW[i] for i in content_plan.days_for("flagship"))
-    print(f"  флагман выходит: {days} в {content_plan._slot_time('flagship'):%H:%M}")
-    print(f"  окно старта    : {f'{win[0]:%H:%M}–{win[1]:%H:%M}' if win else '— сегодня не день флагмана'} "
-          f"(лид {schedule.lead_hours():g}ч, запас {schedule.margin_minutes():g} мин)")
-    print(f"  последний авто : {schedule.last_run('flagship') or '— ни разу'}")
-    v = schedule.due("flagship", busy_dates=None)
-    print(f"  вердикт сейчас : {'✅ пора' if v['go'] else '⏭ пропуск'} — {v['why']}")
+    """Что автопилот думает прямо сейчас — без побочных действий (для чек-листа перед включением).
+
+    Панель ОДНА для CLI и для /autopilot в боте (schedule.status_text) — чтобы в терминале и в чате
+    владелец видел одно и то же, а не две расходящиеся правды.
+    """
+    print(schedule.status_text("flagship"))
+    print(f"\nвыключатель: {schedule.ON_FILE}")
 
 
 def main() -> None:

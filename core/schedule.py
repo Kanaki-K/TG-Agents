@@ -17,7 +17,7 @@ import json
 import logging
 from datetime import date, datetime, timedelta
 
-from core import config, content_plan, io_safe
+from core import config, content_plan, io_safe, runmode
 
 log = logging.getLogger(__name__)
 
@@ -31,27 +31,30 @@ DEFAULT_CHECK_EVERY = 600      # пауза между проверками в �
 _UNSET = object()               # «параметр не передан» ≠ «передан None» (None значит «неизвестно»)
 
 
-def _num(name: str, default: float) -> float:
-    raw = config.get_optional(name)
-    if not raw:
+def _num(key: str, env_key: str, default: float) -> float:
+    """Число из настроек: правка ИЗ ЧАТА (plan_settings.json) > .env > дефолт кода."""
+    raw = content_plan.settings().get(key)
+    if raw in (None, ""):
+        raw = config.get_optional(env_key)
+    if raw in (None, ""):
         return default
     try:
-        return float(raw.replace(",", "."))
+        return float(str(raw).replace(",", "."))
     except ValueError:
-        log.warning("[автопилот] %s='%s' не число — беру %s", name, raw, default)
+        log.warning("[автопилот] %s='%s' не число — беру %s", key, raw, default)
         return default
 
 
 def lead_hours() -> float:
-    return _num("AUTOPILOT_LEAD_HOURS", DEFAULT_LEAD_HOURS)
+    return _num("lead_hours", "AUTOPILOT_LEAD_HOURS", DEFAULT_LEAD_HOURS)
 
 
 def margin_minutes() -> float:
-    return _num("AUTOPILOT_MARGIN_MINUTES", DEFAULT_MARGIN_MINUTES)
+    return _num("margin_minutes", "AUTOPILOT_MARGIN_MINUTES", DEFAULT_MARGIN_MINUTES)
 
 
 def check_every() -> float:
-    return _num("AUTOPILOT_CHECK_EVERY", DEFAULT_CHECK_EVERY)
+    return _num("check_every", "AUTOPILOT_CHECK_EVERY", DEFAULT_CHECK_EVERY)
 
 
 def enabled() -> bool:
@@ -102,6 +105,137 @@ def mark_run(kind: str, d: date | None = None) -> None:
         log.exception("[автопилот] не смог записать состояние в %s", STATE_FILE)
 
 
+# --- НАСТРОЙКА ИЗ ЧАТА: валидация в КОДЕ, не в промпте ---------------------------------------
+# Владелец меняет расписание словами в чате с Криейтором, значит значения приходят от МОДЕЛИ —
+# и проверять их обязан код. Модель может ослышаться («за 40 часов»), а цена ошибки — пропущенный
+# или сорванный выход в канал. Поэтому: жёсткие диапазоны, перекрёстная проверка «окно не пустое»,
+# и на выходе всегда ЧЕЛОВЕЧЕСКИЙ отчёт «было → стало», который владелец видит в чате.
+
+DOW_ALIASES = {
+    "пн": 0, "понедельник": 0, "mon": 0,
+    "вт": 1, "вторник": 1, "tue": 1,
+    "ср": 2, "среда": 2, "wed": 2,
+    "чт": 3, "четверг": 3, "thu": 3,
+    "пт": 4, "пятница": 4, "fri": 4,
+    "сб": 5, "суббота": 5, "sat": 5,
+    "вс": 6, "воскресенье": 6, "sun": 6,
+}
+
+
+def parse_days(raw) -> list[int]:
+    """«вт,чт» / «Вторник и четверг» / [1,3] → [1, 3]. Непонятное — ValueError с внятным текстом."""
+    if isinstance(raw, (list, tuple)):
+        items = [str(x) for x in raw]
+    else:
+        items = [p for p in str(raw or "").replace(" и ", ",").replace("/", ",").replace(" ", ",").split(",") if p]
+    out: list[int] = []
+    for it in items:
+        s = it.strip().lower().strip(".")
+        if s.isdigit() and 0 <= int(s) <= 6:
+            out.append(int(s))
+        elif s in DOW_ALIASES:
+            out.append(DOW_ALIASES[s])
+        else:
+            raise ValueError(f"не понял день «{it}» — пиши днями недели: «вт,чт»")
+    if not out:
+        raise ValueError("список дней пустой — без дней выхода расписание не имеет смысла")
+    return sorted(set(out))
+
+
+def parse_time(raw) -> str:
+    """«16:00» / «16» / «16.30» → «16:00». Вне 05:00–23:59 — отказ (ночная публикация = промах)."""
+    s = str(raw or "").strip().replace(".", ":").replace("-", ":")
+    if s.isdigit():
+        s = f"{int(s)}:00"
+    try:
+        h, m = (int(x) for x in s.split(":")[:2])
+    except ValueError:
+        raise ValueError(f"не понял время «{raw}» — пиши как «16:00»") from None
+    if not (5 <= h <= 23 and 0 <= m <= 59):
+        raise ValueError(f"время {h:02d}:{m:02d} вне разумного окна 05:00–23:59 — не публикуем ночью")
+    return f"{h:02d}:{m:02d}"
+
+
+def _validated(changes: dict) -> dict:
+    """Проверить пачку правок целиком. Возвращает готовые к записи значения; бросает ValueError."""
+    out: dict = {}
+    if "flagship_time" in changes:
+        out["flagship_time"] = parse_time(changes["flagship_time"])
+    if "flagship_days" in changes:
+        out["flagship_days"] = parse_days(changes["flagship_days"])
+    if "lead_hours" in changes:
+        v = float(str(changes["lead_hours"]).replace(",", "."))
+        if not (0.5 <= v <= 12):
+            raise ValueError(f"старт за {v:g} ч до выхода — вне разумного (0.5–12 ч)")
+        out["lead_hours"] = v
+    if "margin_minutes" in changes:
+        v = float(str(changes["margin_minutes"]).replace(",", "."))
+        if not (10 <= v <= 240):
+            raise ValueError(f"запас {v:g} мин — вне разумного (10–240 мин)")
+        out["margin_minutes"] = v
+    if not out:
+        raise ValueError("нечего менять — не понял, какой параметр правим")
+    # ПЕРЕКРЁСТНАЯ проверка: запас не должен съесть всё окно, иначе автопилот не запустится НИКОГДА
+    # (окно = [слот−лид, слот−запас]) и владелец узнает об этом только по молчанию канала.
+    lead = out.get("lead_hours", lead_hours())
+    margin = out.get("margin_minutes", margin_minutes())
+    if margin >= lead * 60:
+        raise ValueError(f"запас {margin:g} мин ≥ старт за {lead:g} ч — окно запуска станет пустым, "
+                         f"автопилот не сработает ни разу. Уменьши запас или увеличь лид.")
+    return out
+
+
+def describe_param(key: str, value) -> str:
+    """Значение параметра человеческим языком (для отчёта «было → стало»)."""
+    if key == "flagship_days":
+        return "/".join(content_plan.RU_DOW[i] for i in value) if value else "—"
+    if key == "lead_hours":
+        return f"за {float(value):g} ч до выхода"
+    if key == "margin_minutes":
+        return f"{float(value):g} мин"
+    return str(value)
+
+
+def current_param(key: str):
+    """Текущее ЭФФЕКТИВНОЕ значение параметра (с учётом всех источников)."""
+    if key == "flagship_days":
+        return list(content_plan.days_for("flagship"))
+    if key == "flagship_time":
+        return f"{content_plan._slot_time('flagship'):%H:%M}"
+    if key == "lead_hours":
+        return lead_hours()
+    if key == "margin_minutes":
+        return margin_minutes()
+    return None
+
+
+def apply_params(changes: dict, by: str = "чат") -> dict:
+    """Применить правки расписания. {'ok': bool, 'diff': [(имя, было, стало)], 'error': str}.
+
+    Пишем в plan_settings.json (НЕ в .env: боту .env править нельзя, и там нет пометки «кто менял»).
+    Ничего не сохраняем при любой ошибке валидации — расписание не остаётся в полусостоянии.
+    """
+    try:
+        clean = _validated(changes)
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "diff": [], "error": str(e)}
+    before = {k: current_param(k) for k in clean}
+    data = content_plan.settings()
+    data.update(clean)
+    data["updated"] = datetime.now(content_plan.tz()).isoformat(timespec="seconds")
+    data["updated_by"] = by
+    try:
+        content_plan.save_settings(data)
+    except OSError as e:
+        log.exception("[автопилот] не смог записать настройки плана")
+        return {"ok": False, "diff": [], "error": f"не смог записать файл настроек: {e}"}
+    diff = [(k, describe_param(k, before[k]), describe_param(k, clean[k])) for k in clean]
+    log.info("[автопилот] настройки изменены (%s): %s", by, diff)
+    return {"ok": True, "diff": diff, "error": ""}
+
+
+# --- ОКНО и ВЕРДИКТ ---------------------------------------------------------------------------
+
 def window(kind: str, d: date) -> tuple[datetime, datetime] | None:
     """Окно старта в конкретный день: (когда можно начинать, крайний срок). None — не день формата.
 
@@ -151,3 +285,40 @@ def due(kind: str = "flagship", *, now: datetime | None = None,
     return {"go": True, "slot": slot,
             "why": f"пора: «{label}» выходит сегодня в {slot:%H:%M}, окно старта "
                    f"{start:%H:%M}–{deadline:%H:%M}{note}"}
+
+
+def status_text(kind: str = "flagship") -> str:
+    """Панель состояния автопилота — ОДИН текст и для `run_autopilot --status`, и для /autopilot в боте.
+
+    Специально с ИСТОЧНИКОМ каждой настройки («из чата» / «из .env» / «дефолт кода»): три источника
+    без пометки = «почему стоит не то, что я думал».
+    """
+    now = datetime.now(content_plan.tz())
+    win = window(kind, now.date())
+    mode = runmode.get()
+    days = "/".join(content_plan.RU_DOW[i] for i in content_plan.days_for(kind))
+    st = content_plan.settings()
+    v = due(kind, busy_dates=None)
+    nxt = content_plan.next_slot(kind)
+    lines = [
+        f"🤖 АВТОПИЛОТ — {'✅ ВКЛЮЧЁН' if enabled() else '⏸ ВЫКЛЮЧЕН'}"
+        f"{'' if enabled() else ' (сам не запускается)'}",
+        "",
+        f"• сейчас        : {content_plan.human(now)} · пояс {content_plan.tz_label()}",
+        f"• режим завода  : {'🧪 test — публиковать нельзя' if mode['mode'] == 'test' else 'боевой /main'}",
+        f"• канал         : {config.get_optional('PUBLISH_CHANNEL') or '❌ не задан'}",
+        f"• дни выхода    : {days} ({content_plan.source_of(f'{kind}_days')})",
+        f"• время выхода  : {content_plan._slot_time(kind):%H:%M} "
+        f"({content_plan.source_of(f'{kind}_time', content_plan.time_env_key(kind))})",
+        f"• старт прогона : за {lead_hours():g} ч до выхода "
+        f"({content_plan.source_of('lead_hours', 'AUTOPILOT_LEAD_HOURS')})",
+        f"• запас до слота: {margin_minutes():g} мин "
+        f"({content_plan.source_of('margin_minutes', 'AUTOPILOT_MARGIN_MINUTES')})",
+        f"• окно старта   : {f'{win[0]:%H:%M}–{win[1]:%H:%M}' if win else '— сегодня не день формата'}",
+        f"• последний авто: {last_run(kind) or '— ни разу'}",
+        f"• следующий выход: {content_plan.human(nxt)}",
+        f"• вердикт сейчас: {'✅ пора' if v['go'] else '⏭ пропуск'} — {v['why']}",
+    ]
+    if st.get("updated"):
+        lines.append(f"• правил из чата: {st['updated']} ({st.get('updated_by', '?')})")
+    return "\n".join(lines)

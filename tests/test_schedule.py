@@ -13,10 +13,12 @@ from core import schedule
 
 
 @pytest.fixture(autouse=True)
-def _clean_autopilot_env(monkeypatch):
-    """Окно считаем от ДЕФОЛТОВ, а не от .env владельца — иначе тесты зависят от его настроек."""
+def _clean_autopilot_env(monkeypatch, tmp_path):
+    """Окно считаем от ДЕФОЛТОВ: ни .env владельца, ни его правки из чата (plan_settings.json) не
+    должны влиять на тесты — иначе «поменял расписание словами» роняет CI."""
     for k in ("AUTOPILOT_LEAD_HOURS", "AUTOPILOT_MARGIN_MINUTES", "AUTOPILOT_CHECK_EVERY"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(cp, "SETTINGS_FILE", tmp_path / "plan_settings.json")
 
 
 def _slot_day(offset_weeks: int = 0):
@@ -158,6 +160,99 @@ def test_switch_off_by_default_and_toggles(tmp_path, monkeypatch):
 
 
 # --- настройки из .env -----------------------------------------------------------------------
+
+# --- НАСТРОЙКА ИЗ ЧАТА: разбор человеческих формулировок --------------------------------------
+
+@pytest.mark.parametrize("raw,expect", [
+    ("вт,чт", [1, 3]),
+    ("Вторник и четверг", [1, 3]),
+    ("вт чт", [1, 3]),
+    ("пн/ср/пт", [0, 2, 4]),
+    ([1, 3], [1, 3]),
+    ("чт,вт,чт", [1, 3]),          # порядок и дубли нормализуются
+])
+def test_parse_days_understands_owner_phrasing(raw, expect):
+    assert schedule.parse_days(raw) == expect
+
+
+@pytest.mark.parametrize("raw", ["вторнник", "", "8", "каждый день"])
+def test_parse_days_rejects_garbage(raw):
+    with pytest.raises(ValueError):
+        schedule.parse_days(raw)
+
+
+@pytest.mark.parametrize("raw,expect", [("16:00", "16:00"), ("16", "16:00"), ("9.30", "09:30")])
+def test_parse_time_normalises(raw, expect):
+    assert schedule.parse_time(raw) == expect
+
+
+@pytest.mark.parametrize("raw", ["03:00", "25:00", "вечером", ""])
+def test_parse_time_rejects_unreasonable(raw):
+    with pytest.raises(ValueError):
+        schedule.parse_time(raw)
+
+
+# --- НАСТРОЙКА ИЗ ЧАТА: запись и предохранители ----------------------------------------------
+
+def test_apply_params_writes_and_reports_diff():
+    res = schedule.apply_params({"flagship_time": "17:00", "flagship_days": "вт,пт"}, by="тест")
+    assert res["ok"], res["error"]
+    assert cp.settings()["flagship_time"] == "17:00"
+    assert cp.settings()["flagship_days"] == [1, 4]
+    assert cp.settings()["updated_by"] == "тест"
+    names = {k for k, _, _ in res["diff"]}
+    assert names == {"flagship_time", "flagship_days"}
+
+
+def test_chat_change_actually_moves_the_slot():
+    """Смысл всей затеи: правка словами обязана влиять на РЕАЛЬНЫЙ слот публикации, а не только на файл."""
+    assert schedule.apply_params({"flagship_days": "пн"}, by="тест")["ok"]
+    assert cp.days_for("flagship") == (0,)
+    assert cp.next_slot("flagship").weekday() == 0
+
+
+def test_apply_params_rejects_empty_window():
+    """Запас ≥ лида = окно пустое, автопилот не сработал бы НИ РАЗУ, а владелец узнал бы по молчанию."""
+    res = schedule.apply_params({"lead_hours": 1, "margin_minutes": 90})
+    assert res["ok"] is False
+    assert "окно" in res["error"]
+    assert cp.settings() == {}          # при ошибке НИЧЕГО не записано
+
+
+@pytest.mark.parametrize("changes", [
+    {"lead_hours": 40},                 # «за 40 часов» — модель ослышалась
+    {"margin_minutes": 5},
+    {"flagship_time": "03:00"},
+    {},                                 # нечего менять
+])
+def test_apply_params_rejects_out_of_range(changes):
+    res = schedule.apply_params(changes)
+    assert res["ok"] is False
+    assert res["error"]
+    assert cp.settings() == {}
+
+
+def test_settings_beat_env_and_env_beats_default(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_LEAD_HOURS", "5")
+    assert schedule.lead_hours() == 5.0                     # .env перекрывает дефолт
+    assert schedule.apply_params({"lead_hours": 3})["ok"]
+    assert schedule.lead_hours() == 3.0                     # правка из чата перекрывает .env
+
+
+def test_status_text_shows_state_and_sources():
+    txt = schedule.status_text("flagship")
+    assert "АВТОПИЛОТ" in txt
+    assert "дни выхода" in txt and "время выхода" in txt
+    assert "дефолт кода" in txt          # ничего не задано → источник виден честно
+    assert "вердикт сейчас" in txt
+
+
+def test_status_text_marks_chat_edit():
+    schedule.apply_params({"flagship_time": "18:00"}, by="чат Криейтора")
+    txt = schedule.status_text("flagship")
+    assert "18:00" in txt
+    assert "из чата" in txt
+
 
 # --- исполнитель (run_autopilot) --------------------------------------------------------------
 # Он работает БЕЗ человека, поэтому опечатка в нём вылезла бы только в 12:00 во вторник —

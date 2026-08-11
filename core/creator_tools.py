@@ -29,7 +29,7 @@ from pathlib import Path
 
 from connectors.telegram_publish import publish
 from core import (analytics, analytics_tools, config, content_plan, cover_variety, io_safe,
-                  market_tools, untrusted)
+                  market_tools, runmode, untrusted)
 
 MEM = config.ROOT / "memory"
 BRIEFS_DIR = MEM / "briefs"            # продукт Скаута — вход Криейтора
@@ -247,6 +247,33 @@ TOOLS = [
                        "post_standard.md с бэкапом старого в memory/.history/. Вызывай ТОЛЬКО по команде "
                        "владельца /apply_standard (его явное «ок»). Сам по себе, в /derive, не вызывай.",
         "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "autopilot",
+        "description": "АВТОПИЛОТ канала — расписание, по которому завод сам гонит флагман и ставит его в "
+                       "отложку (Вт/Чт, старт за 4ч до выхода). Владелец настраивает его РАЗГОВОРОМ с "
+                       "тобой, это его пульт. Действия:\n"
+                       "• 'status' — показать панель: включён ли, дни/время выхода, окно старта, вердикт "
+                       "сейчас, откуда взята каждая настройка. Вызывай ВСЕГДА, когда спрашивают про "
+                       "расписание/автозапуск, и ПОСЛЕ любой правки — показать результат.\n"
+                       "• 'set' — поменять параметры: flagship_time («16:00»), flagship_days («вт,чт»), "
+                       "lead_hours (за сколько часов до выхода стартовать), margin_minutes (минимальный "
+                       "запас до слота). Передавай ТОЛЬКО то, что владелец назвал; проверку диапазонов "
+                       "делает код и вернёт «было → стало» — покажи это владельцу дословно.\n"
+                       "• 'on' / 'off' — включить/выключить автозапуск. Для 'on' нужен reason (одна фраза "
+                       "владельца, зачем включаем — она пишется в файл). ⚠️ 'on' = посты будут выходить "
+                       "БЕЗ его «ок» (у него ~4ч на вето в «Отложенных»): включай, только если он сказал "
+                       "это ЯВНО, и в ответе напомни, чем это отличается от нынешнего порядка.\n"
+                       "Ничего не выдумывай: не знаешь значения — спроси. Прогон постов этим инструментом "
+                       "НЕ запускается (это делает /run).",
+        "input_schema": {"type": "object", "properties": {
+            "action": {"type": "string", "description": "status | set | on | off"},
+            "flagship_time": {"type": "string", "description": "время выхода флагмана, «16:00»"},
+            "flagship_days": {"type": "string", "description": "дни выхода, «вт,чт»"},
+            "lead_hours": {"type": "number", "description": "за сколько часов до выхода стартовать (0.5–12)"},
+            "margin_minutes": {"type": "number", "description": "минимальный запас до слота, мин (10–240)"},
+            "reason": {"type": "string", "description": "зачем включаем — обязательно для action='on'"},
+        }, "required": ["action"]},
     },
     market_tools.PRICE_TOOL,   # market_price — точный спот для сверки живых цен (см. шаг 3.5 /post)
 ]
@@ -1453,6 +1480,51 @@ def _publish_now(args: dict | None = None) -> str:
             f"Сообщи владельцу слот; проверить/поправить/отменить — в нативных «Отложенных» канала.")
 
 
+def _autopilot(args: dict | None = None) -> str:
+    """Пульт автопилота ИЗ ЧАТА: посмотреть расписание, поменять параметры, включить/выключить.
+
+    Продукт-решение владельца 11.08: всё, что можно, настраивается разговором с Криейтором — код это
+    бэкенд. Поэтому значения приходят от МОДЕЛИ, и весь контроль — в коде (core/schedule):
+    диапазоны, перекрёстная проверка «окно не пустое», отчёт «было → стало». Модель тут — только
+    переводчик с человеческого; решение о записи принимает валидатор.
+    """
+    from core import schedule    # ленивый импорт: schedule тянет content_plan/runmode, боту он нужен редко
+
+    args = args or {}
+    action = str(args.get("action", "status")).strip().lower()
+    if action in ("status", "", "show"):
+        return schedule.status_text("flagship")
+    if action == "off":
+        schedule.turn_off()
+        return ("⏸ Автопилот ВЫКЛЮЧЕН — сам больше не запускается, посты только по твоей команде.\n"
+                "Пост, который УЖЕ стоит в «Отложенных», это не убирает — удали его в канале, если не нужен.\n\n"
+                + schedule.status_text("flagship"))
+    if action == "on":
+        reason = str(args.get("reason", "")).strip()
+        if not reason:
+            return ("Скажи одной фразой, зачем включаем (пишу её в файл — потом будет видно, зачем): "
+                    "например «обкатка в тестовом канале».")
+        schedule.turn_on(f"{reason} (из чата Криейтора)")
+        warn = ""
+        if runmode.get()["mode"] == "test":
+            warn = "\n⚠️ Завод в режиме 🧪 /test — автопилот publish НЕ сделает. Верни /main.\n"
+        return ("✅ Автопилот ВКЛЮЧЁН.\n"
+                "⚠️ Важно: посты будут уходить в канал БЕЗ твоего «ок» — у тебя есть окно вето в "
+                "«Отложенных» (по умолчанию ~4 часа между прогоном и выходом). Выключить мгновенно: "
+                "скажи «выключи автопилот».\n" + warn + "\n"
+                + schedule.status_text("flagship"))
+    if action == "set":
+        changes = {k: args[k] for k in ("flagship_time", "flagship_days", "lead_hours", "margin_minutes")
+                   if args.get(k) not in (None, "")}
+        res = schedule.apply_params(changes, by="чат Криейтора")
+        if not res["ok"]:
+            return f"⛔ Не менял ничего: {res['error']}\n\nСейчас:\n{schedule.status_text('flagship')}"
+        diff = "\n".join(f"  • {k}: было «{was}» → стало «{now}»" for k, was, now in res["diff"])
+        return f"✅ Расписание обновлено:\n{diff}\n\n{schedule.status_text('flagship')}"
+    return (f"Не понял действие «{action}». Умею: status (показать), set (поменять параметр), "
+            f"on/off (включить/выключить автозапуск).")
+
+
 def dispatch(name: str, args: dict) -> str:
     shared = analytics_tools.handle(name, args)  # общие read-only аналитич. инструменты (дедуп)
     if shared is not None:
@@ -1462,6 +1534,8 @@ def dispatch(name: str, args: dict) -> str:
         return priced
     if name == "publish_now":
         return _publish_now(args)
+    if name == "autopilot":
+        return _autopilot(args)
     if name == "list_briefs":
         return _list_md(BRIEFS_DIR, "Брифы Скаута (свежие сверху):",
                         "Брифов Скаута пока нет (memory/briefs/ пуст). Напиши из присланного "

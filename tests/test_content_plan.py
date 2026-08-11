@@ -1,7 +1,16 @@
 """Тесты ритма недели / выбора слота публикации (core/content_plan). Время инжектим — детерминированно."""
 from datetime import datetime, timedelta
 
+import pytest
+
 from core import content_plan as cp
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plan_settings(monkeypatch, tmp_path):
+    """Ритм берём из КАНОНА кода, а не из живых правок владельца (data/plan_settings.json меняется
+    из чата с Криейтором — иначе «выходим по пн» роняло бы эти тесты)."""
+    monkeypatch.setattr(cp, "SETTINGS_FILE", tmp_path / "plan_settings.json")
 
 
 def test_infer_kind_by_length():
@@ -27,7 +36,7 @@ def _this_monday_midnight():
 def test_next_slot_flagship_is_future_and_on_flagship_day():
     monday = _this_monday_midnight()
     slot = cp.next_slot("flagship", now=monday)
-    assert slot.weekday() in cp.FLAGSHIP_DAYS
+    assert slot.weekday() in cp.days_for("flagship")
     assert slot > monday
     assert slot.time() == cp._slot_time("flagship")
 
@@ -35,7 +44,7 @@ def test_next_slot_flagship_is_future_and_on_flagship_day():
 def test_next_slot_short_is_future_and_on_short_day():
     monday = _this_monday_midnight()
     slot = cp.next_slot("short", now=monday)
-    assert slot.weekday() in cp.SHORT_DAYS
+    assert slot.weekday() in cp.days_for("short")
     assert slot > monday
 
 
