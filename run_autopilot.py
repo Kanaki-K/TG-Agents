@@ -4,6 +4,8 @@
     python run_autopilot.py --daemon   # живой процесс: проверяет раз в 10 минут
     python run_autopilot.py --status   # показать вердикт и настройки, НИЧЕГО не запускать
     python run_autopilot.py --log      # хвост своего лога (data/autopilot.log) — «что случилось»
+    python run_autopilot.py --install  # аварийно: поставить будильник в ОС + включить (штатно — фразой в чате)
+    python run_autopilot.py --uninstall # аварийно: снять будильник + выключить
 
 Что делает, когда «пора» (вердикт даёт core/schedule): ставит метку «сегодня гоняли» → гонит
 `run_pipeline.run_cycle` (тема из банка → Криейтор → 2FA → обложка → нативная отложка канала) →
@@ -21,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 
@@ -35,7 +38,7 @@ LOG_FILE = config.ROOT / "data" / "autopilot.log"
 
 
 def _prepare_unattended() -> None:
-    """Подготовить процесс к работе БЕЗ человека. Два конкретных провала, которых иначе не видно.
+    """Подготовить процесс к работе БЕЗ человека. Три конкретных провала, которых иначе не видно.
 
     1) КОДИРОВКА. Машина владельца — русский Windows (cp1251). Под Планировщиком задач вывод не в
        консоль, и Python берёт кодировку локали: первый же print с эмодзи (а их тут и в пайплайне
@@ -44,6 +47,14 @@ def _prepare_unattended() -> None:
        ДО отправки алерта не осталось бы никаких следов. Дублируем лог в data/autopilot.log
        (с ротацией, чтобы файл не рос вечно) — есть куда посмотреть после тихого сбоя.
     """
+    # 3) НЕТ ВЫВОДА ВООБЩЕ. Задача Планировщика запускается через pythonw.exe (иначе каждые 30 минут
+    #    мигало бы консольное окно). У pythonw sys.stdout = None, и первый же print упал бы с
+    #    AttributeError — то есть «тихий» запуск убивал бы прогон. Подменяем на «в никуда»: рассказ
+    #    прогона всё равно идёт в файловый лог, ради этого он и сделан.
+    if sys.stdout is None or sys.stderr is None:
+        devnull = open(os.devnull, "w", encoding="utf-8")   # noqa: SIM115 — живёт до конца процесса
+        sys.stdout = sys.stdout or devnull
+        sys.stderr = sys.stderr or devnull
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -208,6 +219,18 @@ def tail_log(n: int = 60) -> None:
 
 def main() -> None:
     _prepare_unattended()   # кодировка вывода + файловый лог: ДО первого print/лога, см. функцию
+    # Аварийный путь на случай, когда бот Криейтора не запущен: штатно владелец включает/выключает
+    # автопилот ФРАЗОЙ в чате, и будильник ставится там же (контракт «одна фраза = работает»).
+    if "--install" in sys.argv or "--uninstall" in sys.argv:
+        from core import os_task
+        res = os_task.remove() if "--uninstall" in sys.argv else os_task.install()
+        if "--install" in sys.argv and res["ok"]:
+            schedule.turn_on("установлено из терминала")
+        elif "--uninstall" in sys.argv:
+            schedule.turn_off()
+        print(("✅ " if res["ok"] else "❌ ") + res["detail"])
+        print(schedule.status_text("flagship"))
+        return
     if "--log" in sys.argv:
         tail_log()
         return

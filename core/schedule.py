@@ -360,6 +360,16 @@ def due(kind: str = "flagship", *, now: datetime | None = None,
                    f"{start:%H:%M}–{deadline:%H:%M}{note}"}
 
 
+def _alarm_is_set() -> bool:
+    """Стоит ли задача-будильник в ОС. Ленивый импорт: os_task дёргает subprocess, панели он нужен раз."""
+    try:
+        from core import os_task
+        return bool(os_task.status().get("exists"))
+    except Exception:  # noqa: BLE001 — панель не имеет права падать из-за опроса ОС
+        log.exception("[автопилот] не смог проверить задачу-будильник")
+        return False
+
+
 def status_text(kind: str = "flagship") -> str:
     """Панель состояния автопилота — ОДИН текст и для `run_autopilot --status`, и для /autopilot в боте.
 
@@ -387,6 +397,9 @@ def status_text(kind: str = "flagship") -> str:
         ("запас до слота", f"{margin_minutes():g} мин "
                            f"({content_plan.source_of('margin_minutes', 'AUTOPILOT_MARGIN_MINUTES')})"),
         ("окно старта", f"{win[0]:%H:%M}–{win[1]:%H:%M}" if win else "— сегодня не день формата"),
+        # Будильник ОБЯЗАН быть в панели: без него «включено» ничего не значит — некому проснуться.
+        ("будильник", "✅ стоит (Планировщик Windows)" if _alarm_is_set()
+                      else "❌ НЕТ — сам не проснётся, скажи «включи автопилот»"),
         ("последний авто", str(last_run(kind) or "— ни разу")),
         ("чем кончился", last_result(kind)),
         ("следующий слот", content_plan.human(nxt)),

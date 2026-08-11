@@ -98,6 +98,27 @@ def test_due_says_slot_already_passed_not_almost_here():
     assert "меньше" not in v["why"]
 
 
+def test_panel_shows_alarm_state(monkeypatch):
+    """«Включено» без будильника не значит ничего — некому проснуться. Панель обязана это показывать."""
+    from core import os_task
+
+    monkeypatch.setattr(os_task, "status", lambda: {"supported": True, "exists": True, "detail": ""})
+    assert "будильник" in schedule.status_text("flagship")
+    assert "✅ стоит" in schedule.status_text("flagship")
+    monkeypatch.setattr(os_task, "status", lambda: {"supported": True, "exists": False, "detail": ""})
+    assert "сам не проснётся" in schedule.status_text("flagship")
+
+
+def test_panel_survives_broken_os_query(monkeypatch):
+    """Опрос ОС упал — панель всё равно рисуется (она нужна именно когда что-то не так)."""
+    from core import os_task
+
+    def boom():
+        raise OSError("schtasks недоступен")
+    monkeypatch.setattr(os_task, "status", boom)
+    assert "будильник" in schedule.status_text("flagship")
+
+
 def test_panel_columns_are_aligned():
     """Панель — основной интерфейс (её читают с телефона): подписи ровняет ljust, а не пробелы руками."""
     body = [ln for ln in schedule.status_text("flagship").splitlines() if ln.startswith("• ")]
