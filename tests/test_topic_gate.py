@@ -58,6 +58,17 @@ def test_parses_usefulness_line():
     assert "откуда у LINK" in topic_gate.parse_usefulness(FULL)
 
 
+def test_usefulness_takes_final_not_candidate_analysis():
+    # Баг 12.08.2026: модель разбирала кандидатов построчно, и «Польза:» отклонённого повода стояла
+    # с начала строки ВЫШЕ финального поля → в панель владельца уехала польза не того повода.
+    v = ("**Направление 1 - Riot/Anthropic**\n"
+         "Польза: есть (механика AI-опциона на майнинг-инфраструктуру).\n"
+         "-> НЕ берём: тема уже написана.\n"
+         "ВЫБРАН: «Fidelity добавляет стейкинг в FETH»\n"
+         "ПОЛЬЗА: ETH меняет жанр - из актива роста в доходный инструмент TradFi\n")
+    assert topic_gate.parse_usefulness(v).startswith("ETH меняет жанр")
+
+
 def test_parses_rejected_for_owner_panel():
     # предохранитель владельца: отклонённые поводы видны строкой, а не только в полном логе
     rej = topic_gate.parse_rejected(FULL)
