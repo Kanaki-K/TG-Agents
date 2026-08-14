@@ -347,7 +347,6 @@ def _read_md(d, which: str, empty: str, not_found: str) -> str:
 # рендерит обычный эмодзи вместо кастомного. Нормализуем (снимаем variation-selector/ZWJ/тон кожи).
 # Сами регексы живут в core.title_emoji — ОДИН дом на проект, чтобы «что считается эмодзи-якорем»
 # не разъехалось между линтером и анти-повтором эмодзи (14.08).
-_EMOJI_VS = title_emoji.VS_RE
 _EMOJI_LEAD = title_emoji.LEAD_RE
 _allowed_emoji_cache: set | None = None
 

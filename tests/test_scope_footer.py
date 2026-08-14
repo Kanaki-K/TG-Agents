@@ -78,13 +78,15 @@ def _post(paras):
 
 
 def test_dense_post_warns_about_air():
-    dense = ["Слово " * 40] * 5            # ~240 знаков каждый абзац, ни один не выше порога 280
+    # ⚠️ абзацы РАЗНЫЕ: линтер выбрасывает дословные дубли абзацев (страж 31.07), и на пяти
+    # одинаковых блоках замер медианы просто не состоялся бы — тест бы «прошёл» ни на чём.
+    dense = [f"Абзац номер {i} про рынок и деньги. " + "слово " * 35 for i in range(5)]
     warns = ct._lint(_post(dense), "scope")[1]
     assert any("МАЛО ВОЗДУХА" in w for w in warns)
 
 
 def test_airy_post_is_silent():
-    airy = ["Короткая мысль про рынок и деньги"] * 6
+    airy = [f"Короткая мысль номер {i} про рынок" for i in range(6)]
     warns = ct._lint(_post(airy), "scope")[1]
     assert not any("МАЛО ВОЗДУХА" in w for w in warns)
 
