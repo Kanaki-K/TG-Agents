@@ -11,7 +11,8 @@
 """
 from __future__ import annotations
 
-from core import agent_runtime, analytics, config, creator_tools, llm, runmode, scope_writer
+from core import (agent_runtime, analytics, config, creator_tools, llm, runmode, scope_writer,
+                  title_emoji)
 
 AGENT_NAME = "creator"
 
@@ -261,6 +262,10 @@ def _system() -> str:
         "футер, иллюстрация — всё в §0 и далее. При конфликте файлов — приоритет здесь. Перед сдачей "
         "прогони пост по запретнику (§7) и чек-листу (§8).\n"
         f"{_read('memory/content_manual.md')}\n\n"
+        # Анти-повтор эмодзи-якоря заголовка (владелец 14.08). Блок собирается КОДОМ по свежей выгрузке
+        # канала: что стояло на последних заголовках — в вето, свободные строки карты смыслов — на выбор.
+        # Нет выгрузки/карты → блок пустой, промпт остаётся прежним (эмодзи не повод ронять пост).
+        f"{title_emoji.block()}\n"
         "## Канон бренда — аудитория и красные линии (memory/brand.md)\n"
         f"{_read('memory/brand.md')}\n\n"
         "## Стандарт поста — форматы и метрики канала (memory/post_standard.md)\n"
