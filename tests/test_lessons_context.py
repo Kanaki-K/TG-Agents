@@ -39,6 +39,38 @@ def test_non_provenance_iz_italic_kept(tmp_path):
     assert "из этого правила исключений нет" in ctx
 
 
+def test_strips_scope_style_provenance_tails(tmp_path):
+    # ЗАМЕР 17.08: у флагмана срезалось 35/35 хвостов, у scope 40/48 — восемь писались другими
+    # словами и белый список их не знал, то есть жир платился каждый прогон. Формы взяты из
+    # реальных строк scope_lessons.md.
+    f = tmp_path / "scope_lessons.md"
+    tails = ("— _похвала владельца Satsuma 22.07_",
+             "— _уточнение владельца 29.07 (расширяет урок SWIFT 09.07)_",
+             "— _разбор Coldcard-поста 31.07: владелец удалил опубликованное_",
+             "— _редактура владельца Cloudflare 05.08_",
+             "— _финальная редактура владельца Circle/Arc 05.08_")
+    f.write_text("".join(f"- (2026-08-01) Правило номер {i} про подачу {t}\n"
+                         for i, t in enumerate(tails)), encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    for i in range(len(tails)):
+        assert f"Правило номер {i} про подачу" in ctx      # ПРАВИЛА целы
+    for w in ("похвала владельца", "уточнение владельца", "разбор Coldcard",
+              "редактура владельца", "финальная редактура"):
+        assert w not in ctx, w                              # провенанс срезан
+
+
+def test_widened_whitelist_still_ignores_rule_italics(tmp_path):
+    # расширение белого списка не должно превратиться в «режем любой курсив в конце» —
+    # это была бы потеря ПРАВИЛА (нит ревью 20.07, ради которого якорь и сузили)
+    f = tmp_path / "scope_lessons.md"
+    f.write_text("- (2026-08-01) Финал делай самостоятельным — _и точка_\n"
+                 "- (2026-08-02) Не пиши «из коробки» — _из этого правила исключений нет_\n",
+                 encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    assert "и точка" in ctx
+    assert "из этого правила исключений нет" in ctx
+
+
 def test_flag_off_keeps_provenance(tmp_path, monkeypatch):
     f = tmp_path / "post_lessons.md"
     f.write_text("- (2026-06-17) Правило X — _из правки: было Y_\n", encoding="utf-8")
