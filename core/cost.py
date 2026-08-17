@@ -84,8 +84,10 @@ def _usage_dict(usage) -> dict:
     g = lambda n: int(getattr(usage, n, 0) or 0)  # noqa: E731
     cache_w = g("cache_creation_input_tokens")
     # Разбивка записей кэша по TTL: 1h биллится 2×, 5m — 1.25×. Если API разбивку не дал —
-    # консервативно считаем всё по 2× (llm.py ставит системному блоку именно 1h, а система —
-    # подавляющий объём записи; завысить копейки безопаснее, чем снова занижать счёт).
+    # консервативно считаем всё по 2× (завысить копейки безопаснее, чем снова занижать счёт).
+    # ⚠️ С 17.08 боевой прогон пишет системный блок меткой 5m (llm._system_cache_control), 1h
+    # остался только в /test — то есть этот запасной путь стал ХУДШИМ случаем, а не типичным.
+    # На практике API разбивку отдаёт всегда, и в журнале боевые строки идут без cache_w_1h.
     cc = getattr(usage, "cache_creation", None)
     w1h = int(getattr(cc, "ephemeral_1h_input_tokens", 0) or 0) if cc else 0
     w5m = int(getattr(cc, "ephemeral_5m_input_tokens", 0) or 0) if cc else 0
