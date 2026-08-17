@@ -99,6 +99,72 @@ def test_missing_or_empty_file_returns_empty(tmp_path):
     assert creator_tools.load_lessons_for_context(empty) == ""
 
 
+# ── Страж дублей: сверка ПО СУТИ, а не по буквам (владелец 17.08) ────────────────────────────────
+# Замер 17.08: при пороге 0.6 по ВСЕМУ тексту максимальная похожесть среди всех пар уроков была
+# 0.26 (scope) и 0.40 (флагман) — страж не срабатывал ни разу и не мог. Разбор случая занимает 2/3
+# слов урока и у каждого свой, поэтому сравнивались истории, а не правила.
+
+_OLD = ("- (2026-07-01) ФИНАЛ — САМОСТОЯТЕЛЬНЫЙ КИКЕР, не вопрос и не хедж. Машина закрыла пост "
+        "вопросом «а что дальше?», владелец переписал строку руками. ПРАВИЛО: последний абзац "
+        "читается отдельно от поста и утверждает, а не спрашивает. — _из правки Chainlink 01.07_\n")
+
+
+def test_core_keeps_rule_drops_case(tmp_path):
+    core = creator_tools._lesson_core(_OLD)
+    assert "самостоятельный кикер" in core          # правило (первая фраза) цело
+    assert "последний абзац" in core                # клауза «ПРАВИЛО: …» цела
+    assert "машина закрыла" not in core             # разбор случая выброшен
+    assert "chainlink" not in core                  # провенанс выброшен
+
+
+_SAME_RULE = ("ЗАКРЫТИЕ поста обязано стоять само: последний абзац утверждать и читаться отдельно, "
+              "а не спрашивать читателя. Машина повесила в конце вопрос, владелец заменил его "
+              "прямым выводом")
+
+
+def test_same_rule_other_case_is_caught(tmp_path):
+    # ТО ЖЕ правило на другом посте и в других формах слов («утверждать» vs «утверждает»).
+    # Буквальная сверка тут даёт 0.35 при пороге 0.6 — то есть ловит именно сверка ПО СУТИ.
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    hit = creator_tools._lesson_duplicate(_SAME_RULE, f)
+    assert hit is not None
+    line, why = hit
+    assert "САМОСТОЯТЕЛЬНЫЙ КИКЕР" in line          # показываем КАКОЙ урок похож
+    assert "ПО СУТИ" in why and "абзац" in why      # …и ЧЕМ похож, чтобы автор назвал отличие
+
+
+def test_different_rule_not_caught(tmp_path):
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    assert creator_tools._lesson_duplicate(
+        "ОБЛОЖКУ бери из первоисточника повода — og:image страницы события, а не сток", f) is None
+
+
+def test_literal_repeat_still_caught(tmp_path):
+    # второй вид сверки (буквальный, порог 0.6) остаётся: перезапись слово в слово ловится как раньше
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    hit = creator_tools._lesson_duplicate(
+        "ФИНАЛ — САМОСТОЯТЕЛЬНЫЙ КИКЕР, не вопрос и не хедж. Последний абзац читается отдельно от "
+        "поста и утверждает, а не спрашивает", f)
+    assert hit is not None and "повтор" in hit[1]
+
+
+def test_record_lesson_blocks_until_difference_named(tmp_path, monkeypatch):
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    monkeypatch.setattr(creator_tools.config, "ROOT", tmp_path)   # мануала нет — страж мануала молчит
+    same = _SAME_RULE
+    out = creator_tools._record_lesson({"lesson": same}, f)
+    assert "похоже уже есть" in out and "confirm_new" in out
+    assert f.read_text(encoding="utf-8").count("- (") == 1        # НЕ записан
+    # автор назвал отличие и подтвердил — урок ложится в файл
+    out2 = creator_tools._record_lesson({"lesson": same, "confirm_new": True}, f)
+    assert "записан" in out2
+    assert f.read_text(encoding="utf-8").count("- (") == 2
+
+
 def test_manual_guard_flags_duplicate(tmp_path, monkeypatch):
     # урок, повторяющий строку мануала, ловится стражем (порог 0.6 по значимым словам)
     (tmp_path / "memory").mkdir()
