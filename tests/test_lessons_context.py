@@ -176,3 +176,21 @@ def test_manual_guard_flags_duplicate(tmp_path, monkeypatch):
     assert hit is not None
     # непохожее правило страж НЕ трогает
     assert creator_tools._covered_by_manual("Закрывающий вопрос делай коротким и понятным") is None
+
+
+def test_manual_guard_catches_rule_said_differently(tmp_path, monkeypatch):
+    # То же, что со стражем дублей: мануал повторяют НЕ дословно. Замер 17.08 по живому файлу —
+    # буквальная сверка не нашла ничего, сверка по сути нашла 5 уроков scope из 48, дублирующих
+    # мануал (напр. «ОСЬ scope = НОВОСТЬ + ТВОЙ ЕДЖ» ↔ одноимённый заголовок мануала).
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "scope_manual.md").write_text(
+        "## 1. ГЛАВНАЯ ОСЬ рубрики scope: свежая новость плюс твой собственный едж, иначе это лента\n",
+        encoding="utf-8")
+    monkeypatch.setattr(creator_tools.config, "ROOT", tmp_path)
+    hit = creator_tools._covered_by_manual(
+        "ОСЬ scope — свежая новость и твой едж: без собственного еджа получается лента, а не разбор",
+        "memory/scope_manual.md")
+    assert hit is not None
+    assert creator_tools._covered_by_manual(
+        "ОБЛОЖКУ бери из первоисточника повода, а не рисуй генератором",
+        "memory/scope_manual.md") is None

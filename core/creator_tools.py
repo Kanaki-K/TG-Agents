@@ -1600,9 +1600,15 @@ def load_lessons_for_context(path: Path) -> str:
 
 
 def _covered_by_manual(new: str, manual_rel: str = "memory/content_manual.md") -> str | None:
-    """Правило нового урока УЖЕ покрыто мануалом (он и так в контексте)? Сверка по значимым словам,
-    порог 0.6. Тогда урок = дубль канона → платится в контексте дважды. Вернёт строку мануала или None."""
-    nw = _lesson_keywords(new)
+    """Правило нового урока УЖЕ покрыто мануалом (он и так в контексте)? Тогда урок = дубль канона,
+    и он платится в контексте ДВАЖДЫ каждый пост. Вернёт строку мануала или None.
+
+    Две сверки, как у стража дублей: буквальная (доля общих слов ко всему уроку ≥0.6) и ПО СУТИ
+    (ядро правила, основы слов, доля от меньшего). Замер 17.08 по живому файлу: буквальная не
+    находила НИЧЕГО, сверка по сути нашла 5 уроков scope из 48, которые дословно повторяют мануал —
+    напр. урок «ОСЬ scope = НОВОСТЬ + ТВОЙ ЕДЖ» против заголовка мануала «⭐ ГЛАВНАЯ ОСЬ: scope =
+    НОВОСТЬ + ТВОЙ ЕДЖ». Это правила, когда-то поднятые в мануал и не убранные из уроков."""
+    nw, nc = _lesson_keywords(new), _lesson_core_words(new)
     if len(nw) < 4:
         return None
     p = config.ROOT / manual_rel
@@ -1615,6 +1621,12 @@ def _covered_by_manual(new: str, manual_rel: str = "memory/content_manual.md") -
         ow = {w for w in re.findall(r"[а-яёa-z0-9]{4,}", s.lower()) if w not in _LESSON_STOP}
         if ow and len(nw & ow) / len(nw) >= 0.6:
             return s[:120]
+        oc = _lesson_core_words(s)
+        if nc and oc:
+            shared = nc & oc
+            if (len(shared) >= LESSON_CORE_MIN_WORDS
+                    and len(shared) / min(len(nc), len(oc)) >= LESSON_CORE_MIN_SHARE):
+                return s[:120]
     return None
 
 
