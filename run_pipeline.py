@@ -650,6 +650,19 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             # (виден в готовом тексте, стоит одну правку, а владелец вписывал слово руками).
             _sd = [w for w in creator_tools._lint(_final_text, "scope")[1]
                    if "ПРОСТЫНЯ" in w or "СЛЕПЛЕНО" in w or "союз «а» выпал" in w]
+            # ДЛИНА И РИТМ — В ПАНЕЛЬ КАЖДЫЙ ПРОГОН (владелец 19.08: «было 600-1000, стало 1200, уже
+            # 1400 — качество чиним только длиной»). Дрейф формата видно только на дистанции, а до сих
+            # пор длину приходилось вылавливать из логов линтера. Одна строка на прогон = дрейф виден
+            # сразу, и разговор идёт по числам, а не по ощущению.
+            _body = _final_text.partition("[[SPLIT]]")[0]
+            _n = len(_body.encode("utf-16-le")) // 2
+            _paras = creator_tools._body_paras(_body)
+            _pl = sorted(len(p.replace("**", "")) for p in _paras)
+            _pmed = _pl[len(_pl) // 2] if _pl else 0
+            panel["📏 длина"] = (f"{_n} (потолок {creator_tools.SCOPE_TOTAL_CAP}, ориентир ~"
+                                f"{creator_tools.SCOPE_BODY_AIM + creator_tools.SCOPE_FOOTER_LEN}) · "
+                                f"{len(_paras)} абз по ~{_pmed}" + ("  ⚠ выше потолка" if _n >
+                                creator_tools.SCOPE_TOTAL_CAP else ""))
             if _fd or _sd:
                 panel["✍️ подача"] = _clip((_fd + _sd)[0].replace("scope: ", ""), 44) + " — глянь"
                 out("✍️ ЛИНТЕР ПОВТОРНО (по тому, что реально уйдёт в канал): автор оставил замечания "
