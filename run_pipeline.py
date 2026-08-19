@@ -646,8 +646,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         try:
             _final_text = (verify.latest_draft() or post or "")
             _fd = creator_tools._finale_defects(creator_tools._finale_para(_final_text))
+            # + клип союза (19.08): «предложение, не закон:» — дефект того же рода, что и «простыня»
+            # (виден в готовом тексте, стоит одну правку, а владелец вписывал слово руками).
             _sd = [w for w in creator_tools._lint(_final_text, "scope")[1]
-                   if "ПРОСТЫНЯ" in w or "СЛЕПЛЕНО" in w]
+                   if "ПРОСТЫНЯ" in w or "СЛЕПЛЕНО" in w or "союз «а» выпал" in w]
             if _fd or _sd:
                 panel["✍️ подача"] = _clip((_fd + _sd)[0].replace("scope: ", ""), 44) + " — глянь"
                 out("✍️ ЛИНТЕР ПОВТОРНО (по тому, что реально уйдёт в канал): автор оставил замечания "
