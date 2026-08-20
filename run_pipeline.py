@@ -39,9 +39,9 @@ import time
 from pathlib import Path
 
 from connectors.telegram_publish import publish
-from core import (analytics, config, cost, creator_bot, creator_tools, dedup, flagship_journal, llm,
-                  logging_setup, market_tools, runmode, scope_writer, scout_bot, scout_tools,
-                  self_learn, text_match, topic_category, topic_gate, verify)
+from core import (analytics, config, cost, creator_bot, creator_tools, dedup, edit_delta,
+                  flagship_journal, llm, logging_setup, market_tools, runmode, scope_writer,
+                  scout_bot, scout_tools, self_learn, text_match, topic_category, topic_gate, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
 
@@ -363,6 +363,19 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 logging.warning("[health] алерт владельцу не доставлен (проверь токен бота/OWNER_ID)")
         except Exception:
             logging.exception("[health] уведомление владельцу не отправилось")
+    # ЗАМЕР ПРАВОК ВЛАДЕЛЬЦА (20.08): драфт прошлого прогона против того, что реально вышло в канал.
+    # Стоит ровно здесь, потому что шаг 0 выше уже актуализировал выгрузку — оба источника на диске
+    # свежие, а сам замер это арифметика по тексту: ноль API-вызовов, прогон не тормозит и не дорожает.
+    # Зачем в панели: до этого «страдает или нет» был вопросом ощущения, и разницу А→Б владелец поднимал
+    # руками. Теперь она приезжает числом сама. Уроки из неё НЕ пишутся автоматически (см. edit_delta):
+    # одиночная правка — вкус дня, в уроки годится только повторяющийся класс, он и помечается ⟲.
+    try:
+        _delta = edit_delta.panel_line("scope" if scope else "флагман")
+        if _delta:
+            out(f"📐 Прошлый пост этого формата после твоей правки: {_delta}\n")
+            panel["📐 правки"] = _delta
+    except Exception:                       # замер — справка, а не гейт: молчит и не роняет прогон
+        logging.exception("замер правок владельца не удался — продолжаю без него")
     age = _latest_brief_age_hours()
     scout_day = datetime.date.today().weekday() in SCOUT_DAYS
     scout_ran = False  # бегал ли Скаут в этом прогоне — чтобы при исчерпании брифа не гонять его дважды

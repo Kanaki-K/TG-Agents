@@ -14,7 +14,7 @@
 """
 from __future__ import annotations
 
-from core import analytics
+from core import analytics, edit_delta
 
 # Только инструменты с ИДЕНТИЧНЫМ вызовом во всех агентах, которые их используют.
 _SHARED = {
@@ -24,6 +24,10 @@ _SHARED = {
     "themes_overview": lambda a: analytics.themes_overview(),
     "by_dimension": lambda a: analytics.by_dimension(a.get("dim", "weekday")),
     "recent_posts": lambda a: analytics.recent_posts(int(a.get("n", 5)), a.get("post_format", "")),
+    # Замер правок владельца (20.08): драфт завода → то, что реально вышло в канал. Общий, потому что
+    # нужен обоим — Аналитику («где формат ещё недотягивает») и Криейтору («что мне правили в прошлый
+    # раз»). Считает арифметикой, без вызова модели, поэтому дёргать можно свободно.
+    "edit_report": lambda a: edit_delta.text_report(a.get("kind", ""), int(a.get("n", 5) or 5)),
 }
 
 
