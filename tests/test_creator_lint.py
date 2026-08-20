@@ -616,3 +616,70 @@ def test_bloat_is_hard_stop():
     body = "**⚡️ Заголовок**\n\n" + ("тело " * 400) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
     _, warns = creator_tools._lint(body, "scope")
     assert any("РАЗДУЛСЯ" in w for w in warns)
+
+
+# --- выдуманная сцена-свидетель (урок 16.07 → повтор 20.08, теперь в коде) ---
+
+def test_flags_invented_chat_quote():
+    """«Чат ожил: "развернулись, погнали"» — реплика, приписанная безымянной толпе (флагман SOPR 20.08)."""
+    body = '**📊 Заголовок**\n\nЧат ожил: "развернулись, погнали"\n\nдальше текст'
+    _, warns = creator_tools._lint(body, "флагман")
+    assert any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_flags_invented_witness_action():
+    body = "**📊 Заголовок**\n\nЕщё неделю назад было скучно, знакомые уходили из чата\n\nдальше"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_generalized_observation_not_flagged():
+    """Форма, на которую владелец САМ переписал сцену 16.07, — законная, её не трогаем."""
+    body = "**📊 Заголовок**\n\nРаньше присылали в чаты скрины с иксами\n\nдальше текст"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_share_with_friend_not_flagged():
+    body = "**📊 Заголовок**\n\nПост, которым хочется поделиться с другом и обсудить\n\nдальше"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+# --- флагман про метрику: где стрелка СЕГОДНЯ (правка владельца 20.08) ---
+
+def test_metric_post_without_today_reading():
+    body = ("**📊 SOPR - рынок в боли или в жадности?**\n\nSOPR сравнивает цену продажи с ценой покупки\n\n"
+            "Выше 1 - продают с прибылью, ниже 1 - в убыток\n\nВ медвежьем рынке SOPR упирается в 1")
+    _, warns = creator_tools._lint(body, "флагман")
+    assert any("БЕЗ ПОКАЗАНИЯ НА СЕГОДНЯ" in w for w in warns)
+
+
+def test_metric_post_with_today_reading_ok():
+    body = ("**📊 SOPR - рынок в боли или в жадности?**\n\nSOPR сравнивает цену продажи с ценой покупки\n\n"
+            "Сейчас SOPR у 1.007 - рынок продаёт в ноль\n\nВ медвежьем рынке SOPR упирается в 1")
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("БЕЗ ПОКАЗАНИЯ НА СЕГОДНЯ" in w for w in warns)
+
+
+def test_metric_mentioned_in_passing_not_flagged():
+    """Упоминание вскользь (<3 раз) — пост не ПРО метрику, показания не требуем."""
+    body = "**📊 Заголовок**\n\nЕсть ещё MVRV, но это тема другого поста\n\nдальше текст про другое"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("БЕЗ ПОКАЗАНИЯ НА СЕГОДНЯ" in w for w in warns)
+
+
+def test_generalization_frame_not_flagged():
+    """Живой оборот канала: персонаж внутри рамки обобщения («Вы наверняка ловили себя…») — законен.
+    Замер по 323 постам: это единственное срабатывание детектора на утверждённых текстах."""
+    body = ('**📊 Заголовок**\n\nВы наверняка ловили себя на этом: друг скинул "перспективный альт" - '
+            'неудобно отказать\n\nдальше текст')
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_market_generalization_not_flagged():
+    """«Толпа продаёт» / «кто-то покупает» — обобщение РЫНКА, а не персонаж-свидетель."""
+    body = "**📊 Заголовок**\n\nТолпа продаёт на дне, а кто-то по другую сторону молча покупал\n\nдальше"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
