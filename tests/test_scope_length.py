@@ -31,6 +31,14 @@ def _post(n_mids: int, para_len: int = 180) -> str:
     return "\n\n".join([head] + mids + [FOOTER])
 
 
+def _post_between(lo: int, hi: int, n_mids: int = 7) -> str:
+    """Пост, попадающий в коридор (lo, hi) — размер абзаца считаем ОТ ПОРОГОВ, а не магическим числом.
+    Пороги за август менялись трижды (1250 → 1500 → 1350), и фикстура `_post(7, 180)` при каждой
+    правке падала, хотя резчик работал верно (падение 20.08)."""
+    para = max(1, ((lo + hi) // 2 - _n(_post(n_mids, 0))) // n_mids)
+    return _post(n_mids, para)
+
+
 def test_single_source_of_length():
     # числа живут в ОДНОМ месте; бэкстоп берёт своё оттуда, копии здесь не держит
     assert sw._enforce_scope_len.__defaults__ == (0,)      # 0 = «взять из creator_tools»
@@ -55,7 +63,7 @@ def test_over_target_but_not_bloated_is_untouched():
     """Случай 10.08: владелец принял пост на 1599 знаков — длиннее цели, но это не флагман, а
     объяснение предмета спора, без которого пост читался как «интересно, но не понял, в чём проблема».
     Старый порог разрезал бы его. Между целью и раздуванием решает автор, не резчик."""
-    t = _post(7, 180)
+    t = _post_between(CAP, BLOAT)
     assert CAP < _n(t) <= BLOAT
     assert sw._enforce_scope_len(t) == t
 

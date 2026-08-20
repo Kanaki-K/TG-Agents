@@ -322,6 +322,19 @@ def test_clean_scope_has_no_connector_warn():
 _FOOT = "🖥 [Канал](https://t.me/x) | ▶️ [Медиа](https://linktr.ee/y)"
 
 
+def _n(s: str) -> int:
+    """Счёт Telegram (UTF-16 units) — как в линтере."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _filled_to(head: str, tail: str, target: int, filler: str = "детали механики ") -> str:
+    """Пост чуть ДЛИННЕЕ target — наполнитель считаем ОТ КОНСТАНТЫ, а не зашитым числом повторов.
+    Потолок scope за август менялся трижды (1250 → 1500 → 1350), и фикстура с магическим «×70»
+    падала при каждой правке, хотя поведение линтера было верным (падение 20.08)."""
+    need = max(target + 40 - _n(head + tail), len(filler))
+    return head + filler * (need // len(filler) + 1) + tail
+
+
 def _post_with_finale(fin: str) -> str:
     return ("**⚠️ Заголовок поста**\n\nПервый абзац тела с фактом и цифрой\n\n"
             "Второй абзац - механизм и вывод\n\n" + fin + "\n\n" + _FOOT)
@@ -398,9 +411,10 @@ def test_plain_analysis_is_not_advice():
 
 
 def test_long_advice_post_gets_soft_length_note():
-    long_body = ("Кого касается: Mk3, Mk4, Mk5 и Q. " + "детали механики " * 70 +
-                 "\n\nмигрируйте на новый seed, обновление уже созданный seed не спасает")
-    post = "**⚠️ Заголовок**\n\n" + long_body + "\n\n" + _FOOT
+    post = _filled_to("**⚠️ Заголовок**\n\nКого касается: Mk3, Mk4, Mk5 и Q. ",
+                      "\n\nмигрируйте на новый seed, обновление уже созданный seed не спасает\n\n" + _FOOT,
+                      creator_tools.SCOPE_TOTAL_CAP)
+    assert _n(post) > creator_tools.SCOPE_TOTAL_CAP        # фикстура реально выше потолка
     _, warns = creator_tools._lint(post, "scope")
     assert not any("длинноват" in w or "РАЗДУЛСЯ" in w for w in warns)   # общего «режь» тут быть не должно
     assert any("пост-ИНСТРУКЦИЯ" in w for w in warns)           # вместо него — «режь только воду»
