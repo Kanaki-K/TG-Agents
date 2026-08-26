@@ -112,14 +112,24 @@ def _body_images(html: str, page_url: str, limit: int = ARTICLE_IMG_CAP) -> list
 _MAX_SIDE = 1600  # ресайз до этой макс.стороны: Telegram отклоняет большие фото (PhotoInvalidDimensionsError)
 _MIN_SIDE = 800   # МЕНЬШЕ по длинной стороне — мелкий thumbnail/битый кроп, не обложка (баг 24.07: 8.5КБ og:image
                   # ушла в канал «обрезанной и корявой» — vision судит смысл, не пиксели; ловим детерминированно)
+# ══ ПОРОГ ПО РОЛИ КАДРА, А НЕ ОДИН НА ВСЁ (26.08) ══
+# 24.07 порог 800 поставили по декоративной шапке — и он верен ДЛЯ ШАПКИ: картинка-украшение в низком
+# разрешении это просто битый thumbnail, смотреть в ней нечего. Но кадр из тела статьи — это ИНФОРМАЦИЯ
+# (график, схема, скрин), и она остаётся информацией и в меньшем разрешении. 26.08 порог сработал ровно
+# наоборот задуманному: выбросил кандидата 345x230 и оставил в пуле три больших красивых ИИ-рендера.
+# У регуляторов, ФРБ и научных страниц картинки как раз мелкие — то есть общий порог бил по самому
+# ценному классу источников. Ниже 500px подписи на графике не переживают растяжение в ленте Telegram,
+# поэтому пол у информационного кадра свой, а не «никакого».
+_MIN_SIDE_BODY = 500
 
 
-def _normalize(path: Path) -> Path | None:
+def _normalize(path: Path, min_side: int = _MIN_SIDE) -> Path | None:
     """Привести к Telegram-safe ФОТО: RGB, макс сторона 1600px, JPEG q85. Так Telegram не отклоняет 'photo'
     по размерам (частая ошибка на больших PNG) + меньше вес (дешевле vision). Pillow нет → отдаём как есть
     (publish подстрахует документом). Заодно уменьшенная картинка удешевляет vision-вызов.
-    None — картинка МЕЛКАЯ (длинная сторона < _MIN_SIDE): отклоняем кандидата, пусть сработает фолбаг
-    «уйдём текстом» (обложка-мусор хуже отсутствия обложки — баг 24.07)."""
+    None — картинка МЕЛКАЯ (длинная сторона < min_side): отклоняем кандидата, пусть сработает фолбэк
+    «уйдём текстом» (обложка-мусор хуже отсутствия обложки — баг 24.07). Порог зависит от РОЛИ кадра:
+    шапке нужен _MIN_SIDE, кадру из тела статьи хватает _MIN_SIDE_BODY (см. блок выше)."""
     try:
         from PIL import Image
     except Exception:
@@ -129,7 +139,7 @@ def _normalize(path: Path) -> Path | None:
         with Image.open(path) as im:
             im = im.convert("RGB")
             w, h = im.size
-            small = max(w, h) < _MIN_SIDE   # порог качества по РАЗРЕШЕНИЮ (байты обманывают: JPEG q85 сильно жмёт)
+            small = max(w, h) < min_side    # порог качества по РАЗРЕШЕНИЮ (байты обманывают: JPEG q85 сильно жмёт)
             if not small:
                 longest = max(w, h)
                 if longest > _MAX_SIDE:
@@ -138,8 +148,8 @@ def _normalize(path: Path) -> Path | None:
                 out = path.with_suffix(".jpg")
                 im.save(out, "JPEG", quality=85, optimize=True)
         if small:
-            logging.info("source_media: обложка %dx%d < %dpx по длинной стороне — отклоняю (мелкая/битая, "
-                         "уйдём текстом)", w, h, _MIN_SIDE)
+            logging.info("source_media: кадр %dx%d < %dpx по длинной стороне — отклоняю (мелкий/битый)",
+                         w, h, min_side)
             try:
                 path.unlink()
             except Exception:
@@ -156,9 +166,9 @@ def _normalize(path: Path) -> Path | None:
         return path
 
 
-def download(img_url: str, name: str = "scope") -> Path | None:
+def download(img_url: str, name: str = "scope", min_side: int = _MIN_SIDE) -> Path | None:
     """Скачать картинку в data/source_media/<name>.jpg (нормализованную под Telegram-фото). None — не
-    картинка/битая/размер вне гейта."""
+    картинка/битая/размер вне гейта. min_side — пол разрешения по РОЛИ кадра (шапка/тело статьи)."""
     got = feeds.fetch_bytes(img_url, max_bytes=_MAX_IMG_BYTES)
     if not got:
         return None
@@ -169,7 +179,7 @@ def download(img_url: str, name: str = "scope") -> Path | None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     dest = OUT_DIR / f"{name}{ext}"
     dest.write_bytes(body)
-    return _normalize(dest)  # ресайз/JPEG → валидное Telegram-фото (Pillow нет → как есть)
+    return _normalize(dest, min_side)  # ресайз/JPEG → валидное Telegram-фото (Pillow нет → как есть)
 
 
 def fetch_source_image(page_url: str, name: str = "scope") -> Path | None:
@@ -190,14 +200,14 @@ def fetch_source_images(page_url: str, name: str = "scope", limit: int = 1 + ART
     html = _page_html(page_url)          # страницу тянем ОДИН раз: и шапка, и тело — из этого же HTML
     if not html:
         return []
-    urls: list[str] = []
+    urls: list[tuple[str, int]] = []          # (url, пол разрешения по роли кадра)
     og = _og_from_html(html, page_url)
     if og:
-        urls.append(og)
-    urls += [u for u in _body_images(html, page_url) if u not in urls]
+        urls.append((og, _MIN_SIDE))
+    urls += [(u, _MIN_SIDE_BODY) for u in _body_images(html, page_url) if u != og]
     out: list[Path] = []
-    for j, u in enumerate(urls[:max(1, limit)]):
-        p = download(u, name=f"{name}_{j}")
+    for j, (u, floor) in enumerate(urls[:max(1, limit)]):
+        p = download(u, name=f"{name}_{j}", min_side=floor)
         if p:
             out.append(p)
     return out

@@ -232,5 +232,54 @@ def test_fetch_source_images_empty_when_page_dead(monkeypatch, tmp_path):
     assert fetch.fetch_source_images(PAGE) == []
 
 
+
+# --- ПОРОГ РАЗРЕШЕНИЯ ПО РОЛИ КАДРА (26.08): шапке нужен 800, графику хватает 500 -------------------
+
+def test_download_floor_is_overridable(monkeypatch, tmp_path):
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(600, 400), "image/png"))
+    assert fetch.download("https://cdn.x/chart.png") is None                      # как шапка — мелко
+    assert fetch.download("https://cdn.x/chart.png", min_side=fetch._MIN_SIDE_BODY) is not None
+
+
+def test_body_frame_passes_where_header_would_not(monkeypatch, tmp_path):
+    """Тот самый случай 26.08: график первоисточника меньше 800px — раньше выпадал ДО выбора."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    html = ('<meta property="og:image" content="https://cdn.x/hero.jpg">'
+            '<article><img src="https://cdn.x/chart.png"></article>')
+
+    def fake(url, **k):
+        if url == PAGE:
+            return _html(html)
+        return (_png_bytes(1200, 800), "image/png") if "hero" in url else (_png_bytes(640, 420), "image/png")
+
+    monkeypatch.setattr(feeds, "fetch_bytes", fake)
+    assert len(fetch.fetch_source_images(PAGE, name="scope_0")) == 2
+
+
+def test_body_frame_still_has_a_floor(monkeypatch, tmp_path):
+    """Пол снижен, а не снят: 345x230 (кандидат 26.08) не читается в ленте и кандидатом не становится."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    html = '<article><img src="https://cdn.x/tiny.png"></article>'
+
+    def fake(url, **k):
+        return _html(html) if url == PAGE else (_png_bytes(345, 230), "image/png")
+
+    monkeypatch.setattr(feeds, "fetch_bytes", fake)
+    assert fetch.fetch_source_images(PAGE) == []
+
+
+def test_header_floor_unchanged(monkeypatch, tmp_path):
+    """Правило 24.07 для ШАПКИ не тронуто: 8.5КБ-мелочь в канал не уходит."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    html = '<meta property="og:image" content="https://cdn.x/hero.jpg">'
+
+    def fake(url, **k):
+        return _html(html) if url == PAGE else (_png_bytes(700, 500), "image/png")
+
+    monkeypatch.setattr(feeds, "fetch_bytes", fake)
+    assert fetch.fetch_source_images(PAGE) == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
