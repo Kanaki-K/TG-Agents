@@ -236,13 +236,53 @@ def test_warning_mark_does_not_eat_run_mark(tmp_path, monkeypatch):
 
 
 def test_switch_off_by_default_and_toggles(tmp_path, monkeypatch):
-    monkeypatch.setattr(schedule, "ON_FILE", tmp_path / "autopilot_on")
-    assert schedule.enabled() is False          # по умолчанию ВЫКЛЮЧЕН — включает только владелец
-    schedule.turn_on("тест")
-    assert schedule.enabled() is True
-    assert "тест" in (tmp_path / "autopilot_on").read_text(encoding="utf-8")
-    schedule.turn_off()
-    assert schedule.enabled() is False
+    monkeypatch.setattr(schedule, "SWITCH_DIR", tmp_path)
+    assert schedule.enabled("flagship") is False   # по умолчанию ВЫКЛЮЧЕН — включает только владелец
+    schedule.turn_on("flagship", "тест")
+    assert schedule.enabled("flagship") is True
+    assert "тест" in (tmp_path / "autopilot_on_flagship").read_text(encoding="utf-8")
+    schedule.turn_off("flagship")
+    assert schedule.enabled("flagship") is False
+
+
+def test_formats_switch_independently(tmp_path, monkeypatch):
+    """ГЛАВНОЕ требование владельца: скоуп и флагман не связаны ничем.
+
+    Проверяем именно пару «включил один — второй не тронут» и «выключил один — второй жив»: это то
+    место, где ошибка стоит дороже всего (выключил скоуп после плохой недели — молча встал флагман).
+    """
+    monkeypatch.setattr(schedule, "SWITCH_DIR", tmp_path)
+    schedule.turn_on("scope", "обкатка скоупа")
+    assert schedule.enabled("scope") is True
+    assert schedule.enabled("flagship") is False        # включение скоупа не тронуло флагман
+    assert schedule.enabled_kinds() == ["scope"]
+
+    schedule.turn_on("flagship", "обкатка флагмана")
+    assert schedule.enabled_kinds() == ["flagship", "scope"]   # порядок канонический, из content_plan
+
+    schedule.turn_off("scope")
+    assert schedule.enabled("flagship") is True         # выключение скоупа НЕ гасит флагман
+    assert schedule.enabled_kinds() == ["flagship"]
+    assert schedule.any_enabled() is True
+
+    schedule.turn_off("flagship")
+    assert schedule.any_enabled() is False
+
+
+def test_legacy_common_switch_reads_as_flagship(tmp_path, monkeypatch):
+    """Старый общий `data/autopilot_on` = «флагман включён», и «выключи флагман» его сносит.
+
+    Владелец мог создать этот файл руками по docs/AUTOPILOT.md до разделения форматов: молча его
+    игнорировать = «включил по инструкции, а оно не работает», а не снести при выключении = стоп-кран,
+    который не останавливает.
+    """
+    monkeypatch.setattr(schedule, "SWITCH_DIR", tmp_path)
+    (tmp_path / "autopilot_on").write_text("включено по старой инструкции\n", encoding="utf-8")
+    assert schedule.enabled("flagship") is True
+    assert schedule.enabled("scope") is False      # общий файл НЕ включает скоуп задним числом
+    schedule.turn_off("flagship")
+    assert schedule.enabled("flagship") is False
+    assert not (tmp_path / "autopilot_on").exists()
 
 
 # --- настройки из .env -----------------------------------------------------------------------
@@ -497,3 +537,74 @@ def test_lead_hours_from_env(monkeypatch, raw, expect):
 def test_lead_hours_default_when_unset(monkeypatch):
     monkeypatch.delenv("AUTOPILOT_LEAD_HOURS", raising=False)
     assert schedule.lead_hours() == schedule.DEFAULT_LEAD_HOURS
+
+
+# --- ДВА ФОРМАТА: разбор «для какого» и сводная панель ----------------------------------------
+
+@pytest.mark.parametrize("raw,expect", [
+    ("флагман", ["flagship"]),
+    ("для флагмана", ["flagship"]),
+    ("скоуп", ["scope"]),
+    ("для скоупа", ["scope"]),
+    ("короткий", ["scope"]),
+    ("оба", ["flagship", "scope"]),
+    ("для обоих", ["flagship", "scope"]),
+    ("флагман и скоуп", ["flagship", "scope"]),
+    (["скоуп", "флагман"], ["flagship", "scope"]),      # порядок нормализуется к каноническому
+])
+def test_parse_kinds_understands_owner_phrasing(raw, expect):
+    assert schedule.parse_kinds(raw) == expect
+
+
+@pytest.mark.parametrize("raw", ["", None, "трэдс", "непонятно что"])
+def test_parse_kinds_refuses_to_guess(raw):
+    """СТРОГАЯ намеренно: пустое/непонятное — вопрос владельцу, а не догадка.
+
+    Цена догадки несимметрична: угадали при 'on' — посты пошли в канал без его «ок»; угадали при
+    'off' — он думает, что выключил, а формат продолжает публиковать.
+    """
+    with pytest.raises(ValueError):
+        schedule.parse_kinds(raw)
+
+
+def test_scope_schedule_is_its_own(tmp_path, monkeypatch):
+    """У скоупа своё расписание, и правка одного формата не трогает второй."""
+    monkeypatch.setattr(schedule, "SWITCH_DIR", tmp_path)
+    assert schedule.apply_params({"scope_days": "пн,пт", "scope_time": "18:00"}, by="тест")["ok"]
+    assert cp.days_for("scope") == (0, 4)
+    assert cp.slot_time("scope").strftime("%H:%M") == "18:00"
+    assert cp.days_for("flagship") == cp.FLAGSHIP_DAYS          # флагман не тронут
+    assert cp.settings().get("flagship_time") is None           # и его время в файл не записалось
+
+
+def test_apply_params_accepts_old_short_name():
+    """plan_settings.json на машине владельца мог накопить ключи под старым именем формата."""
+    res = schedule.apply_params({"short_time": "17:30"}, by="тест")
+    assert res["ok"]
+    assert cp.slot_time("scope").strftime("%H:%M") == "17:30"
+    assert {k for k, _, _ in res["diff"]} == {"scope_time"}     # в файл пишем каноничное имя
+
+
+def test_param_label_is_human():
+    """Отчёт «было → стало» владелец читает в телефоне — внутренние ключи там читаются как ошибка."""
+    assert "скоуп" in schedule.param_label("scope_days")
+    assert "флагман" in schedule.param_label("flagship_time")
+    assert schedule.param_label("tz") == "часовой пояс"
+
+
+def test_status_all_shows_both_formats_and_their_switches(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule, "SWITCH_DIR", tmp_path)
+    schedule.turn_on("scope", "обкатка")
+    txt = schedule.status_all()
+    assert "ФЛАГМАН" in txt and "СКОУП" in txt        # подробности по обоим
+    assert "✅ включён" in txt and "⏸ выключен" in txt  # и сводка сверху отражает разное состояние
+
+
+def test_status_all_warns_when_nothing_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(schedule, "SWITCH_DIR", tmp_path)
+    assert "только по твоей команде" in schedule.status_all()
+
+
+def test_frankfurt_is_understood_as_channel_zone():
+    """Владелец зовёт время канала франкфуртским; zoneinfo знает его как Europe/Berlin."""
+    assert schedule.parse_zone("по франкфурту") == "Europe/Berlin"

@@ -8,8 +8,14 @@
 `PUBLISH_FLAGSHIP_TIME`, `PUBLISH_TZ`). Здесь — только окно старта, метка «сегодня уже гоняли»
 и предохранители. Полное объяснение для владельца — в `docs/AUTOPILOT.md`.
 
-ГЛАВНЫЙ предохранитель — файл-выключатель `data/autopilot_on` (по образцу `data/threads_unlocked`):
-нет файла → автопилот НИЧЕГО не делает. Удалить файл = мгновенно всё остановить, .env не трогая.
+ГЛАВНЫЙ предохранитель — файлы-выключатели `data/autopilot_on_<формат>` (по образцу
+`data/threads_unlocked`): нет файла → этот формат НИЧЕГО не делает. Удалить файл = мгновенно
+остановить, .env не трогая.
+
+ФОРМАТЫ НЕЗАВИСИМЫ (26.08.2026): у флагмана и скоупа свой выключатель, своё расписание и своя метка
+«сегодня гоняли». Так и было задумано владельцем: скоуп может законно не выйти (нет свежего повода),
+и одна неудачная неделя со скоупом не должна быть поводом гасить флагман — а с общим рубильником
+выбора бы не было.
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ from core import config, content_plan, io_safe, runmode
 log = logging.getLogger(__name__)
 
 STATE_FILE = config.ROOT / "data" / "autopilot_state.json"   # что и когда гоняли (переживает перезапуск)
-ON_FILE = config.ROOT / "data" / "autopilot_on"              # файл-выключатель: нет → автопилот спит
+SWITCH_DIR = config.ROOT / "data"        # где живут файлы-выключатели (тесты подменяют на tmp_path)
 
 DEFAULT_LEAD_HOURS = 4.0       # за сколько часов до слота стартуем (флагману повод не нужен — можно с утра)
 DEFAULT_MARGIN_MINUTES = 60    # ближе этого к слоту не начинаем: прогон (~10-20 мин) должен успеть
@@ -56,21 +62,56 @@ def check_every() -> float:
     return _num("check_every", "AUTOPILOT_CHECK_EVERY", DEFAULT_CHECK_EVERY)
 
 
-def enabled() -> bool:
-    """Включён ли автопилот. Один выключатель — ФАЙЛ (не .env): убирается одним движением."""
-    return ON_FILE.exists()
+def on_file(kind: str):
+    """Файл-выключатель ФОРМАТА: data/autopilot_on_flagship | data/autopilot_on_scope."""
+    return SWITCH_DIR / f"autopilot_on_{content_plan.norm_kind(kind)}"
 
 
-def turn_on(reason: str = "") -> None:
-    """Включить автопилот (создать файл-выключатель). Причина остаётся в файле — как у Threads."""
-    ON_FILE.parent.mkdir(exist_ok=True)
+def legacy_on_file():
+    """Старый ОБЩИЙ выключатель `data/autopilot_on` — до разделения форматов (11.08–26.08.2026)."""
+    return SWITCH_DIR / "autopilot_on"
+
+
+def enabled(kind: str = "flagship") -> bool:
+    """Включён ли автопилот для формата. Выключатель — ФАЙЛ (не .env): убирается одним движением.
+
+    Старый общий `data/autopilot_on` читаем как «флагман включён»: он описан в docs/AUTOPILOT.md как
+    стоп-кран, и владелец мог создать его руками до разделения форматов. Молча его игнорировать
+    значило бы «включил по инструкции, а оно не работает».
+    """
+    kind = content_plan.norm_kind(kind)
+    return on_file(kind).exists() or (kind == "flagship" and legacy_on_file().exists())
+
+
+def enabled_kinds() -> list:
+    """Форматы, которым сейчас разрешено запускаться самим (в порядке content_plan.KINDS)."""
+    return [k for k in content_plan.KINDS if enabled(k)]
+
+
+def any_enabled() -> bool:
+    """Нужен ли вообще будильник в ОС: хоть один формат включён."""
+    return bool(enabled_kinds())
+
+
+def turn_on(kind: str = "flagship", reason: str = "") -> None:
+    """Включить автопилот ФОРМАТА (создать его файл-выключатель). Причина остаётся в файле — как у Threads."""
+    kind = content_plan.norm_kind(kind)
+    f = on_file(kind)
+    f.parent.mkdir(exist_ok=True)
     stamp = datetime.now(content_plan.tz()).isoformat(timespec="seconds")
-    ON_FILE.write_text(f"{stamp} {reason}".strip() + "\n", encoding="utf-8")
+    f.write_text(f"{stamp} {reason}".strip() + "\n", encoding="utf-8")
 
 
-def turn_off() -> None:
-    """Выключить автопилот (удалить файл). Прогон, который уже идёт, не трогает."""
-    ON_FILE.unlink(missing_ok=True)
+def turn_off(kind: str = "flagship") -> None:
+    """Выключить автопилот ФОРМАТА. Прогон, который уже идёт, не трогает.
+
+    Для флагмана сносим и старый общий файл: иначе «выключи флагман» оставило бы его включённым через
+    легаси-путь в enabled() — стоп-кран обязан быть настоящим.
+    """
+    kind = content_plan.norm_kind(kind)
+    on_file(kind).unlink(missing_ok=True)
+    if kind == "flagship":
+        legacy_on_file().unlink(missing_ok=True)
 
 
 def _state() -> dict:
@@ -155,6 +196,40 @@ def parse_days(raw) -> list[int]:
     return sorted(set(out))
 
 
+# Слова «оба формата разом». Владелец говорит «включи автопилот» без уточнения — это НЕ значит
+# «включи оба» молча: включение = посты в канал без его «ок», и догадываться тут нельзя. Поэтому
+# «оба» должно быть СКАЗАНО, а пустое значение вызывающий обрабатывает сам (переспрашивает).
+# Сверяем ЦЕЛИКОМ со словом, а не вхождением: «все» внутри «всегда» превратило бы «включи флагман
+# всегда» в «включи оба» — молча и в ту сторону, где ошибка дороже.
+_BOTH_WORDS = frozenset(("оба", "обе", "обоих", "обоим", "все", "всё", "вместе", "both", "all"))
+
+
+def parse_kinds(raw) -> list:
+    """«флагман» / «скоуп» / «флагман и скоуп» / «оба» → список форматов. Непонятное — ValueError.
+
+    Строгая (в отличие от content_plan.norm_kind): это ввод ИЗ ЧАТА, то есть от модели, а цена промаха —
+    включённый не тот автопилот, который сам поставит пост в канал. Лучше переспросить.
+    """
+    if isinstance(raw, (list, tuple)):
+        out: list = []
+        for item in raw:
+            out += parse_kinds(item)
+        return [k for k in content_plan.KINDS if k in out]     # канонический порядок, без дублей
+    s = str(raw or "").strip().lower()
+    if not s:
+        raise ValueError("не понял, для какого формата — скажи «для флагмана», «для скоупа» или «для обоих»")
+    words = [w.strip("«»\"'.,!?()") for w in s.replace("/", " ").replace(",", " ").split()]
+    if _BOTH_WORDS.intersection(words):
+        return list(content_plan.KINDS)
+    # А вот имя формата ищем вхождением: владелец склоняет («для скоупа», «флагмана»), и обрубать
+    # окончания списком было бы хрупче, чем искать корень.
+    found = [k for k in content_plan.KINDS
+             if any(w in s for w in content_plan.kind_words(k))]
+    if not found:
+        raise ValueError(f"не понял формат «{raw}» — скажи «флагман», «скоуп» или «оба»")
+    return found
+
+
 def parse_time(raw) -> str:
     """«16:00» / «16» / «16.30» / «в 16:00» → «16:00». Вне 05:00–23:59 — отказ (ночью не публикуем).
 
@@ -180,6 +255,9 @@ def parse_time(raw) -> str:
 TZ_ALIASES = {
     "берлин": "Europe/Berlin", "берлину": "Europe/Berlin", "берлине": "Europe/Berlin",
     "berlin": "Europe/Berlin", "германия": "Europe/Berlin", "цет": "Europe/Berlin",
+    # Франкфурт — тот же пояс, что Берлин; владелец зовёт время канала именно франкфуртским.
+    "франкфурт": "Europe/Berlin", "франкфурту": "Europe/Berlin", "франкфурте": "Europe/Berlin",
+    "frankfurt": "Europe/Berlin",
     "москва": "Europe/Moscow", "москве": "Europe/Moscow", "мск": "Europe/Moscow",
     "moscow": "Europe/Moscow", "msk": "Europe/Moscow",
     "киев": "Europe/Kyiv", "киеву": "Europe/Kyiv", "kyiv": "Europe/Kyiv", "kiev": "Europe/Kyiv",
@@ -221,11 +299,14 @@ def parse_number(raw, what: str) -> float:
 
 def _validated(changes: dict) -> dict:
     """Проверить пачку правок целиком. Возвращает готовые к записи значения; бросает ValueError."""
+    changes = {("scope_" + k[len("short_"):] if k.startswith("short_") else k): v
+               for k, v in (changes or {}).items()}   # старое имя формата → каноничное
     out: dict = {}
-    if "flagship_time" in changes:
-        out["flagship_time"] = parse_time(changes["flagship_time"])
-    if "flagship_days" in changes:
-        out["flagship_days"] = parse_days(changes["flagship_days"])
+    for kind in content_plan.KINDS:
+        if f"{kind}_time" in changes:
+            out[f"{kind}_time"] = parse_time(changes[f"{kind}_time"])
+        if f"{kind}_days" in changes:
+            out[f"{kind}_days"] = parse_days(changes[f"{kind}_days"])
     if "timezone" in changes:
         out["tz"] = parse_zone(changes["timezone"])
     if "lead_hours" in changes:
@@ -252,7 +333,7 @@ def _validated(changes: dict) -> dict:
 
 def describe_param(key: str, value) -> str:
     """Значение параметра человеческим языком (для отчёта «было → стало»)."""
-    if key == "flagship_days":
+    if key.endswith("_days"):
         return "/".join(content_plan.RU_DOW[i] for i in value) if value else "—"
     if key == "lead_hours":
         return f"за {float(value):g} ч до выхода"
@@ -261,14 +342,29 @@ def describe_param(key: str, value) -> str:
     return str(value)
 
 
+def param_label(key: str) -> str:
+    """Имя параметра для владельца: «дни выхода скоупа», а не «scope_days».
+
+    Отчёт «было → стало» он читает в телефоне — внутренние ключи там читаются как ошибка.
+    """
+    for kind in content_plan.KINDS:
+        if key == f"{kind}_days":
+            return f"дни выхода ({content_plan.kind_word(kind)})"
+        if key == f"{kind}_time":
+            return f"время выхода ({content_plan.kind_word(kind)})"
+    return {"tz": "часовой пояс", "lead_hours": "старт прогона",
+            "margin_minutes": "запас до слота"}.get(key, key)
+
+
 def current_param(key: str):
     """Текущее ЭФФЕКТИВНОЕ значение параметра (с учётом всех источников)."""
     if key == "tz":
         return content_plan.tz_name() or "смещение PUBLISH_UTC_OFFSET"
-    if key == "flagship_days":
-        return list(content_plan.days_for("flagship"))
-    if key == "flagship_time":
-        return f"{content_plan.slot_time('flagship'):%H:%M}"
+    for kind in content_plan.KINDS:
+        if key == f"{kind}_days":
+            return list(content_plan.days_for(kind))
+        if key == f"{kind}_time":
+            return f"{content_plan.slot_time(kind):%H:%M}"
     if key == "lead_hours":
         return lead_hours()
     if key == "margin_minutes":
@@ -410,11 +506,12 @@ def _alarm_is_set() -> bool:
 
 
 def status_text(kind: str = "flagship") -> str:
-    """Панель состояния автопилота — ОДИН текст и для `run_autopilot --status`, и для /autopilot в боте.
+    """Панель состояния автопилота ОДНОГО формата — и для `run_autopilot --status`, и для /autopilot.
 
     Специально с ИСТОЧНИКОМ каждой настройки («из чата» / «из .env» / «дефолт кода»): три источника
     без пометки = «почему стоит не то, что я думал».
     """
+    kind = content_plan.norm_kind(kind, default="flagship")
     now = datetime.now(content_plan.tz())
     win = window(kind, now.date())
     mode = runmode.get()
@@ -448,6 +545,27 @@ def status_text(kind: str = "flagship") -> str:
     if st.get("updated"):
         rows.append(("правил из чата", f"{st['updated']} ({st.get('updated_by', '?')})"))
     width = max(len(k) for k, _ in rows)
-    head = (f"🤖 АВТОПИЛОТ — {'✅ ВКЛЮЧЁН' if enabled() else '⏸ ВЫКЛЮЧЕН'}"
-            f"{'' if enabled() else ' (сам не запускается)'}")
+    on = enabled(kind)
+    head = (f"🤖 АВТОПИЛОТ · {content_plan.kind_word(kind).upper()} — "
+            f"{'✅ ВКЛЮЧЁН' if on else '⏸ ВЫКЛЮЧЕН'}{'' if on else ' (сам не запускается)'}")
     return "\n".join([head, ""] + [f"• {k.ljust(width)} : {v}" for k, v in rows])
+
+
+def status_all() -> str:
+    """Сводная панель по ОБОИМ форматам: сначала однострочный итог, потом подробности по каждому.
+
+    Зачем итог сверху: форматы независимы, и первый вопрос владельца — «что сейчас включено», а не
+    «какой запас до слота у скоупа». Без сводки он читал бы две простыни, чтобы ответить на него.
+    """
+    head = ["🤖 АВТОПИЛОТ — что включено сейчас", ""]
+    for k in content_plan.KINDS:
+        days = "/".join(content_plan.RU_DOW[i] for i in content_plan.days_for(k))
+        head.append(f"• {content_plan.kind_word(k).ljust(8)} : "
+                    f"{'✅ включён' if enabled(k) else '⏸ выключен'} · {days} в "
+                    f"{content_plan.slot_time(k):%H:%M} · след. {content_plan.human(content_plan.next_slot(k))}")
+    if not any_enabled():
+        head.append("\nОба выключены — посты выходят только по твоей команде (/run, /run_scope).")
+    elif not _alarm_is_set():
+        # Включённый формат без будильника — самая опасная ложь панели: «включено», а просыпаться некому.
+        head.append("\n❌ БУДИЛЬНИК НЕ СТОИТ — сам никто не проснётся. Скажи «включи автопилот» заново.")
+    return "\n\n".join(["\n".join(head)] + [status_text(k) for k in content_plan.KINDS])
