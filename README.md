@@ -88,12 +88,18 @@ post sits in the native *Scheduled* queue with a wide review window, and the own
 either way. The decision ("is it time?") is a pure function of time and on-disk state (`core/schedule.py`),
 so it is unit-tested without spending money on real runs; the executor only obeys the verdict.
 
-Gates are **in code, not in a prompt**: a file switch (`data/autopilot_on`, absent by default), a start
-*window* rather than an instant, "already ran today", "the slot is already taken", and a hard stop in
-cheap-model test mode. The schedule itself is configured **by chatting with the Creator bot**
-(`/autopilot`) — values arrive from a model, so ranges and a "the window can't be empty" cross-check are
-enforced by the validator, and every change is echoed back as *before → after*. Full owner-facing guide:
-[`docs/AUTOPILOT.md`](docs/AUTOPILOT.md).
+Two formats run on it **independently** — the long-form flagship (Tue/Thu) and the short news-driven
+"scope" (Mon/Wed/Fri) — each with its own switch, schedule and "already ran today" mark, so a quiet week
+on one is never a reason to ground the other. The scope format may legitimately produce nothing (its
+freshness gate rejects stale news); the report says so explicitly rather than leaving silence to be
+misread as a failure.
+
+Gates are **in code, not in a prompt**: a per-format file switch (`data/autopilot_on_<format>`, absent by
+default), a start *window* rather than an instant, "already ran today", "the slot is already taken", and a
+hard stop in cheap-model test mode. The schedule itself is configured **by chatting with the Creator bot**
+(`/autopilot`) — values arrive from a model, so ranges, a strict "which format?" parser and a "the window
+can't be empty" cross-check are enforced by the validator, and every change is echoed back as
+*before → after*. Full owner-facing guide: [`docs/AUTOPILOT.md`](docs/AUTOPILOT.md).
 
 **Known limitations** (documented rather than hidden — all of them are consequences of running unattended):
 
