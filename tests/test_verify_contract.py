@@ -285,3 +285,40 @@ def test_contract_names_the_mechanics_class():
     assert "МЕХАНИКА" in s
     assert "T+2" in s                 # разобранный случай 05.08 в контракте
     assert "Право ≠ действие" in s
+
+
+# ── ❓ «в брифе не прослеживается» — НЕ блокирует, но обязано ДОЙТИ до владельца (26.08) ──────────
+# Замысел has_issues: ❓ не блокирует, «владелец увидит флаг в Отложенных». Увидеть его было негде —
+# ❓ оставался внутри простыни вердикта, а панель ИТОГ писала «✓ цифры сверены». 26.08 так уехал
+# тезис «в кредитах растёт доля рискованных заёмщиков», приписанный ФРС.
+
+_UNVERIFIED_LINE = ("❓ «рост доли рискованных заёмщиков» (со ссылкой на Dallas Fed) — в брифе не "
+                    "прослеживается. Проверь вручную по тексту самой бумаги")
+
+
+def test_unverified_line_does_not_block():
+    v = _UNVERIFIED_LINE + "\nИТОГ: 8✅ / 0⚠️ / 1❓\nСТАТУС: ЧИСТО"
+    assert verify.has_issues(v) is False          # политика прежняя: ❓ публикацию не останавливает
+    assert verify.has_redline(v) is False
+
+
+def test_unverified_notes_reach_the_owner():
+    v = _UNVERIFIED_LINE + "\nИТОГ: 8✅ / 0⚠️ / 1❓\nСТАТУС: ЧИСТО"
+    assert verify.unverified_notes(v) == [" ".join(_UNVERIFIED_LINE.split())]
+
+
+def test_unverified_notes_skip_machine_totals():
+    """Строка ИТОГ тоже содержит ❓ — в отчёт владельцу она не нужна."""
+    v = "ИТОГ: 8✅ / 0⚠️ / 1❓\nСТАТУС: ЧИСТО"
+    assert verify.unverified_notes(v) == []
+
+
+def test_unverified_notes_empty_on_clean_verdict():
+    assert verify.unverified_notes("ИТОГ: 9✅ / 0⚠️ / 0❓\nСТАТУС: ЧИСТО") == []
+    assert verify.unverified_notes("") == []
+
+
+def test_unverified_and_completeness_are_different_classes():
+    v = _COMPLETENESS_LINE + "\n" + _UNVERIFIED_LINE
+    assert verify.completeness_notes(v) == [" ".join(_COMPLETENESS_LINE.split())]
+    assert verify.unverified_notes(v) == [" ".join(_UNVERIFIED_LINE.split())]
