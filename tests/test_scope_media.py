@@ -98,3 +98,58 @@ def test_attach_media_empty_pool_goes_text(monkeypatch, tmp_path):
     _cover_to_tmp(monkeypatch, tmp_path)
     monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": [])
     assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k") == ""
+
+
+# ── ОТКАЗ ВЫБОРА: «0» обязан доехать как «обложки нет» (правило «ИИ-сток не берём», 26.08) ────────
+# Запрет на ИИ-рендер живёт в _MEDIA_CRITERIA — это задача классификации, ей место в промпте.
+# А вот РАЗБОР ответа — код, и он не должен молча превращать отказ в первую попавшуюся картинку.
+
+class _FakeResp:
+    def __init__(self, text):
+        self.content = [type("B", (), {"type": "text", "text": text})()]
+        self.usage = type("U", (), {"input_tokens": 1, "output_tokens": 1, "cache_creation_input_tokens": 0,
+                                    "cache_read_input_tokens": 0})()
+
+
+def _fake_vision(monkeypatch, tmp_path, answer):
+    """Подменяет Anthropic-вызов внутри _vision_pick заранее заданным ответом модели."""
+    imgs = []
+    for i in range(3):
+        p = tmp_path / f"c{i}.jpg"
+        p.write_bytes(b"\xff\xd8" + b"0" * 100)
+        imgs.append(p)
+
+    class _Msgs:
+        def create(self, **kw):
+            return _FakeResp(answer)
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = _Msgs()
+
+    monkeypatch.setattr(sw, "Anthropic", _Client)
+    monkeypatch.setattr(sw.cost, "record", lambda *a, **k: None)
+    return imgs
+
+
+def test_vision_pick_zero_means_no_cover(monkeypatch, tmp_path):
+    imgs = _fake_vision(monkeypatch, tmp_path, "0")
+    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
+
+
+def test_vision_pick_takes_number(monkeypatch, tmp_path):
+    imgs = _fake_vision(monkeypatch, tmp_path, "2")
+    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") == imgs[1]
+
+
+def test_vision_pick_out_of_range_is_no_cover(monkeypatch, tmp_path):
+    imgs = _fake_vision(monkeypatch, tmp_path, "7")
+    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
+
+
+def test_media_criteria_ban_ai_render():
+    """Страж правила: запрет ИИ-рендера — решение владельца, а не украшение промпта."""
+    c = sw._MEDIA_CRITERIA
+    assert "ИИ-РЕНДЕР НЕ БЕРЁМ" in c
+    assert "неоново" in c or "неоновое" in c
+    assert "ТОЛЬКО ИИ-рендеры → 0" in c
