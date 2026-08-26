@@ -95,3 +95,54 @@ def test_pipe_metaphor_banned():
     """«труба/трубы» — тот же костыль, что «рельсы» (в канале за 319 постов встретилось 1 раз)."""
     warns = ct._lint(_post(["Таким семьям нужна не консультация, а труба под крупные заявки"]), "scope")[1]
     assert any("БАН-метафора" in w and "труб" in w for w in warns)
+
+
+# ── ФУТЕР ЕСТЬ, НО НЕ ТОТ (баг 26.08: ушёл БЕЗ эмодзи) ──────────────────────────────────────────
+# Проверка «футер на месте» ищет ЛЮБУЮ из меток, а `[Канал](https://t.me/…)` даёт сразу две — поэтому
+# гибрид «ссылки есть, эмодзи нет» проходил насквозь. Причина гибрида — в ДАННЫХ контекста: эталоны
+# из выгрузки показывают футер без ссылок, мануал требует со ссылками.
+
+FOOTER_NO_EMOJI = ("[Канал](https://t.me/+AAA) | [Медиа](https://linktr.ee/x) | "
+                   "[Мемы](https://t.me/+BBB) | [Notion](https://www.notion.so/x)")
+
+
+def test_lint_replaces_footer_without_emoji(monkeypatch, tmp_path):
+    _mock_footer(monkeypatch, tmp_path)
+    clean, warns = ct._lint(POST_NO_FOOTER + "\n\n" + FOOTER_NO_EMOJI, "scope")
+    assert clean.rstrip().endswith(FOOTER), "футер обязан стать каноническим (с эмодзи)"
+    assert FOOTER_NO_EMOJI not in clean, "старый футер не должен остаться в тексте"
+    assert clean.count("linktr") == 1, "подмена, а не дописывание второго футера"
+    assert any("НЕ канонический" in w for w in warns)
+
+
+def test_lint_replaces_footer_with_old_labels(monkeypatch, tmp_path):
+    """Старый вариант из выгрузки («💬 Чат» вместо «▶️ Медиа») — тоже не канон."""
+    _mock_footer(monkeypatch, tmp_path)
+    old = "🖥 Канал | 💬 Чат | 🥸 Мемы | 📱Notion"
+    clean, warns = ct._lint(POST_NO_FOOTER + "\n\n" + old, "scope")
+    assert clean.rstrip().endswith(FOOTER) and old not in clean
+    assert any("НЕ канонический" in w for w in warns)
+
+
+def test_lint_silent_on_canonical_footer(monkeypatch, tmp_path):
+    _mock_footer(monkeypatch, tmp_path)
+    clean, warns = ct._lint(POST_NO_FOOTER + "\n\n" + FOOTER, "scope")
+    assert not any("НЕ канонический" in w for w in warns), "канон трогать нельзя"
+    assert clean.count("linktr") == 1
+
+
+def test_footer_fix_keeps_meta_after_split(monkeypatch, tmp_path):
+    """Мета обложки живёт ПОСЛЕ [[SPLIT]] — подмена футера не должна её задеть."""
+    _mock_footer(monkeypatch, tmp_path)
+    src = POST_NO_FOOTER + "\n\n" + FOOTER_NO_EMOJI + "\n\n[[SPLIT]]\n[[MEDIA_SRC]] https://example.com"
+    clean, _ = ct._lint(src, "scope")
+    assert "[[MEDIA_SRC]] https://example.com" in clean
+    assert clean.index(FOOTER) < clean.index("[[SPLIT]]")
+
+
+def test_footer_fix_soft_without_canon_file(monkeypatch, tmp_path):
+    """Нет memory/footer.md → молчим и НЕ портим текст (память приватна, её может не быть)."""
+    monkeypatch.setattr(ct, "FOOTER_FILE", tmp_path / "нет-такого.md")
+    clean, warns = ct._lint(POST_NO_FOOTER + "\n\n" + FOOTER_NO_EMOJI, "scope")
+    assert FOOTER_NO_EMOJI in clean
+    assert not any("НЕ канонический" in w for w in warns)
