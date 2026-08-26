@@ -712,3 +712,26 @@ def test_market_generalization_not_flagged():
     body = "**📊 Заголовок**\n\nТолпа продаёт на дне, а кто-то по другую сторону молча покупал\n\nдальше"
     _, warns = creator_tools._lint(body, "флагман")
     assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+# --- МОСТИК-ПУСТЫШКА: предложение, которое только объявляет, что сейчас будет факт (26.08) ---
+
+def test_bridge_phrase_in_vacuum_is_flagged():
+    post = ("**⚠️ Заголовок**\n\nДалласу не пришлось моделировать в вакууме. Бразильский Pix - "
+            "мгновенные платежи: 200 млн пользователей\n\n" + _FOOT)
+    warns = creator_tools._lint(post, "scope")[1]
+    assert any("мостик-пустышка" in w and "в вакууме" in w for w in warns)
+
+
+def test_bridge_phrases_family():
+    for phrase in ("Это выросло не на пустом месте", "Цифра взята не с потолка",
+                   "Ответ не заставил себя ждать"):
+        warns = creator_tools._lint(f"**⚠️ Заголовок**\n\n{phrase}\n\n" + _FOOT, "scope")[1]
+        assert any("мостик-пустышка" in w for w in warns), phrase
+
+
+def test_normal_text_has_no_bridge_warning():
+    post = ("**⚠️ Заголовок**\n\nБразильский Pix - мгновенные платежи: 200 млн пользователей, "
+            "около 650 млрд$ в месяц\n\n" + _FOOT)
+    warns = creator_tools._lint(post, "scope")[1]
+    assert not any("мостик-пустышка" in w for w in warns)
