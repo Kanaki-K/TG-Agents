@@ -505,10 +505,17 @@ def _vision_ok(img_path, post_body: str, key: str) -> bool:
         return False
 
 
+# Кап пула кандидатов: 26.08 пул расширен с «одна шапка со страницы» до «шапка + кадры из тела»
+# (connectors/source_media), и без капа один vision-вызов легко получил бы 15 картинок. Каждая — это
+# ~1.1к токенов на Haiku, то есть кап держит цену выбора обложки в районе центов (cost-дисциплина).
+MEDIA_POOL_CAP = 8
+
+
 def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> str:
-    """Из СТАТЕЙ-первоисточников: с каждой тянем og:image → vision ВЫБИРАЕТ подходящую по смыслу → пишем
-    в SCOPE_COVER (для publish_now). Всегда сперва ОБНУЛЯЕТ SCOPE_COVER (свежесть: старую обложку не тащим).
-    Возвращает путь-строку обложки или '' (нет статей / ни одного og:image / vision не выбрал → текстом)."""
+    """Из СТАТЕЙ-первоисточников: с каждой тянем кадры (шапка + тело статьи) → vision ВЫБИРАЕТ подходящий
+    по смыслу → пишем в SCOPE_COVER (для publish_now). Всегда сперва ОБНУЛЯЕТ SCOPE_COVER (свежесть:
+    старую обложку не тащим). Возвращает путь-строку обложки или '' (нет статей / ни одного кадра /
+    vision не выбрал → текстом)."""
     creator_tools.SCOPE_COVER.parent.mkdir(parents=True, exist_ok=True)
     creator_tools.SCOPE_COVER.write_text("", encoding="utf-8")
     if not source_urls:
@@ -516,14 +523,18 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     imgs = []
     for i, url in enumerate(source_urls):
         try:
-            p = source_media.fetch_source_image(url, name=f"scope_{i}")
+            got = source_media.fetch_source_images(url, name=f"scope_{i}")
         except Exception:
-            logging.exception("scope: og:image не достал (%s)", url)
-            p = None
-        if p:
-            imgs.append(p)
+            logging.exception("scope: кадры со страницы не достал (%s)", url)
+            got = []
+        imgs.extend(got)
+        if len(imgs) >= MEDIA_POOL_CAP:
+            imgs = imgs[:MEDIA_POOL_CAP]
+            logging.info("scope: пул кандидатов упёрся в кап %d — остальные страницы не тяну "
+                         "(дальше растёт цена vision, а отдача падает)", MEDIA_POOL_CAP)
+            break
     if not imgs:
-        logging.info("scope: ни у одной статьи нет годного og:image (%s) — уйдём текстом", source_urls)
+        logging.info("scope: ни на одной странице нет годного кадра (%s) — уйдём текстом", source_urls)
         return ""
     chosen = _vision_pick(imgs, post_body, subject, key)
     if not chosen:

@@ -132,5 +132,105 @@ def test_download_accepts_ok_resolution(monkeypatch, tmp_path):
     assert out is not None and out.suffix == ".jpg"
 
 
+
+# --- КАДРЫ ИЗ ТЕЛА СТАТЬИ (26.08): пул из одних шапок структурно даёт только ИИ-сток ----------------
+
+ARTICLE_HTML = """
+<html><head>
+  <meta property="og:image" content="https://cdn.x/hero.jpg">
+</head><body>
+  <header><img src="https://cdn.x/logo.svg" alt="лого"></header>
+  <nav><img src="https://cdn.x/icon-menu.png"></nav>
+  <article>
+    <img src="/charts/deposits-2026.png" alt="график">
+    <img data-src="https://cdn.x/scheme.jpg" alt="схема">
+    <img src="https://cdn.x/avatar-author.jpg" alt="автор">
+    <img src="data:image/png;base64,AAAA">
+    <img src="/charts/deposits-2026.png" alt="тот же график">
+  </article>
+  <footer><img src="https://cdn.x/subscribe-banner.jpg"></footer>
+</body></html>
+"""
+
+
+def test_article_images_takes_body_frames(monkeypatch):
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(ARTICLE_HTML))
+    assert fetch.article_images(PAGE) == ["https://news.example.com/charts/deposits-2026.png",
+                                          "https://cdn.x/scheme.jpg"]
+
+
+def test_article_images_skip_chrome_and_junk(monkeypatch):
+    """Логотип шапки, иконка меню, аватар автора, баннер подписки, data: и дубль — не кандидаты."""
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(ARTICLE_HTML))
+    got = fetch.article_images(PAGE)
+    assert not any(bad in u for u in got for bad in ("logo", "icon", "avatar", "subscribe", "data:"))
+    assert len(got) == len(set(got))
+
+
+def test_article_images_skip_og_duplicate(monkeypatch):
+    """Шапка часто продублирована первым <img> в теле — второй раз её не тянем."""
+    html = '<meta property="og:image" content="https://cdn.x/hero.jpg">' \
+           '<article><img src="https://cdn.x/hero.jpg"><img src="https://cdn.x/chart.png"></article>'
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(html))
+    assert fetch.article_images(PAGE) == ["https://cdn.x/chart.png"]
+
+
+def test_article_images_capped(monkeypatch):
+    imgs = "".join(f'<img src="/p{i}.jpg">' for i in range(10))
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(f"<article>{imgs}</article>"))
+    assert len(fetch.article_images(PAGE)) == fetch.ARTICLE_IMG_CAP
+
+
+def test_article_images_without_article_tag(monkeypatch):
+    """Нет <article>/<main> — смотрим всю страницу, иначе на простой вёрстке пул остался бы пустым."""
+    monkeypatch.setattr(feeds, "fetch_bytes",
+                        lambda url, **k: _html('<body><img src="https://cdn.x/chart.png"></body>'))
+    assert fetch.article_images(PAGE) == ["https://cdn.x/chart.png"]
+
+
+def test_article_images_empty_page(monkeypatch):
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: None)
+    assert fetch.article_images(PAGE) == []
+
+
+def test_fetch_source_images_pool_is_header_plus_body(monkeypatch, tmp_path):
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    seen = {"pages": 0}
+
+    def fake(url, **k):
+        if url == PAGE:
+            seen["pages"] += 1
+            return _html(ARTICLE_HTML)
+        return (_png_bytes(1000, 800), "image/png")
+
+    monkeypatch.setattr(feeds, "fetch_bytes", fake)
+    out = fetch.fetch_source_images(PAGE, name="scope_0")
+    assert len(out) == 3, "шапка + два кадра из тела"
+    assert [p.stem for p in out] == ["scope_0_0", "scope_0_1", "scope_0_2"], "имена не должны затирать друг друга"
+    assert seen["pages"] == 1, "страницу тянем ОДИН раз на все кадры"
+
+
+def test_fetch_source_images_drops_unusable(monkeypatch, tmp_path):
+    """Мелкие/битые кадры выпадают, но пул из-за них не обнуляется."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+
+    def fake(url, **k):
+        if url == PAGE:
+            return _html(ARTICLE_HTML)
+        if "hero" in url:
+            return (_png_bytes(1200, 900), "image/png")
+        return (_png_bytes(100, 80), "image/png")      # тело статьи — мелочь
+
+    monkeypatch.setattr(feeds, "fetch_bytes", fake)
+    out = fetch.fetch_source_images(PAGE, name="scope_0")
+    assert len(out) == 1
+
+
+def test_fetch_source_images_empty_when_page_dead(monkeypatch, tmp_path):
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: None)
+    assert fetch.fetch_source_images(PAGE) == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

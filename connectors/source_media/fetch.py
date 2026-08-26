@@ -1,4 +1,7 @@
-"""Достать картинку первоисточника: og:image страницы → скачать в data/source_media/.
+"""Достать картинку первоисточника: кадры со страницы повода → скачать в data/source_media/.
+
+Кандидаты: og:image (шапка) + картинки из ТЕЛА статьи (график/схема/скрин/фото). Одной шапки
+мало — она декоративная по назначению, и пул из одних шапок даёт только ИИ-сток (26.08).
 
 Почему так, а не GPT-обложка (как у флагмана):
   - scope 🔭 — быстрая реакция на новость; уместнее «живое» медиа из самого повода;
@@ -36,17 +39,74 @@ _MIN_BYTES = 2_048       # меньше — почти наверняка заг
 _MAX_IMG_BYTES = 9_000_000  # Telegram-фото до ~10МБ; больше не тянем
 
 
-def og_image_url(page_url: str) -> str | None:
-    """URL главной картинки страницы (og:image/twitter:image), абсолютный. None — нет/недоступна."""
+def _page_html(page_url: str) -> str:
     got = feeds.fetch_bytes(page_url)
-    if not got:
-        return None
-    html = got[0].decode("utf-8", errors="replace")
+    return got[0].decode("utf-8", errors="replace") if got else ""
+
+
+def _og_from_html(html: str, page_url: str) -> str | None:
     for rx in (_META_A, _META_B):
         m = rx.search(html)
         if m:
             return urljoin(page_url, m.group(1).strip())
     return None
+
+
+def og_image_url(page_url: str) -> str | None:
+    """URL главной картинки страницы (og:image/twitter:image), абсолютный. None — нет/недоступна."""
+    html = _page_html(page_url)
+    return _og_from_html(html, page_url) if html else None
+
+
+# ══ КАДРЫ ИЗ ТЕЛА СТАТЬИ, А НЕ ТОЛЬКО ШАПКА (26.08) ══
+# og:image — это картинка-превью для соцсетей, то есть по построению ДЕКОРАТИВНАЯ шапка. У крипто-медиа
+# шапка сегодня и есть ИИ-рендер, поэтому пул из одних шапок структурно не может дать ничего, кроме
+# ИИ-стока: 26.08 в выборе стояли три генерика (неоновый банк, пиксельный доллар, Франклин в «матрице»),
+# и победил самый «в тему» из них. Владелец: «ии-сток не берём, стараемся по теме всё-таки найти».
+# Искать надо там, где лежит содержание: график, схема, скрин, фото события — они внутри статьи, а не
+# в мета-теге. Это ровно то, что `_MEDIA_CRITERIA` уже ставит выше генерика («график/дашборд/отчёт
+# ПЕРВОИСТОЧНИКА») — до сегодня такой кандидат просто не мог попасть в пул.
+_IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
+_IMG_SRC = re.compile(r"""\b(?:src|data-src|data-original|data-lazy-src)\s*=\s*["']([^"']+)["']""", re.I)
+_ARTICLE = re.compile(r"<(article|main)\b[^>]*>(.*?)</\1>", re.I | re.S)
+# Мусор по URL: элементы интерфейса и трекеры. Это НЕ бан-лист доменов и не вкусовая фильтрация —
+# только служебная графика, которая обложкой не бывает никогда.
+_JUNK_URL = re.compile(r"(logo|favicon|icon|avatar|sprite|badge|button|pixel|tracking|spacer|"
+                       r"placeholder|1x1|blank|share|subscribe|newsletter)", re.I)
+_SKIP_EXT = (".svg", ".gif", ".ico")
+ARTICLE_IMG_CAP = 3          # кадров с ОДНОЙ страницы: дальше растёт цена vision, а отдача падает
+
+
+def article_images(page_url: str, limit: int = ARTICLE_IMG_CAP) -> list[str]:
+    """URL(ы) картинок из ТЕЛА статьи — график/схема/скрин/фото, в порядке появления. Без og:image.
+
+    Сначала сужаемся до <article>/<main>, если они есть: это одним движением выкидывает шапку сайта,
+    навигацию и подвал вместе с их логотипами. Дальше — только служебный отсев по URL; «годная ли
+    картинка по смыслу» решает vision, а «не мелкая ли» — гейт разрешения в _normalize.
+    """
+    html = _page_html(page_url)
+    return _body_images(html, page_url, limit) if html else []
+
+
+def _body_images(html: str, page_url: str, limit: int = ARTICLE_IMG_CAP) -> list[str]:
+    m = _ARTICLE.search(html)
+    body = m.group(2) if m else html
+    og = _og_from_html(html, page_url)
+    out: list[str] = []
+    for tag in _IMG_TAG.findall(body):
+        src = _IMG_SRC.search(tag)
+        if not src:
+            continue
+        raw = src.group(1).strip()
+        if raw.startswith("data:") or _JUNK_URL.search(raw):
+            continue
+        url = urljoin(page_url, raw)
+        if url.split("?")[0].lower().endswith(_SKIP_EXT) or url == og or url in out:
+            continue
+        out.append(url)
+        if len(out) >= max(1, limit):
+            break
+    return out
 
 
 _MAX_SIDE = 1600  # ресайз до этой макс.стороны: Telegram отклоняет большие фото (PhotoInvalidDimensionsError)
@@ -118,3 +178,26 @@ def fetch_source_image(page_url: str, name: str = "scope") -> Path | None:
     if not iu:
         return None
     return download(iu, name)
+
+
+def fetch_source_images(page_url: str, name: str = "scope", limit: int = 1 + ARTICLE_IMG_CAP) -> list[Path]:
+    """Все кандидаты со страницы: шапка (og:image) + кадры из ТЕЛА статьи. Пустой список — ничего годного.
+
+    Порядок сохраняем «шапка первой»: она чаще целая и нужного размера, а кадры из тела — это шанс на
+    конкретику (график/схема/скрин), которой в шапке не бывает. Кто из них лучше по СМЫСЛУ, решает
+    vision в scope_writer; наше дело — принести выбор, а не единственный вариант.
+    """
+    html = _page_html(page_url)          # страницу тянем ОДИН раз: и шапка, и тело — из этого же HTML
+    if not html:
+        return []
+    urls: list[str] = []
+    og = _og_from_html(html, page_url)
+    if og:
+        urls.append(og)
+    urls += [u for u in _body_images(html, page_url) if u not in urls]
+    out: list[Path] = []
+    for j, u in enumerate(urls[:max(1, limit)]):
+        p = download(u, name=f"{name}_{j}")
+        if p:
+            out.append(p)
+    return out

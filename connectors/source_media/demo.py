@@ -1,5 +1,6 @@
 """Ручная проверка обложки БЕЗ пайплайна: даёшь несколько ссылок-статей + сущности повода → тянем
-og:image с каждой → vision ВЫБИРАЕТ подходящую по смыслу (та же логика, что в scope). Печатает выбор.
+с каждой ВСЕ кадры (шапка og:image + картинки из тела статьи) → vision ВЫБИРАЕТ подходящий по смыслу
+(та же логика, что в scope). Печатает пул и выбор.
 Дёшево: без Скаута/Криейтора, один vision-вызов. Так тестируется ИМЕННО отбор картинки под контекст.
 
 Запуск (у себя, в venv):
@@ -27,10 +28,11 @@ def main() -> None:
     subject, topic = _opt(args, "--subject"), _opt(args, "--topic")
     imgs = []
     for i, u in enumerate(urls):
-        p = fetch.fetch_source_image(u, name=f"demo_{i}")
-        print(f"[{i}] {u}\n     og:image → {fetch.og_image_url(u) or '(нет)'} | скачал → {p or '(не годна)'}")
-        if p:
-            imgs.append(p)
+        got = fetch.fetch_source_images(u, name=f"demo_{i}")
+        print(f"[{i}] {u}\n     шапка og:image → {fetch.og_image_url(u) or '(нет)'}"
+              f"\n     кадры из тела  → {fetch.article_images(u) or '(нет)'}"
+              f"\n     скачано годных → {[str(x.name) for x in got] or '(ни одного)'}")
+        imgs.extend(got)
     if not imgs:
         print("Итог: ни одной годной картинки — пост ушёл бы без обложки (а значит НЕ вышел бы).")
         return
