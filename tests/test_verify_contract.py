@@ -322,3 +322,14 @@ def test_unverified_and_completeness_are_different_classes():
     v = _COMPLETENESS_LINE + "\n" + _UNVERIFIED_LINE
     assert verify.completeness_notes(v) == [" ".join(_COMPLETENESS_LINE.split())]
     assert verify.unverified_notes(v) == [" ".join(_UNVERIFIED_LINE.split())]
+
+
+# --- 2FA НЕ ПЕРЕСЧИТЫВАЕТ ПРОИЗВОДНЫЕ СУММЫ (баг 28.08) ----------------------------------------
+# Писатель дал верные «~1.4 млрд$» из первоисточника; 2FA умножил 18.9 млн SOL на спот и потребовал
+# «2 млрд», а на втором круге ОТКЛОНИЛ веб-источник с $1.39 млрд в пользу собственной арифметики.
+# Правило спота обязано отделять живую цену НАЗВАННОГО актива от долларов, полученных умножением.
+
+def test_checklist_separates_live_price_from_derived_sum():
+    c = verify.VERIFIER_SYSTEM
+    assert "ПРОИЗВОДНЫХ СУММ" in c          # доллары = объём × курс: своим умножением НЕ пересчитывать
+    assert "market_price" in c              # живая цена названного актива по-прежнему сверяется спотом
