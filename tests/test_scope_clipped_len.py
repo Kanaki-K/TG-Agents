@@ -166,3 +166,55 @@ def test_rounds_do_not_touch_other_warns():
     for ln in (1600, 1590, 1585):
         warns = ct._len_advice_rounds("scope", "я" * ln, [ct._LEN_ADVICE_TAG + ": длинно", other])
     assert warns == [other], "гасим только совет по длине, остальные замечания живут"
+
+
+# --- КРУГ ПРАВКИ 2FA РАСТИТ ПОСТ (баг 28.08) ---------------------------------------------------
+# Прогон 28.08 (Solana): автор отдал чистый драфт на 1356, затем два круга правки фактов дали 1375 и
+# 1382 — каждый выше потолка 1350, и ни один об этом не услышал: счётчик кругов к тому моменту молчал
+# навсегда (правило 19.08 «с круга 3 не повторяем»). Правка не знает, что удлиняет, — про длину в
+# вердикте 2FA нет ни слова. Тишина теперь обусловлена: пост похудел или стоит — молчим; пост ВЫРОС
+# и висит выше потолка — говорим ровно про прирост, не требуя «сократить пост».
+
+def _grow_to_rounds_3plus():
+    """Три круга автора со снижением — совет к этому моменту снят (состояние из прогона 28.08)."""
+    ct._LEN_ROUNDS.clear()
+    for ln in (1573, 1500, 1356):
+        ct._len_advice_rounds("scope", "я" * ln, [ct._LEN_ADVICE_TAG + f": {ln} знаков"])
+
+
+def test_fix_round_that_grows_post_above_cap_speaks_up():
+    _grow_to_rounds_3plus()
+    warns = ct._len_advice_rounds("scope", "я" * 1382, [ct._LEN_ADVICE_TAG + ": 1382 знака"])
+    assert any(w.startswith("ПРАВКА РАСТИТ ПОСТ") for w in warns), "рост выше потолка обязан быть назван"
+    assert not _len_warn(warns), "это ДРУГАЯ претензия, старый совет по длине не возвращаем"
+
+
+def test_growth_warning_names_both_numbers():
+    _grow_to_rounds_3plus()
+    warns = ct._len_advice_rounds("scope", "я" * 1382, [ct._LEN_ADVICE_TAG + ": 1382 знака"])
+    w = next(w for w in warns if w.startswith("ПРАВКА РАСТИТ ПОСТ"))
+    assert "1356" in w and "1382" in w, "правка должна видеть, ОТ ЧЕГО и ДО ЧЕГО выросла"
+    assert "вето" in w, "потолок остаётся советом (10.08) — не влезло, выдавай как есть"
+
+
+def test_shrinking_fix_round_stays_silent():
+    """Правило 19.08 в силе: пост не растёт — про длину молчим, иначе автор режет служебные слова."""
+    _grow_to_rounds_3plus()
+    warns = ct._len_advice_rounds("scope", "я" * 1340, [ct._LEN_ADVICE_TAG + ": 1340 знаков"])
+    assert warns == []
+
+
+def test_growth_below_cap_stays_silent():
+    """Вырос, но в пределах формата — не повод дёргать автора: потолок и есть граница разговора."""
+    ct._LEN_ROUNDS.clear()
+    for ln in (1573, 1400, 1200):
+        ct._len_advice_rounds("scope", "я" * ln, [ct._LEN_ADVICE_TAG + f": {ln} знаков"])
+    warns = ct._len_advice_rounds("scope", "я" * 1260, [ct._LEN_ADVICE_TAG + ": 1260 знаков"])
+    assert warns == []
+
+
+def test_growth_check_does_not_touch_other_warns():
+    _grow_to_rounds_3plus()
+    other = "scope: ФИЛЛЕР-ПОДВОДКА (нашёл «стоит отметить»)"
+    warns = ct._len_advice_rounds("scope", "я" * 1382, [ct._LEN_ADVICE_TAG + ": длинно", other])
+    assert other in warns and len(warns) == 2
