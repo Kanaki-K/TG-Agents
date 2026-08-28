@@ -73,6 +73,11 @@ _ARTICLE = re.compile(r"<(article|main)\b[^>]*>(.*?)</\1>", re.I | re.S)
 # только служебная графика, которая обложкой не бывает никогда.
 _JUNK_URL = re.compile(r"(logo|favicon|icon|avatar|sprite|badge|button|pixel|tracking|spacer|"
                        r"placeholder|1x1|blank|share|subscribe|newsletter)", re.I)
+# То же, но БЕЗ `logo`/`icon` — для случая, когда мы уже сузились до <article>/<main> и шапку сайта
+# с её логотипом отрезали структурно (см. _body_images). Лого КОМПАНИИ/СЕТИ внутри статьи — законный
+# кандидат в обложку 🔭; годен он или нет, решает vision, а не совпадение подстроки в адресе.
+_JUNK_URL_BODY = re.compile(r"(favicon|avatar|sprite|badge|button|pixel|tracking|spacer|"
+                            r"placeholder|1x1|blank|share|subscribe|newsletter)", re.I)
 _SKIP_EXT = (".svg", ".gif", ".ico")
 ARTICLE_IMG_CAP = 3          # кадров с ОДНОЙ страницы: дальше растёт цена vision, а отдача падает
 
@@ -91,6 +96,17 @@ def article_images(page_url: str, limit: int = ARTICLE_IMG_CAP) -> list[str]:
 def _body_images(html: str, page_url: str, limit: int = ARTICLE_IMG_CAP) -> list[str]:
     m = _ARTICLE.search(html)
     body = m.group(2) if m else html
+    # ЛОГОТИП ТЕМЫ — ЗАКОННАЯ ОБЛОЖКА, А НЕ МУСОР (владелец 28.08). На канале лого компании/сети —
+    # один из самых частых кадров под 🔭: «логотип вот компании или просто логотип на фоне». А фильтр
+    # `_JUNK_URL` выбрасывал ЛЮБОЙ адрес со словом logo/icon — то есть ровно этот кадр, ещё до vision.
+    # Отсюда и расхождение: в критериях отбора написано «лого первоисточника — БЕРЁМ», а до выбора оно
+    # не доезжало никогда. 28.08 владелец поставил обложкой лого Solana РУКАМИ — пул его не предлагал.
+    #
+    # Почему послабление безопасное: `logo`/`icon` в списке стоят против ШАПКИ САЙТА и фавиконки, а от
+    # них нас уже спас `<article>`/`<main>` — сужение выкидывает навигацию с подвалом целиком. Значит
+    # послабление даём ТОЛЬКО когда сужение реально случилось; не нашли статью (body = вся страница) —
+    # фильтр остаётся строгим, иначе в пул хлынут логотипы самого издания.
+    junk = _JUNK_URL_BODY if m else _JUNK_URL
     og = _og_from_html(html, page_url)
     out: list[str] = []
     for tag in _IMG_TAG.findall(body):
@@ -98,7 +114,7 @@ def _body_images(html: str, page_url: str, limit: int = ARTICLE_IMG_CAP) -> list
         if not src:
             continue
         raw = src.group(1).strip()
-        if raw.startswith("data:") or _JUNK_URL.search(raw):
+        if raw.startswith("data:") or junk.search(raw):
             continue
         url = urljoin(page_url, raw)
         if url.split("?")[0].lower().endswith(_SKIP_EXT) or url == og or url in out:

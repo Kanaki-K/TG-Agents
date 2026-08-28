@@ -283,3 +283,40 @@ def test_header_floor_unchanged(monkeypatch, tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ── ЛОГО ТЕМЫ — ЗАКОННАЯ ОБЛОЖКА (владелец 28.08) ───────────────────────────────────────────────
+# На канале лого компании/сети — один из самых частых кадров под 🔭. Фильтр выбрасывал ЛЮБОЙ адрес
+# со словом logo, то есть ровно этот кадр, ещё до vision: 28.08 владелец ставил лого Solana руками,
+# потому что пул его не предлагал. Послабление даём только внутри <article>/<main> — шапку сайта с её
+# логотипом там уже отрезало структурно.
+
+def test_subject_logo_inside_article_is_taken(monkeypatch):
+    html = '<article><img src="https://cdn.x/solana-logo.png" alt="Solana"></article>'
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(html))
+    assert fetch.article_images(PAGE) == ["https://cdn.x/solana-logo.png"]
+
+
+def test_site_logo_outside_article_still_dropped(monkeypatch):
+    """Лого ИЗДАНИЯ отсекает сужение до <article>, а не список слов — поэтому послабление безопасно."""
+    html = ('<header><img src="https://cdn.x/site-logo.png"></header>'
+            '<article><img src="https://cdn.x/chart.png"></article>')
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(html))
+    assert fetch.article_images(PAGE) == ["https://cdn.x/chart.png"]
+
+
+def test_logo_still_dropped_when_no_article_tag(monkeypatch):
+    """Статью не нашли → смотрим всю страницу → лого снова мусор: отличить издание от темы нечем."""
+    html = '<body><img src="https://cdn.x/site-logo.png"><img src="https://cdn.x/chart.png"></body>'
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(html))
+    assert fetch.article_images(PAGE) == ["https://cdn.x/chart.png"]
+
+
+def test_true_junk_still_dropped_inside_article(monkeypatch):
+    """Послабление ровно на logo/icon: аватар, трекер и баннер подписки — мусор в любом случае."""
+    html = ('<article><img src="https://cdn.x/avatar-author.jpg">'
+            '<img src="https://cdn.x/tracking-pixel.png">'
+            '<img src="https://cdn.x/subscribe-banner.jpg">'
+            '<img src="https://cdn.x/solana-logo.png"></article>')
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(html))
+    assert fetch.article_images(PAGE) == ["https://cdn.x/solana-logo.png"]
