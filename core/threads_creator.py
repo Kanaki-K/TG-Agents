@@ -18,7 +18,7 @@ from datetime import date
 from core import config, cost, flagship_journal, llm, runmode, threads_distill_journal
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
-THREADS_MODEL = "claude-sonnet-4-6"       # короткий формат — Opus избыточен (как у scope); /test → Haiku
+THREADS_MODEL = "claude-sonnet-5"        # короткий формат — Opus избыточен (как у scope); /test → Haiku
 THREADS_THINKING = None                   # короткому дистилляту глубокое мышление не нужно (дёшево)
 
 THREADS_DRAFTS_DIR = config.ROOT / "memory" / "threads_drafts"  # ОТДЕЛЬНО от ТГ-драфтов (изоляция)

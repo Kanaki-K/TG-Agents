@@ -17,14 +17,34 @@ from core import config, cost, runmode
 MAX_TOKENS = 16384  # вывод одного ответа: полный «не урезанный» бриф Скаута (5 направлений + вердикт) не влезал ни в 4096, ни в 8192
 MAX_STEPS = 30     # предохранитель: максимум проходов цикла инструментов (глубокая разведка читает много источников)
 
-# adaptive thinking поддерживают НЕ все модели: Opus 4.6/4.7/4.8, Sonnet 4.6, Fable 5 — да;
+# adaptive thinking поддерживают НЕ все модели: Opus 4.6/4.7/4.8, Sonnet 4.6/5, Fable 5 — да;
 # Haiku 4.5 и старые — НЕТ (API вернёт 400 «adaptive thinking is not supported»). Критично для
 # /test-режима, где модель подменяется на дешёвую Haiku: там мышление надо молча снять.
-_ADAPTIVE_OK = ("opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6", "fable-5", "mythos-5")
+_ADAPTIVE_OK = ("opus-4-6", "opus-4-7", "opus-4-8", "opus-5", "sonnet-4-6", "sonnet-5",
+                "fable-5", "mythos-5")
+
+# ФИКСИРОВАННЫЙ бюджет мышления (`budget_tokens`) живёт НЕ везде (28.08). На Opus 4.7/4.8/5, Sonnet 5
+# и Fable 5 параметр СНЯТ и возвращает 400 — там глубина задаётся иначе. Раньше это было неважно:
+# бюджет просил один Скаут, и он на Sonnet 4.6. Но как только роль переезжает на модель новее (а
+# переезд ради цены теперь регулярный), молчащий конфиг превращается в упавший прогон. Поэтому
+# несовместимый бюджет НЕ отправляем: снимаем и говорим об этом в лог. Падать целым прогоном из-за
+# параметра мышления — худший из исходов; работа без мышления хотя бы доходит до конца.
+_BUDGET_REMOVED = ("opus-4-7", "opus-4-8", "opus-5", "sonnet-5", "fable-5", "mythos-5")
 
 
 def _supports_thinking(model: str) -> bool:
     return any(tag in model for tag in _ADAPTIVE_OK)
+
+
+def _thinking_for(model: str, thinking: dict | None) -> dict | None:
+    """Конфиг мышления, приведённый к тому, что МОДЕЛЬ реально принимает (иначе 400)."""
+    if not thinking or not _supports_thinking(model):
+        return None
+    if "budget_tokens" in thinking and any(tag in model for tag in _BUDGET_REMOVED):
+        logging.warning("модель %s не принимает budget_tokens (параметр снят) — мышление отключено на "
+                        "этот вызов; задай 'adaptive' или верни роль на модель с бюджетом", model)
+        return None
+    return thinking
 
 # Кэш клиентов по ключу — у каждого агента может быть свой API-ключ.
 _clients: dict[str, Anthropic] = {}
@@ -131,9 +151,11 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
             tools=tools_schema,
             messages=messages,
         )
-        # мышление прикладываем ТОЛЬКО если модель его поддерживает (Haiku в /test-режиме — нет, иначе 400)
-        if thinking and _supports_thinking(model):
-            params["thinking"] = thinking
+        # мышление прикладываем ТОЛЬКО в том виде, какой модель принимает (Haiku в /test-режиме не
+        # умеет adaptive, модели новее 4.6 не умеют budget_tokens — и то и другое = 400 на весь прогон)
+        _th = _thinking_for(model, thinking)
+        if _th:
+            params["thinking"] = _th
         resp = client.messages.create(**params)
         cost.record(model, resp.usage)  # учёт расхода: лог в консоль + копим для итога (run_pipeline)
         # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю

@@ -287,7 +287,7 @@ def _pick_timely_theme() -> tuple[str, str, dict]:
     try:
         cost.set_context("theme-pick")
         key = config.agent_api_key(config.load_agent("creator"))
-        text, _ = llm.reply(runmode.resolve("claude-sonnet-4-6"), system, [], user, [],
+        text, _ = llm.reply(runmode.resolve("claude-sonnet-5"), system, [], user, [],
                             lambda _n, _a: "", key, None)
         raw = (text or "").strip()
         nums = re.findall(r"\d+", raw.split("|")[0])  # номер — ДО разделителя (фактор может быть без цифр)

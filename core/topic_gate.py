@@ -36,7 +36,7 @@ import re
 from core import analytics, config, cost, llm, runmode
 
 # Судья темы = Sonnet, ceiling=Sonnet: механическая роль, override/тест могут только удешевить.
-GATE_MODEL = "claude-sonnet-4-6"
+GATE_MODEL = "claude-sonnet-5"
 FRESH_EVENT_DAYS = 3   # ≤3д — жёсткий фильтр свежести ДЕЙСТВИЯ (владелец 29.07: Скаут ходит Пн/Ср/Пт)
 WINDOW_WEEKS = 6       # окно анти-повтора: сверяем с постами за N недель, а не со всей историей (баг 22.07)
 

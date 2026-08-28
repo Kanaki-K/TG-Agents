@@ -642,7 +642,7 @@ def verify_post(post: str, brief: str = "", api_key: str | None = None, model: s
     if not post:
         return "(нечего проверять — пустой пост)"
     # ceiling: 2FA — механическая роль, override/тест могут только удешевить её, не удорожить
-    mdl = model or runmode.resolve("claude-sonnet-4-6", ceiling="claude-sonnet-4-6")
+    mdl = model or runmode.resolve("claude-sonnet-5", ceiling="claude-sonnet-5")
     cost.set_context("verify")
     today = _today_iso() or "(дата недоступна)"
     temporal = TEMPORAL_CHECK.format(today=today, fresh_days=SCOPE_FRESH_DAYS) if scope else ""
