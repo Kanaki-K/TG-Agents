@@ -41,15 +41,18 @@ def test_parse_subject_absent():
 # не превратило один дешёвый vision-вызов в дорогой (каждый кадр ~1.1к токенов).
 
 def _cover_to_tmp(monkeypatch, tmp_path):
-    from core import creator_tools
+    """Уводит ВСЕ пути записи обложки во временную папку — и файл-указатель, и журнал анти-повтора.
+    Урок 26.08: тест, забывший увести хоть один путь, пишет в боевой data/ и портит рабочее состояние."""
+    from core import creator_tools, scope_cover_log
     monkeypatch.setattr(creator_tools, "SCOPE_COVER", tmp_path / "cover.txt")
+    monkeypatch.setattr(scope_cover_log, "LOG", tmp_path / "scope_cover_log.jsonl")
 
 
 def _spy_pick(monkeypatch, seen: dict):
     """Подменяет vision-выбор и запоминает, СКОЛЬКО кандидатов до него доехало."""
     def pick(imgs, *a):
         seen["n"] = len(imgs)
-        return imgs[0] if imgs else None
+        return (imgs[0], "ярлык") if imgs else None
     monkeypatch.setattr(sw, "_vision_pick", pick)
 
 
@@ -90,7 +93,7 @@ def test_attach_media_survives_dead_page(monkeypatch, tmp_path):
         return [tmp_path / f"{name}_0.jpg"]
 
     monkeypatch.setattr(sw.source_media, "fetch_source_images", flaky)
-    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: imgs[0])
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "ярлык"))
     out = sw._attach_media(["https://bad.com/x", "https://ok.com/y"], "тело", "субъект", "k")
     assert out.endswith("scope_1_0.jpg")
 
@@ -140,7 +143,7 @@ def test_vision_pick_zero_means_no_cover(monkeypatch, tmp_path):
 
 def test_vision_pick_takes_number(monkeypatch, tmp_path):
     imgs = _fake_vision(monkeypatch, tmp_path, "2")
-    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") == imgs[1]
+    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key")[0] == imgs[1]
 
 
 def test_vision_pick_out_of_range_is_no_cover(monkeypatch, tmp_path):
@@ -187,6 +190,70 @@ def test_cover_pick_is_not_on_the_cheapest_tier():
     28.08 Haiku выбрал самую убедительную ИИ-инфографику вместо того, чтобы вернуть 0."""
     assert sw.VISION_PICK_MODEL != sw.VISION_MODEL
     assert sw.VISION_PICK_MODEL in cost.RATES, "новых моделей в учёт не заводим — цена должна быть известна"
+
+
+# ── ЯРЛЫК КАДРА И АНТИ-ПОВТОР (владелец 28.08: «чтобы не повторялись — надо проверять») ──────────
+# У флагмана журнал обложек есть с 16.07 и работает; у скоупа не было ничего, кроме пути к последнему
+# файлу. Ярлык кадра даёт vision тем же вызовом, которым выбирает номер, — лишнего запроса это не стоит.
+
+def test_vision_pick_returns_label(monkeypatch, tmp_path):
+    imgs = _fake_vision(monkeypatch, tmp_path, "2 | лого Solana")
+    path, label = sw._vision_pick(imgs, "тело поста", "Solana", "key")
+    assert path == imgs[1] and label == "лого Solana"
+
+
+def test_number_comes_from_head_not_from_label(monkeypatch, tmp_path):
+    """Цифра в ЯРЛЫКЕ («Solana 2.0», «Q3 2026») не должна подменять выбранный номер."""
+    imgs = _fake_vision(monkeypatch, tmp_path, "1 | лого Solana 2.0")
+    assert sw._vision_pick(imgs, "тело", "Solana", "key")[0] == imgs[0]
+
+
+def test_bare_number_still_works(monkeypatch, tmp_path):
+    """Формата не удержал — старое поведение живо, обложку из-за этого не теряем."""
+    imgs = _fake_vision(monkeypatch, tmp_path, "3")
+    assert sw._vision_pick(imgs, "тело", "субъект", "key")[0] == imgs[2]
+
+
+def test_zero_with_label_is_still_no_cover(monkeypatch, tmp_path):
+    imgs = _fake_vision(monkeypatch, tmp_path, "0 | только ИИ-рендеры")
+    assert sw._vision_pick(imgs, "тело", "субъект", "key") is None
+
+
+def test_attach_media_writes_cover_log(monkeypatch, tmp_path):
+    from core import scope_cover_log
+    _cover_to_tmp(monkeypatch, tmp_path)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images",
+                        lambda url, name="scope": [tmp_path / f"{name}_0.jpg"])
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "лого Solana"))
+    sw._attach_media(["https://a.com/x"], "**Solana урезала инфляцию**\n\nтело", "Solana", "k")
+    assert scope_cover_log.recent() == ["лого Solana"]
+
+
+def test_avoid_hint_empty_without_history(monkeypatch, tmp_path):
+    """Пустой журнал не должен сорить в промпт выбора (первый прогон)."""
+    from core import scope_cover_log
+    monkeypatch.setattr(scope_cover_log, "LOG", tmp_path / "none.jsonl")
+    assert scope_cover_log.avoid_hint() == ""
+
+
+def test_avoid_hint_is_advice_not_veto(monkeypatch, tmp_path):
+    """Похожесть НЕ повод уйти текстом: скоуп рисовать не может, значит один годный кадр важнее разнообразия."""
+    from core import scope_cover_log
+    monkeypatch.setattr(scope_cover_log, "LOG", tmp_path / "log.jsonl")
+    scope_cover_log.record("лого Solana", "заголовок")
+    hint = scope_cover_log.avoid_hint()
+    assert "лого Solana" in hint
+    assert "СОВЕТ, а не запрет" in hint and "текстом" in hint
+
+
+def test_cover_log_keeps_window_order(monkeypatch, tmp_path):
+    """Свежие первыми и не длиннее окна — иначе промпт растёт, а старые кадры давят на выбор."""
+    from core import scope_cover_log
+    monkeypatch.setattr(scope_cover_log, "LOG", tmp_path / "log.jsonl")
+    for i in range(9):
+        scope_cover_log.record(f"кадр {i}")
+    got = scope_cover_log.recent()
+    assert got[0] == "кадр 8" and len(got) == scope_cover_log.WINDOW
 
 
 # ── СКОУП НЕ РИСУЕТ КАРТИНКИ. НИКОГДА. (владелец 28.08, безоговорочно) ───────────────────────────

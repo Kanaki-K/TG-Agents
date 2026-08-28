@@ -18,7 +18,7 @@ import re
 from anthropic import Anthropic, APIError
 
 from connectors import source_media
-from core import analytics, config, cost, creator_tools, llm, runmode, verify
+from core import analytics, config, cost, creator_tools, llm, runmode, scope_cover_log, verify
 
 AGENT_NAME = "creator"            # голос автора тот же — переиспользуем персону Криейтера
 # Письмо scope — Sonnet. Владелец 22.07 (катч): прошлые ПРИНЯТЫЕ посты (Chainlink/SWIFT/TeraWulf/ORANGE
@@ -405,6 +405,11 @@ def _parse_media_srcs(text: str) -> list[str]:
 _MEDIA_SUBJECT_RE = re.compile(r"\[\[MEDIA_SUBJECT\]\]\s*(.+)")
 
 
+def _first_line(text: str) -> str:
+    """Первая непустая строка тела = заголовок поста (для журнала обложек — чтобы видеть, к чему кадр)."""
+    return next((l.strip().replace("**", "") for l in (text or "").splitlines() if l.strip()), "")
+
+
 def _parse_media_subject(text: str) -> str:
     """Ключевые сущности повода из меты ([[MEDIA_SUBJECT]] ...) — ЯКОРЬ для vision: что ждём на картинке.
     Так vision сверяет кандидатов с конкретным списком (люди/компании/тикеры), а не гадает по всему тексту."""
@@ -460,7 +465,10 @@ _MEDIA_CRITERIA = (
 
 def _vision_pick(images: list, post_body: str, subject: str, key: str):
     """Vision ВЫБИРАЕТ из кандидатов ту картинку, что СВЯЗАНА с поводом (см. _MEDIA_CRITERIA). subject —
-    якорь-сущности от scope (люди/компании/тикеры). Один вызов на все картинки (дёшево). Path или None."""
+    якорь-сущности от scope (люди/компании/тикеры). Один вызов на все картинки (дёшево).
+
+    Возвращает (Path, ярлык кадра) или None. Ярлык («лого Solana») приходит тем же вызовом и стоит
+    несколько токенов — он нужен журналу обложек для анти-повтора (core/scope_cover_log)."""
     if not images:
         return None
     try:
@@ -479,16 +487,24 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
             content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}})
         content.append({"type": "text", "text":
             f"{anchor}Тема поста 🔭 «Под прицелом»:\n{topic}\n\nВыше {len(images)} картинок-кандидатов в "
-            f"ОБЛОЖКУ. {_MEDIA_CRITERIA}\n\nВыбери НОМЕР по ПОРЯДКУ ПРЕДПОЧТЕНИЯ выше (конкретный предмет повода "
-            "> генерик; генерик против угла → 0). Если ни одна не годна — 0. Ответь СТРОГО одним числом."})
+            f"ОБЛОЖКУ. {_MEDIA_CRITERIA}{scope_cover_log.avoid_hint()}\n\nВыбери НОМЕР по ПОРЯДКУ "
+            "ПРЕДПОЧТЕНИЯ выше (конкретный предмет повода > генерик; генерик против угла → 0). Если ни "
+            "одна не годна — 0.\nОТВЕТ строго в формате: «НОМЕР | что на кадре (2-4 слова)», напр. "
+            "«2 | лого Solana» или «0 | только ИИ-рендеры». Ярлык нужен журналу обложек, чтобы "
+            "следующий пост не взял такой же кадр."})
         model = runmode.resolve(VISION_PICK_MODEL, ceiling=VISION_PICK_MODEL)
         resp = Anthropic(api_key=key).messages.create(
-            model=model, max_tokens=10, messages=[{"role": "user", "content": content}])
+            model=model, max_tokens=40, messages=[{"role": "user", "content": content}])
         cost.record(model, resp.usage)
         ans = "".join(b.text for b in resp.content if b.type == "text").strip()
-        m = re.search(r"\d+", ans)
+        # Номер берём из ПЕРВОГО поля до «|»: ярлык («лого Solana 2.0») тоже содержит цифры, и поиск
+        # по всей строке однажды выберет их. Формата не держится — падаем на прежнее поведение.
+        head, _, tail = ans.partition("|")
+        m = re.search(r"\d+", head if head.strip() else ans)
         idx = int(m.group()) if m else 0
-        return images[idx - 1] if 1 <= idx <= len(images) else None
+        if not 1 <= idx <= len(images):
+            return None
+        return images[idx - 1], " ".join(tail.split())[:80]
     except APIError as e:  # N-11: API-семья (429/таймаут/5xx) — транзиентно, без трейсбека
         logging.warning("scope vision-выбор: Anthropic API недоступен (%s) — уйдём текстом", type(e).__name__)
         return None
@@ -568,13 +584,15 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     if not imgs:
         logging.info("scope: ни на одной странице нет годного кадра (%s) — уйдём текстом", source_urls)
         return ""
-    chosen = _vision_pick(imgs, post_body, subject, key)
-    if not chosen:
+    picked = _vision_pick(imgs, post_body, subject, key)
+    if not picked:
         logging.info("scope: vision не выбрал подходящую по смыслу картинку (%d кандидат.) — уйдём текстом",
                      len(imgs))
         return ""
+    chosen, label = picked
     creator_tools.SCOPE_COVER.write_text(str(chosen), encoding="utf-8")
-    logging.info("scope: обложка выбрана из %d кандидат. — %s", len(imgs), chosen)
+    scope_cover_log.record(label, _first_line(post_body))
+    logging.info("scope: обложка выбрана из %d кандидат. — %s (%s)", len(imgs), chosen, label or "без ярлыка")
     return str(chosen)
 
 
