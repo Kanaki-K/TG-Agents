@@ -803,10 +803,19 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         except Exception:
             logging.exception("обложка: не смог получить/сгенерить — флагман уйдёт текстом")
     elif scope and (post or "").strip():
-        # Картинка 🔭: 1) og:image первоисточника (vision выбрал) → SCOPE_COVER; 2) НЕТ og:image → ГЕНЕРИМ
-        # GPT-обложку из поста (как флагман) — на любой пост картинку можно СДЕЛАТЬ (владелец 22.07: «текстом»
-        # это отмазка); 3) и GPT упал → текст (редко). Раньше: нет og:image → СТОП/текст = дыра (ETF-повод без
-        # og:image давал ноль). Картинка почти всегда есть.
+        # ══ 🔭 СКОУП КАРТИНКИ НЕ РИСУЕТ. НИКОГДА. (владелец 28.08, безоговорочно) ══
+        # «Генератор картинки только флагман — это безоговорочно должно быть». Скоуп ИЩЕТ кадр по теме
+        # в первоисточнике; не нашёл — уходит ТЕКСТОМ.
+        #
+        # ЧТО БЫЛО И ПОЧЕМУ ЭТО СНЯТО. Здесь стоял фолбэк: нет кадра → рисуем GPT-обложку из поста
+        # («картинка обязательна», 22.07). Владелец о нём не знал — и узнал 28.08 как о загадке:
+        # рисование он заводил ТОЛЬКО под флагман. Фолбэк и раньше был спорным, а после вето на
+        # ИИ-рендер (26.08) стал прямо вредным: вето отправляет чужой ИИ-сток в 0, а 0 вёл СЮДА — то
+        # есть чужую ИИ-картинку мы заменяли своей ИИ-картинкой. Запрет на ИИ-обложку, отменяющий сам
+        # себя через две строки кода.
+        #
+        # ПРАВИЛО 22.07 «текстом — это отмазка» НЕ ОТМЕНЕНО, у него просто сменился адресат: пост без
+        # картинки теперь чинится РАСШИРЕНИЕМ ПОИСКА (лого темы, кадры из тела статьи), а не рисованием.
         try:
             sc = creator_tools.SCOPE_COVER
             cp = sc.read_text(encoding="utf-8").strip() if sc.exists() else ""
@@ -815,29 +824,12 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             logging.exception("scope-обложка: не смог подхватить SCOPE_COVER")
             cover_path = ""
         if cover_path:
-            panel["🖼 обложка"] = "первоисточник (og:image)"
+            panel["🖼 обложка"] = "кадр первоисточника"
             out(f"🖼 Обложка выбрана (по смыслу подходит посту): {cover_path}")
         else:
-            out("🖼 og:image первоисточника не нашёлся — генерирую GPT-обложку из поста (картинка обязательна)...")
-            try:
-                ob = creator_tools.MEDIA_OUTBOX
-                if ob.exists():
-                    ob.unlink()
-                body = post.split("[[SPLIT]]")[0]
-                title = next((l.strip() for l in body.splitlines() if l.strip()), "").replace("**", "")
-                out(str(_threaded(creator_tools.dispatch, "make_image", {"title": title, "post_text": body})))
-                have = [l.strip() for l in ob.read_text(encoding="utf-8").splitlines() if l.strip()] \
-                    if ob.exists() else []
-                cover_path = have[-1] if have else ""
-            except Exception:
-                logging.exception("scope GPT-обложка не удалась — уйдём текстом")
-                cover_path = ""
-            if cover_path:
-                panel["🖼 обложка"] = "GPT-обложка (og:image не нашёлся)"
-                out(f"🖼 GPT-обложка сгенерирована: {cover_path}")
-            else:
-                panel["🖼 обложка"] = "нет — текстом (og:image и GPT не дали, редко)"
-                out("⚠️ Ни og:image, ни GPT-обложка не вышли — ставлю текстом (редкий случай).")
+            panel["🖼 обложка"] = "нет — уйдёт ТЕКСТОМ (скоуп не рисует)"
+            out("🖼 Годного кадра в первоисточнике нет — пост уйдёт ТЕКСТОМ.\n"
+                "   Скоуп картинки НЕ рисует (это только флагман): лучше без обложки, чем ИИ-картинка.")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
     out(str(_threaded(creator_tools.dispatch, "publish_now",
                       {"kind": "short" if scope else "", "cover": cover_path})))
