@@ -48,6 +48,13 @@ def _cover_to_tmp(monkeypatch, tmp_path):
     monkeypatch.setattr(scope_cover_log, "LOG", tmp_path / "scope_cover_log.jsonl")
 
 
+def _no_subject_search(monkeypatch):
+    """Глушит ПОИСК КАДРА ПО ОБЪЕКТУ повода (31.08). Он ходит в сеть (Wikidata/Commons/сайт объекта),
+    поэтому в юнит-тестах пула его не зовём: иначе тест мерит не свою логику, а сегодняшнюю выдачу
+    Wikimedia — и падает от чужого 429. Маршрут проверяется отдельными тестами ниже."""
+    monkeypatch.setattr(sw.source_media, "subject_image_urls", lambda subject, limit=3: [])
+
+
 def _spy_pick(monkeypatch, seen: dict):
     """Подменяет vision-выбор и запоминает, СКОЛЬКО кандидатов до него доехало."""
     def pick(imgs, *a):
@@ -58,6 +65,7 @@ def _spy_pick(monkeypatch, seen: dict):
 
 def test_attach_media_collects_frames_from_every_page(monkeypatch, tmp_path):
     _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
     monkeypatch.setattr(sw.source_media, "fetch_source_images",
                         lambda url, name="scope": [tmp_path / f"{name}_0.jpg", tmp_path / f"{name}_1.jpg"])
     seen = {}
@@ -69,6 +77,7 @@ def test_attach_media_collects_frames_from_every_page(monkeypatch, tmp_path):
 
 def test_attach_media_stops_at_pool_cap(monkeypatch, tmp_path):
     _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
     pages = {"hit": 0}
 
     def many(url, name="scope"):
@@ -100,6 +109,7 @@ def test_attach_media_survives_dead_page(monkeypatch, tmp_path):
 
 def test_attach_media_empty_pool_goes_text(monkeypatch, tmp_path):
     _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
     monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": [])
     assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k") == ""
 
@@ -166,8 +176,8 @@ def test_media_criteria_ban_ai_render():
 
 def test_criteria_lists_measured_cover_types():
     c = sw._MEDIA_CRITERIA
-    for t in ("ЛОГО или БРЕНД-ПОЛОТНО", "ЗДАНИЕ / ВЫВЕСКА / ПЕЧАТЬ", "ЧЕЛОВЕК ИЗ ПОВОДА",
-              "ПРЕДМЕТ или ПРОДУКТ КРУПНО", "РЕДАКЦИОННАЯ ИЛЛЮСТРАЦИЯ"):
+    for t in ("СНЯТЫЙ ОБЪЕКТ КОМПАНИИ/ИНСТИТУТА", "ФИРМЕННОЕ ПОЛОТНО БРЕНДА", "ЧЕЛОВЕК ИЗ ПОВОДА",
+              "ПРЕДМЕТ КРУПНО", "РЕДАКЦИОННАЯ ИЛЛЮСТРАЦИЯ"):
         assert t in c, f"тип «{t}» пропал из критериев — замер 23 обложек его нашёл"
 
 

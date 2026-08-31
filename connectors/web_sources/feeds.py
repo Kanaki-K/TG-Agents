@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import re
 import socket
@@ -99,21 +100,79 @@ def fetch_page(url: str, limit: int = 4000) -> str:
     return text[:limit] or "(страница без читаемого текста — возможно, требует JS)"
 
 
+# ══ ЗАБОР В ДВА ЗАХОДА: «бот» → «браузер» (31.08) ══
+# Крипто-медиа режут очевидных ботов, и режут именно там, где кадры лучше всего: замер 31.08 —
+# coindesk.com отвечает 429, theblock.co 403, а decrypt/coingape/cointelegraph/crypto.news 200.
+# То есть пул обложки набивался вторым эшелоном (у которого шапки нарисованы нейросетью), а тир-1
+# выпадал молча. Отсюда две правки: (1) на отказе повторяем запрос браузерными заголовками;
+# (2) причина отказа больше не проглатывается — она пишется в лог и её видно в прогоне.
+# ЗАГОЛОВКИ РЕШАЮТ БОЛЬШЕ, ЧЕМ КАЗАЛОСЬ (замер 31.08). urllib по умолчанию не шлёт ни `Accept`, ни
+# `Accept-Encoding`, и на этом Wikimedia отдавала 429 с ТРЕТЬЕГО запроса подряд — тот же самый запрос
+# из curl проходил 8 из 8. В прогоне это выглядело как «объект не опознан», то есть обложка молча
+# зависела от везения. С `Accept: */*` и `Accept-Encoding: gzip` — 8 из 8 успешно.
+_UA_BOT = "TG-Agents/1.0 (+https://github.com/Kanaki-K/TG-Agents)"  # описательный агент, как просит Wikimedia
+_UA_BROWSER = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+_BOT_HEADERS = {"User-Agent": _UA_BOT, "Accept": "*/*", "Accept-Encoding": "gzip"}
+_BROWSER_HEADERS = {
+    "User-Agent": _UA_BROWSER,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip",
+}
+
+
+def _read_body(resp, max_bytes: int) -> bytes:
+    """Тело ответа с распаковкой gzip. Сжатие просим сами (см. выше), значит сами и разжимаем;
+    битый gzip отдаём как есть — пусть разбирается вызывающий, ронять забор из-за этого незачем."""
+    raw = resp.read(max_bytes)
+    if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+        try:
+            return gzip.decompress(raw)
+        except Exception:
+            return raw
+    return raw
+
+
 def fetch_bytes(url: str, max_bytes: int = 800_000, timeout: int = 15) -> tuple[bytes, str] | None:
     """SSRF-безопасный GET → (тело, content-type) или None (заблокирован/ошибка/таймаут).
 
     Общий низкоуровневый забор для «рук», которым нужны сырые байты (og:image страницы,
     скачивание картинки первоисточника), а не очищенный текст. Та же защита, что у fetch_page:
     блокируем приватные/локальные адреса и проверяем каждый редирект.
+
+    Отказ первого захода (403/429 у изданий, режущих ботов) — не приговор: повторяем браузерными
+    заголовками. Причина последнего отказа доступна вызывающему через `last_error` — молчаливый
+    None и был тем, из-за чего пул обложки годами терял лучшие источники незаметно.
     """
-    if _url_blocked_reason(url):
+    reason = _url_blocked_reason(url)
+    if reason:
+        _LAST_ERROR[url] = reason
         return None
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ScoutBot)"})
-    try:
-        with _SAFE_OPENER.open(req, timeout=timeout) as resp:
-            return resp.read(max_bytes), (resp.headers.get_content_type() or "")
-    except Exception:  # таймаут/403/404/сеть — не роняем вызывающего, отдаём None
-        return None
+    err = ""
+    for headers in (_BOT_HEADERS, _BROWSER_HEADERS):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with _SAFE_OPENER.open(req, timeout=timeout) as resp:
+                _LAST_ERROR.pop(url, None)
+                return _read_body(resp, max_bytes), (resp.headers.get_content_type() or "")
+        except urllib.error.HTTPError as e:
+            err = f"HTTP {e.code}"
+            if e.code not in (401, 403, 405, 406, 429, 503):
+                break            # 404/410 браузерными заголовками не лечится — второй заход впустую
+        except Exception as e:   # таймаут/сеть/DNS — не роняем вызывающего
+            err = type(e).__name__
+            break
+    _LAST_ERROR[url] = err or "неизвестно"
+    return None
+
+
+_LAST_ERROR: dict[str, str] = {}
+
+
+def last_error(url: str) -> str:
+    """Почему последний fetch_bytes по этому URL вернул None («HTTP 429», «timeout»). Пусто — успех."""
+    return _LAST_ERROR.get(url, "")
 
 
 def load_sources() -> list[dict]:
