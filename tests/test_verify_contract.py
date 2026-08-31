@@ -378,3 +378,37 @@ def test_fix_contract_knows_what_to_do_with_a_stale_figure():
 def test_fix_contract_rejects_dating_as_a_substitute_for_fixing():
     from core import scope_writer as sw
     assert "заменой не считается" in sw.FIX
+
+
+# ── ВТОРОЙ РУБЕЖ ПРОТИВ УСТАРЕВШЕЙ ЦИФРЫ — УЖЕ КОДОМ (31.08) ──────────────────────────────────
+# Правило в 2FA — судья, а судья тут ненадёжен по конструкции: он сам пометил случай 31.08 как ❓
+# «источники расходятся», а ❓ править запрещено. Поэтому детерминированная проверка в линтере.
+
+def _scope_warns(text: str) -> list:
+    from core import creator_tools as ct
+    return ct._lint(text, kind="scope")[1]
+
+
+def test_linter_catches_dating_hedge_on_a_figure():
+    """«по июльским данным» — оборот, который модель производит, когда САМА знает: число старое."""
+    w = _scope_warns("**Заголовок**\n\nАктивов по июльским данным было 12.8 млн$ - меньше 5%")
+    assert any("ДАТИРУЮЩЕЙ" in x for x in w)
+
+
+def test_linter_catches_other_dating_shapes():
+    for phrase in ("данные на июль", "по состоянию на июнь", "данных за август"):
+        w = _scope_warns(f"**Заголовок**\n\nДоля активов ({phrase}) - меньше 5%")
+        assert any("ДАТИРУЮЩЕЙ" in x for x in w), phrase
+
+
+def test_linter_leaves_honest_history_alone():
+    """Законная ретроспектива звучит иначе и под шаблон не попадает — ложняков быть не должно."""
+    w = _scope_warns("**Заголовок**\n\nВ июле Strategy продала по 60 тыс$, в августе выкупила дороже")
+    assert not any("ДАТИРУЮЩЕЙ" in x for x in w)
+
+
+def test_linter_stale_check_is_scope_only():
+    """У флагмана вечные темы банка — ссылка на прошлые месяцы там законна."""
+    from core import creator_tools as ct
+    w = ct._lint("**Заголовок**\n\nПо июльским данным доля была 5%", kind="flagship")[1]
+    assert not any("ДАТИРУЮЩЕЙ" in x for x in w)

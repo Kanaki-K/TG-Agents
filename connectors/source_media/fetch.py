@@ -44,6 +44,17 @@ def _page_html(page_url: str) -> str:
     return got[0].decode("utf-8", errors="replace") if got else ""
 
 
+def page_html(page_url: str) -> str:
+    """HTML страницы повода — нужен и subject_media, чтобы вытащить оттуда ссылку на официальный
+    сайт объекта.
+
+    Кэша тут НЕТ намеренно. Я его завёл (одну страницу спрашивают и кадры статьи, и поиск сайта —
+    выходит два одинаковых GET) и сразу же убрал: кэш без срока жизни в долгоживущем процессе бота
+    отдаёт вчерашнюю страницу как сегодняшнюю, а это ровно тот класс ошибок, из-за которого пост
+    31.08 вышел с июльской цифрой. Лишний GET дешевле стухших данных."""
+    return _page_html(page_url)
+
+
 def _og_from_html(html: str, page_url: str) -> str | None:
     for rx in (_META_A, _META_B):
         m = rx.search(html)

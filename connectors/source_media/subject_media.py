@@ -41,8 +41,9 @@ import json
 import logging
 import re
 import time
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
+from connectors.source_media import fetch
 from connectors.web_sources import feeds
 
 _WIKI_API = "https://en.wikipedia.org/w/api.php"
@@ -154,7 +155,9 @@ _ONTOPIC = re.compile(
     r"\b(compan|corporation|corporate|exchange|bank|financ|cryptocurrenc|crypto|blockchain|"
     r"platform|protocol|agenc|regulator|government|institution|business|technolog|software|"
     r"fintech|broker|fund\b|organization|organisation|entrepreneur|executive|investor|"
-    r"politician|economist|stablecoin|token)", re.I)
+    r"politician|economist|stablecoin|token|network|blockchain|chain\b|startup|firm\b|trading|"
+    r"payment|asset manager|central bank|commission|department|ministry|senator|chair\b|founder|"
+    r"investment|securities|treasur|custodian|miner|mining)", re.I)
 
 
 def _is_acronym(entity: str) -> bool:
@@ -172,7 +175,6 @@ def entity_id(entity: str) -> tuple[str, str]:
     имя объекта в ИМЕНИ ФАЙЛА — там промахнуться сложнее."""
     found = _api_json(f"{_WIKIDATA_API}?action=wbsearchentities&search={quote(entity)}"
                       f"&language=en&format=json&limit=5")
-    fallback = ("", "")
     for hit in found.get("search") or []:
         qid, descr = hit.get("id") or "", (hit.get("description") or "")
         if not re.fullmatch(r"Q\d+", qid):
@@ -182,14 +184,16 @@ def entity_id(entity: str) -> tuple[str, str]:
             continue
         if _ONTOPIC.search(descr):
             return qid, descr
-        # НЕЙТРАЛЬНОЕ ОПИСАНИЕ — ТОЛЬКО ДЛЯ ПОЛНОГО ИМЕНИ, НЕ ДЛЯ АББРЕВИАТУРЫ (31.08). У «Robinhood»
-        # или «Michael Saylor» промахнуться сложно. А голая аббревиатура совпадает с чем угодно:
-        # «SEC» подряд дал секунду, секанс и грамматический падеж — и каждый следующий запрет ловил
-        # ровно один из них. Поэтому для коротких заглавных сокращений принимаем ТОЛЬКО явно
-        # профильное описание, а иначе отдаём поиску по Commons — там имя должно стоять в файле.
-        if not fallback[0] and not _is_acronym(entity):
-            fallback = (qid, descr)
-    return fallback
+        # НЕЙТРАЛЬНОЕ ОПИСАНИЕ НЕ ЗАСЧИТЫВАЕМ НИКОМУ (ужесточено 31.08 по факту промахов). Сначала
+        # я разрешал его для полных имён — мол, «Robinhood» с чем попало не совпадёт. Проверка на
+        # живых тикерах это опровергла: «Jito» → императрица Японии (645-703), «Ethena» → «статья
+        # энциклопедии». Оба описания не запрещены явно, и оба прошли бы. Запретный список тут
+        # всегда будет отставать от реальности, а разрешительный — нет: объект нашего повода это
+        # компания, институт, рынок или человек из деловой среды, и Wikidata это прямо пишет.
+        # Не пишет — значит опознание ненадёжно, и мы уходим на ссылку из статьи и поиск по Commons.
+        logging.info("subject_media: «%s» → %s пропущен: описание не профильное (%s)",
+                     entity, qid, descr or "пусто")
+    return ("", "")
 
 
 def _claims(qid: str) -> dict:
@@ -281,7 +285,84 @@ def commons_photo(entity: str) -> str | None:
                                                                                 entity)
 
 
-def subject_image_urls(subject: str, limit: int = 4) -> list[str]:
+# ══ ОБЪЕКТ, КОТОРОГО НЕТ В СПРАВОЧНИКЕ (31.08) ══
+# Wikidata знает компании и институты, но не знает протокол, запущенный месяц назад: «Robinhood Chain»
+# там не опознаётся вовсе. Владелец: «если Я могу найти, значит и он должен уметь». Человек в этом
+# случае делает ровно две вещи, и обе воспроизводимы кодом:
+#   1) кликает в статье по ссылке на сам проект — издание почти всегда линкует первоисточник;
+#   2) если ссылки нет, набирает имя проекта доменом.
+# Домен не угадываем вслепую: страница обязана ОПОЗНАТЬ СЕБЯ — назвать объект в <title> или
+# og:site_name. Иначе поиск уводит на сквоттеров и однофамильцев.
+_SITE_TLDS = (".com", ".org", ".io", ".xyz", ".network", ".finance")
+# Домены, которые линкуют все и всегда: соцсети, агрегаторы, сами издания. Официальным сайтом объекта
+# они не бывают, и без этого списка «ссылка из статьи» приводила бы в твиттер.
+_NOT_OFFICIAL = re.compile(
+    r"(twitter|x\.com|facebook|linkedin|instagram|youtube|t\.me|telegram|reddit|medium|github|"
+    r"discord|tiktok|threads\.com|flipboard|typekit|coindesk|cointelegraph|theblock|decrypt|"
+    r"coingape|crypto\.news|blockworks|dlnews|"
+    r"defillama|coinmarketcap|coingecko|google|apple|wikipedia|archive\.org)", re.I)
+# Ссылку ищем ПО ВСЕЙ странице, а не только в тегах <a>. Современные издания рендерятся из JSON, и
+# ссылка на проект лежит в данных страницы, а не в разметке: на живой статье decrypt тегов <a> нашлось
+# 35, а нужный домен был не среди них. Нам важен ФАКТ ссылки, а не то, в каком узле она записана.
+_A_HREF = re.compile(r"""https?://([a-z0-9.-]+\.[a-z]{2,})""", re.I)
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_OG_SITE = re.compile(
+    r"""<meta[^>]*?(?:property|name)\s*=\s*["']og:site_name["'][^>]*?\bcontent\s*=\s*["']([^"']+)["']""",
+    re.I)
+
+
+def _name_key(entity: str) -> str:
+    """«Robinhood Chain» → «robinhoodchain» — для сверки с доменом и заголовком страницы."""
+    return re.sub(r"[^a-z0-9]", "", (entity or "").lower())
+
+
+# Страница-заглушка называет объект в заголовке РОВНО потому, что в заголовке стоит домен: живой
+# пример 31.08 — «For Sale Domain: robinhoodchain.org». Проверку «называет ли себя» такая страница
+# проходила, и сквоттер уехал бы в кандидаты. Отсеиваем по маркерам парковки и незапущенного сайта.
+_PARKED = re.compile(r"(for sale|на продажу|domain (is )?(for sale|parking)|parked|buy this domain|"
+                     r"coming soon|under construction|website is (currently )?unavailable|"
+                     r"account suspended|default web page)", re.I)
+
+
+def _page_says_its_name(html: str, entity: str) -> bool:
+    """Страница называет себя этим объектом? Смотрим <title> и og:site_name — так отличается
+    официальный сайт от случайного домена с тем же именем. Заглушку-парковку отбраковываем отдельно:
+    она называет объект не потому, что им является, а потому что торгует его доменом."""
+    key = _name_key(entity)
+    if len(key) < 4:
+        return False
+    parts = [m.group(1) for m in (_TITLE.search(html), _OG_SITE.search(html)) if m]
+    hay = " ".join(parts)
+    if _PARKED.search(hay):
+        logging.info("subject_media: «%s» — страница-заглушка (%s), не официальный сайт",
+                     entity, " ".join(hay.split())[:60])
+        return False
+    return key[:14] in _name_key(hay)
+
+
+def official_site_from_pages(entity: str, page_urls: list) -> str | None:
+    """Официальный сайт объекта — ПО ССЫЛКЕ ИЗ САМОЙ СТАТЬИ. Так делает человек: читает материал и
+    кликает на проект. Берём ссылку, чей ДОМЕН содержит имя объекта, и отсекаем соцсети/агрегаторы
+    (их линкуют всегда, официальным сайтом они не бывают)."""
+    key = _name_key(entity)
+    if len(key) < 4:
+        return None
+    for page in page_urls or []:
+        html = fetch.page_html(page)
+        if not html:
+            continue
+        for host in dict.fromkeys(_A_HREF.findall(html)):
+            if _NOT_OFFICIAL.search(host) or key[:14] not in _name_key(host):
+                continue
+            site = f"https://{host}"
+            got = feeds.fetch_bytes(site)
+            if got and _page_says_its_name(got[0].decode("utf-8", errors="replace"), entity):
+                logging.info("subject_media: «%s» → официальный сайт из статьи: %s", entity, host)
+                return site
+    return None
+
+
+def subject_image_urls(subject: str, limit: int = 4, page_urls: list | None = None) -> list[str]:
     """Кадры-кандидаты, НАЙДЕННЫЕ по объекту повода.
 
     ПОРЯДОК = ОТ ИНТЕРЕСНОГО К СТРАХОВОЧНОМУ (владелец 31.08). Сперва живая композиция — бренд-полотно
@@ -309,8 +390,14 @@ def subject_image_urls(subject: str, limit: int = 4) -> list[str]:
         try:
             qid, descr = entity_id(entity)
             if not qid:
-                logging.info("subject_media: «%s» — в Wikidata не опознан, иду поиском по Commons",
+                # НЕТ В СПРАВОЧНИКЕ — НЕ ЗНАЧИТ НЕТ КАДРА. Так выпадал «Robinhood Chain»: протокол
+                # свежий, в Wikidata его нет. Идём тем же путём, что человек: ссылка на проект из
+                # самой статьи → домен по имени → и только потом поиск по Commons.
+                logging.info("subject_media: «%s» — в Wikidata не опознан, ищу официальный сайт",
                              entity)
+                site = official_site_from_pages(entity, page_urls or [])
+                if site:
+                    add(rich, _og_image(site), f"бренд-полотно {site}", entity)
                 add(rich, commons_photo(entity), "фото (поиск Commons)", entity)
                 add(plain, _commons_search(f"{entity} logo", entity), "лого (поиск Commons)", entity)
                 continue

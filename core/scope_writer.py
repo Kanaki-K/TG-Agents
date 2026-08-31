@@ -604,6 +604,36 @@ SUBJECT_FRAMES = 3
 LAST_POOL_NOTE = ""
 
 
+# Имена собственные в теле поста: латиница с заглавной, возможно из двух слов («Robinhood Chain»).
+# Кириллицу не берём — объекты поводов (компании, сети, тикеры) в постах пишутся латиницей, а русское
+# слово с заглавной чаще всего просто начало предложения.
+_PROPER_NOUN = re.compile(r"\b([A-Z][A-Za-z0-9.&-]{2,}(?:\s+[A-Z][A-Za-z0-9.&-]{2,})?)")
+# Слова с заглавной, которые именем объекта не бывают — начало английской вставки, валюты, единицы.
+_NOT_A_SUBJECT = {"The", "This", "That", "But", "And", "For", "With", "From", "Not", "New", "USD",
+                  "USDT", "USDC", "BTC", "ETH", "SOL", "CEO", "CTO", "API", "ETF", "NFT", "DeFi"}
+
+
+def _subject_from_post(post_body: str) -> str:
+    """Сущности повода ИЗ ТЕКСТА ПОСТА — запасной якорь, когда писатель не дал [[MEDIA_SUBJECT]].
+
+    Заголовок важнее тела: объект повода почти всегда назван в первой строке («Robinhood построил
+    сеть под акции»). Берём имена собственные в порядке появления, до трёх — ровно столько же, сколько
+    отрабатывает поиск. Это не замена меты, а страховка: обложка не должна зависеть от того, вспомнил
+    ли писатель про служебную строку."""
+    text = " ".join((post_body or "").replace("**", "").splitlines()[:6])
+    out: list[str] = []
+    for m in _PROPER_NOUN.finditer(text):
+        name = m.group(1).strip()
+        if name.split()[0] in _NOT_A_SUBJECT or name.lower() in {n.lower() for n in out}:
+            continue
+        out.append(name)
+        if len(out) >= 3:
+            break
+    if out:
+        logging.info("scope: [[MEDIA_SUBJECT]] нет — объект повода взят из поста: %s", ", ".join(out))
+    return ", ".join(out)
+
+
 def _pool_note(src: str, n: int, why: str = "") -> str:
     """Строка отчёта по одному источнику пула. Раньше в лог уходило только ИТОГОВОЕ число кадров, и
     31.08 это стоило обложки: две статьи-первоисточника не отдали ничего (429/403), никто не узнал,
@@ -643,8 +673,12 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
         imgs.append(path)
 
     # 1) ПОИСК ПО ОБЪЕКТУ ПОВОДА — полотно бренда / снятый объект / человек, и лишь затем лого.
+    # Мету писатель даёт не всегда, а обложка от его дисциплины зависеть не должна: пустой [[MEDIA_SUBJECT]]
+    # означал «искать не по чему» и гарантировал пост без картинки. Имена берём из самого поста.
+    subject = subject or _subject_from_post(post_body)
     try:
-        found = source_media.subject_image_urls(subject, limit=SUBJECT_FRAMES) if subject else []
+        found = source_media.subject_image_urls(subject, limit=SUBJECT_FRAMES,
+                                                page_urls=source_urls or []) if subject else []
     except Exception:
         logging.exception("scope: поиск кадра по объекту повода не отработал")
         found = []

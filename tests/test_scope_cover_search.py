@@ -179,7 +179,7 @@ def test_pool_takes_frames_found_by_subject(monkeypatch, tmp_path):
     monkeypatch.setattr(scope_cover_log, "LOG", tmp_path / "log.jsonl")
     found = _save(tmp_path, Image.new("RGB", (1600, 900), (0, 120, 255)), "brand.jpg")
     monkeypatch.setattr(sw.source_media, "subject_image_urls",
-                        lambda subject, limit=3: ["https://site/brand.jpg"])
+                        lambda subject, limit=3, page_urls=None: ["https://site/brand.jpg"])
     monkeypatch.setattr(sw.source_media, "download", lambda url, name="scope", min_side=0: found)
     monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": [])
     monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "полотно бренда"))
@@ -205,3 +205,63 @@ def test_fetch_bytes_reports_reason(monkeypatch):
     monkeypatch.setattr(feeds._SAFE_OPENER, "open", boom)
     assert feeds.fetch_bytes("https://x.example/a") is None
     assert "429" in feeds.last_error("https://x.example/a")
+
+
+# ── ДВА ЗАЗОРА, ЗАКРЫТЫЕ 31.08 ПО ТРЕБОВАНИЮ «БЕЗ НО» ─────────────────────────────────────────
+# Владелец: «мне нужно чтобы точно было без НО, потому что если я могу руками — значит и он должен
+# уметь». Оба оставшихся «но» были зависимостями: от дисциплины писателя и от полноты справочника.
+
+def test_subject_taken_from_post_when_meta_missing():
+    """Нет [[MEDIA_SUBJECT]] — объект берём из самого поста, а не разводим руками."""
+    post = ("**📉 Robinhood построил сеть под акции, а выкупили её мемы**\n\n"
+            "30 августа сеть Robinhood Chain сделала рекордный день, обогнав Ethereum")
+    got = sw._subject_from_post(post)
+    assert "Robinhood" in got and "Ethereum" in got
+
+
+def test_subject_from_post_skips_sentence_openers():
+    """Служебные заглавные (начало вставки, тикеры, аббревиатуры) именем объекта не считаются."""
+    assert sw._subject_from_post("The ETF is big. This DeFi thing. But USDC grew.") == ""
+
+
+def test_official_site_found_by_link_from_the_article(monkeypatch):
+    """Так делает человек: читает статью и кликает на проект. Проверено вживую на Ostium."""
+    monkeypatch.setattr(sm.fetch, "page_html", lambda url:
+                        '<a href="https://x.com/ostium">x</a> <a href="https://www.ostium.com/">сайт</a>')
+    monkeypatch.setattr(sm.feeds, "fetch_bytes", lambda url, **kw:
+                        (b"<title>Ostium | Trade the markets</title>", "text/html"))
+    assert sm.official_site_from_pages("Ostium", ["https://media.example/a"]) == "https://www.ostium.com"
+
+
+def test_socials_and_aggregators_are_never_the_official_site(monkeypatch):
+    """Соцсети линкуют все и всегда — официальным сайтом объекта они не бывают."""
+    monkeypatch.setattr(sm.fetch, "page_html", lambda url: '<a href="https://x.com/ostium">x</a>')
+    monkeypatch.setattr(sm.feeds, "fetch_bytes", lambda url, **kw: (b"<title>Ostium</title>", "text/html"))
+    assert sm.official_site_from_pages("Ostium", ["https://media.example/a"]) is None
+
+
+def test_parked_domain_is_not_the_official_site(monkeypatch):
+    """Живой промах 31.08: «Robinhood Chain» вывел на robinhoodchain.org с заголовком «For Sale
+    Domain». Имя объекта в заголовке там есть — потому что торгуют его доменом, а не потому что это
+    он. Проверки «называет себя» мало, нужен отсев заглушек."""
+    monkeypatch.setattr(sm.fetch, "page_html", lambda url: '<a href="https://ostium.com/">сайт</a>')
+    monkeypatch.setattr(sm.feeds, "fetch_bytes", lambda url, **kw:
+                        (b"<title>For Sale Domain: ostium.com</title>", "text/html"))
+    assert sm.official_site_from_pages("Ostium", ["https://media.example/a"]) is None
+
+
+def test_domain_guessing_is_gone():
+    """Угадывание домена по имени снято: «Robinhood Chain» так приводило на припаркованного
+    сквоттера robinhoodchain.org с заголовком «For Sale Domain», и проверка имени его пропускала.
+    Ссылка из статьи опирается на факт, догадка по имени — нет."""
+    assert not hasattr(sm, "official_site_by_name")
+
+
+def test_neutral_wikidata_description_is_never_accepted(monkeypatch):
+    """«Jito» → императрица Японии (645-703), «Ethena» → «статья энциклопедии». Оба описания не
+    запрещены явно и раньше проходили. Запретный список всегда отстаёт — разрешительный нет."""
+    monkeypatch.setattr(sm, "_api_json", lambda url: {"search": [
+        {"id": "Q232026", "description": "Empress of Japan (645-703)"},
+        {"id": "Q104069387", "description": "encyclopedia article"},
+    ]})
+    assert sm.entity_id("Jito") == ("", "")
