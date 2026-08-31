@@ -362,3 +362,19 @@ def test_checklist_separates_live_price_from_derived_sum():
     c = verify.VERIFIER_SYSTEM
     assert "ПРОИЗВОДНЫХ СУММ" in c          # доллары = объём × курс: своим умножением НЕ пересчитывать
     assert "market_price" in c              # живая цена названного актива по-прежнему сверяется спотом
+
+
+# ── ПРАВКА УСТАРЕВШЕЙ ОПОРНОЙ ЦИФРЫ (31.08) ────────────────────────────────────────────────────
+# Мало пометить проблему — правка должна знать, ЧТО с ней делать. Без этой ветки фикс-проход
+# упёрся бы в общее правило «валидное не вырезать» и оставил бы июльское число в посте про август.
+
+def test_fix_contract_knows_what_to_do_with_a_stale_figure():
+    from core import scope_writer as sw
+    f = sw.FIX
+    assert "ТЕМП про ЦИФРУ ВНУТРИ ПОСТА" in f
+    assert "УБЕРИ число вместе с выводом" in f, "нет актуального значения — вывод на нём не строим"
+
+
+def test_fix_contract_rejects_dating_as_a_substitute_for_fixing():
+    from core import scope_writer as sw
+    assert "заменой не считается" in sw.FIX
