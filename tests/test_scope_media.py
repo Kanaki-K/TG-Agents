@@ -451,3 +451,43 @@ def test_old_sdk_without_thinking_param_still_works(monkeypatch, tmp_path):
     got = sw._vision_pick(imgs, "тело", "BNY", "key")
     assert got is not None and got[0] == imgs[0]
     assert len(calls) == 2 and "thinking" not in calls[1]
+
+
+# ── ФОРМАТ КАНАЛА: ВЕРТИКАЛЬ ДО СУДЬИ НЕ ДОХОДИТ, ПОКА ЕСТЬ ГОРИЗОНТАЛЬ (07.09) ─────────────────
+# Владелец: «нам нужно горизонтальное фото, как было раньше — если я прошу провести анализ того,
+# что было, то и формат должен быть такой же». Замер: 21 из 23 обложек — снятая горизонталь.
+
+def _pool(monkeypatch, tmp_path, ratios):
+    """Пул из готовых файлов с заданными ИСХОДНЫМИ пропорциями."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
+    made = []
+    for i, r in enumerate(ratios):
+        q = tmp_path / f"p{i}.jpg"
+        q.write_bytes(b"\xff\xd8" + b"0" * 100)
+        monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), r)
+        made.append(q)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": list(made))
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    return made
+
+
+def test_vertical_is_dropped_while_horizontal_exists(monkeypatch, tmp_path):
+    made = _pool(monkeypatch, tmp_path, [0.66, 1.78, 1.0])   # вертикаль, горизонталь, квадрат
+    seen = {}
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
+    sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+    assert seen["pool"] == [made[1]], "судья обязан видеть только снятую горизонталь"
+    assert "не-горизонталь отсеяна: 2" in sw.LAST_POOL_NOTE, "панель должна показать, что отсеяно"
+
+
+def test_vertical_is_kept_when_nothing_else(monkeypatch, tmp_path):
+    """#441 (вертикальная инфографика) и #456 (квадратный портрет) на канале приняты — значит
+    вертикаль это последнее средство, а не запрет. Обложка обязана быть."""
+    made = _pool(monkeypatch, tmp_path, [0.66, 1.0])
+    seen = {}
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
+    out = sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+    assert seen["pool"] == made and out, "без горизонталей берём что есть, а не уходим текстом"
+    assert "горизонтали не нашлось" in sw.LAST_POOL_NOTE

@@ -333,3 +333,24 @@ def test_true_junk_still_dropped_inside_article(monkeypatch):
             '<img src="https://cdn.x/solana-logo.png"></article>')
     monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: _html(html))
     assert fetch.article_images(PAGE) == ["https://cdn.x/solana-logo.png"]
+
+
+# --- ФОРМАТ: ГОРИЗОНТАЛЬ ОТБИРАЕМ, А НЕ ДОСТРАИВАЕМ (07.09) ---------------------------------------
+# Замер: 21 из 23 обложек канала — снятая горизонталь. Код умел достраивать вертикаль полями до 16:9,
+# и 07.09 так и сделал: башня DBS уехала в отложку узкой полосой посреди синих полей.
+
+def test_original_ratio_is_remembered_after_padding(monkeypatch, tmp_path):
+    """После достройки все файлы 16:9 — отличить снятую горизонталь от вертикали можно только так."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(600, 900), "image/png"))
+    p = fetch.download("https://cdn.x/tower.png")
+    assert p is not None
+    assert 0.6 < fetch.orig_ratio(p) < 0.7, "исходная пропорция вертикали должна сохраниться"
+    assert not fetch.is_landscape(p)
+
+
+def test_landscape_photo_is_marked_landscape(monkeypatch, tmp_path):
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(1200, 800), "image/png"))
+    p = fetch.download("https://cdn.x/hq.png")
+    assert fetch.is_landscape(p), "3:2 — нормальная снятая горизонталь канала (#451, #472, #486)"

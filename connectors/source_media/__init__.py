@@ -10,11 +10,12 @@
 объекту повода (полотно бренда / здание / человек / лого) — он и вытаскивает обложку, когда статьи
 не дали ничего или дали один ИИ-сток. Тоже не генерация: всё скачано из открытых источников как есть.
 """
-from connectors.source_media.fetch import (article_images, download, fetch_source_image,
-                                           fetch_source_images, frame_fingerprint, looks_same,
-                                           og_image_url)
+from connectors.source_media.fetch import (LANDSCAPE_MIN, article_images, download,
+                                           fetch_source_image, fetch_source_images,
+                                           frame_fingerprint, is_landscape, looks_same,
+                                           og_image_url, orig_ratio)
 from connectors.source_media.subject_media import MIN_LOGO_SIDE, subject_image_urls
 
 __all__ = ["article_images", "download", "fetch_source_image", "fetch_source_images",
-           "frame_fingerprint", "looks_same", "og_image_url", "subject_image_urls",
-           "MIN_LOGO_SIDE"]
+           "frame_fingerprint", "is_landscape", "looks_same", "og_image_url", "orig_ratio",
+           "subject_image_urls", "LANDSCAPE_MIN", "MIN_LOGO_SIDE"]
