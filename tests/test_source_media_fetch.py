@@ -118,7 +118,7 @@ def _png_bytes(w: int, h: int) -> bytes:
 
 
 def test_download_rejects_low_resolution(monkeypatch, tmp_path):
-    # длинная сторона < _MIN_SIDE (800) → мелкий thumbnail → отклоняем (сработает фолбэк «уйдём текстом»)
+    # длинная сторона < _MIN_SIDE → мелкий thumbnail/фавикон, кандидатом не становится
     monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
     monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(200, 150), "image/png"))
     assert fetch.download("https://cdn.x/tiny.png") is None
@@ -233,17 +233,28 @@ def test_fetch_source_images_empty_when_page_dead(monkeypatch, tmp_path):
 
 
 
-# --- ПОРОГ РАЗРЕШЕНИЯ ПО РОЛИ КАДРА (26.08): шапке нужен 800, графику хватает 500 -------------------
+# --- ПОЛ РАЗРЕШЕНИЯ ВЗЯТ ИЗ ПРИНЯТЫХ ОБЛОЖЕК (07.09) -----------------------------------------------
+# Порог 800 стоял по одному багу 24.07 и бил по своим: замер 23 опубликованных обложек показал, что
+# канал принял #440 в 499x281, #454 в 700x300 и #489 в 700x450. Роль кадра (шапка/тело) порог больше
+# не меняет — он одинаково выведен из того, что владелец реально публиковал.
 
-def test_download_floor_is_overridable(monkeypatch, tmp_path):
+def test_smallest_published_cover_would_pass(monkeypatch, tmp_path):
+    """499x281 — самая мелкая ПРИНЯТАЯ обложка канала (#440, Chainlink/Pangea). Порог 800 её убивал."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(499, 281), "image/png"))
+    assert fetch.download("https://cdn.x/pangea.png") is not None
+
+
+def test_header_and_body_share_one_floor(monkeypatch, tmp_path):
+    """Кадр 600x400 годится и как шапка, и как кадр из тела — разного порога по роли больше нет."""
     monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
     monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(600, 400), "image/png"))
-    assert fetch.download("https://cdn.x/chart.png") is None                      # как шапка — мелко
+    assert fetch.download("https://cdn.x/chart.png") is not None
     assert fetch.download("https://cdn.x/chart.png", min_side=fetch._MIN_SIDE_BODY) is not None
 
 
-def test_body_frame_passes_where_header_would_not(monkeypatch, tmp_path):
-    """Тот самый случай 26.08: график первоисточника меньше 800px — раньше выпадал ДО выбора."""
+def test_two_frames_from_one_page(monkeypatch, tmp_path):
+    """Шапка + кадр из тела дают ДВА кандидата: пул должен быть, из чего выбирать."""
     monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
     html = ('<meta property="og:image" content="https://cdn.x/hero.jpg">'
             '<article><img src="https://cdn.x/chart.png"></article>')
@@ -258,7 +269,7 @@ def test_body_frame_passes_where_header_would_not(monkeypatch, tmp_path):
 
 
 def test_body_frame_still_has_a_floor(monkeypatch, tmp_path):
-    """Пол снижен, а не снят: 345x230 (кандидат 26.08) не читается в ленте и кандидатом не становится."""
+    """Пол снижен, а не снят: 345x230 мельче самой мелкой принятой обложки — в ленте это мыло."""
     monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
     html = '<article><img src="https://cdn.x/tiny.png"></article>'
 
@@ -269,8 +280,10 @@ def test_body_frame_still_has_a_floor(monkeypatch, tmp_path):
     assert fetch.fetch_source_images(PAGE) == []
 
 
-def test_header_floor_unchanged(monkeypatch, tmp_path):
-    """Правило 24.07 для ШАПКИ не тронуто: 8.5КБ-мелочь в канал не уходит."""
+def test_header_of_accepted_size_passes(monkeypatch, tmp_path):
+    """700x500 — размерный класс принятой обложки #489 (печать ФРС, 700x450). Порог 800 её резал.
+    Правило 24.07 не отменено, у него сменилась граница: мелочью считается то, что мельче
+    опубликованного каналом, а не то, что мельче круглого числа."""
     monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
     html = '<meta property="og:image" content="https://cdn.x/hero.jpg">'
 
@@ -278,7 +291,7 @@ def test_header_floor_unchanged(monkeypatch, tmp_path):
         return _html(html) if url == PAGE else (_png_bytes(700, 500), "image/png")
 
     monkeypatch.setattr(feeds, "fetch_bytes", fake)
-    assert fetch.fetch_source_images(PAGE) == []
+    assert len(fetch.fetch_source_images(PAGE)) == 1
 
 
 if __name__ == "__main__":

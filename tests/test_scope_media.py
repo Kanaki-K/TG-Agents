@@ -161,63 +161,113 @@ def test_vision_pick_out_of_range_is_no_cover(monkeypatch, tmp_path):
     assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
 
 
-def test_media_criteria_ban_ai_render():
-    """Страж правила: запрет ИИ-стока — решение владельца, а не украшение промпта."""
-    c = sw._MEDIA_CRITERIA
-    assert "ИИ-СТОК «КРИПТО-ФУТУРИЗМ» НЕ БЕРЁМ" in c
-    assert "неоново" in c or "неоновое" in c
-    assert "Только ИИ-сток или псевдо-дашборд в пуле → 0" in c
+# ── ДВА КРУГА СУДЬИ: НОЛЬ ПЕРВОГО КРУГА — НЕ РЕШЕНИЕ (07.09) ────────────────────────────────────
+# С 31.08 по 07.09 судья не выбрал НИ ОДНОЙ обложки: четыре скоупа подряд ушли голым текстом, хотя
+# 07.09 в пуле лежали фирменное полотно Liquid Network и редакционный коллаж ровно про этот повод.
+# Ноль стоил столько же, сколько выбор, — теперь он стоит второго вопроса: «что здесь ВРЕДНОГО».
+
+def _fake_vision_seq(monkeypatch, tmp_path, answers):
+    """Как _fake_vision, но отдаёт ответы по очереди — чтобы проверить ВТОРОЙ круг."""
+    imgs = []
+    for i in range(3):
+        q = tmp_path / f"c{i}.jpg"
+        q.write_bytes(b"\xff\xd8" + b"0" * 100)
+        imgs.append(q)
+    seq = list(answers)
+
+    class _Msgs:
+        def create(self, **kw):
+            return _FakeResp(seq.pop(0) if seq else "0")
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = _Msgs()
+
+    monkeypatch.setattr(sw, "Anthropic", _Client)
+    monkeypatch.setattr(sw.cost, "record", lambda *a, **k: None)
+    return imgs
 
 
-# ── ТАКСОНОМИЯ ВЫВЕДЕНА ИЗ 23 ПРИНЯТЫХ ОБЛОЖЕК (замер 28.08) ────────────────────────────────────
-# Владелец: «проанализируй картинки, которые уже на канале — вот тебе и будут характеристики».
-# Раньше критерии были списком запретов, каждый добавлен после очередного промаха. Теперь у них есть
-# положительная половина, и она держится на замере, а не на моих догадках.
-
-def test_criteria_lists_measured_cover_types():
-    c = sw._MEDIA_CRITERIA
-    for t in ("СНЯТЫЙ ОБЪЕКТ КОМПАНИИ/ИНСТИТУТА", "ФИРМЕННОЕ ПОЛОТНО БРЕНДА", "ЧЕЛОВЕК ИЗ ПОВОДА",
-              "ПРЕДМЕТ КРУПНО", "РЕДАКЦИОННАЯ ИЛЛЮСТРАЦИЯ"):
-        assert t in c, f"тип «{t}» пропал из критериев — замер 23 обложек его нашёл"
+def test_second_round_rescues_the_cover(monkeypatch, tmp_path):
+    """Первый круг сказал 0 — обложка всё равно обязана найтись среди невредных кадров."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0 | только ИИ-рендеры", "2 | вордмарк Bitmine"])
+    got = sw._vision_pick(imgs, "тело поста", "Bitmine", "key")
+    assert got is not None, "ноль первого круга не должен оставлять пост без картинки"
+    assert got[0] == imgs[1] and got[1] == "вордмарк Bitmine"
+    assert "второго круга" in sw.LAST_COVER_NOTE, "панель обязана показать, каким кругом взят кадр"
 
 
-def test_dashboard_screenshot_is_not_the_anchor():
-    """Скриншот графика стоял вторым по приоритету, а среди 23 принятых таких НОЛЬ. Не ориентир."""
-    c = sw._MEDIA_CRITERIA
-    assert "НОЛЬ" in c and "специально не ищи" in c
+def test_first_round_pick_does_not_ask_twice(monkeypatch, tmp_path):
+    """Нормальный случай: выбрал сразу — второго вызова (и лишних денег) быть не должно."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["2 | печать SEC"])
+    got = sw._vision_pick(imgs, "тело поста", "SEC", "key")
+    assert got[0] == imgs[1]
+    assert sw.LAST_COVER_NOTE == "выбор с первого круга"
 
 
-def test_drawn_editorial_illustration_is_allowed():
-    """Мой запрет 28.08 на «рваный коллаж» забраковал бы принятый #460 — снят по факту.
-    Рисованное как таковое НЕ запрещено: запрещена претензия картинки быть источником данных."""
-    c = sw._MEDIA_CRITERIA
-    assert "НЕ запрет на рисованное вообще" in c
-    assert "коллаж" in c
-    assert "рваный" not in c, "признак снят: ровно так выглядит принятая обложка #460"
+def test_zero_twice_is_the_only_refusal(monkeypatch, tmp_path):
+    """Отказ остаётся возможным — но только когда ОБА круга сказали «весь пул вредный»."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0 | всё ИИ-слоп"])
+    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
+    assert "вредный" in sw.LAST_COVER_NOTE
 
 
-def test_ban_targets_data_pretension_not_drawing():
-    c = sw._MEDIA_CRITERIA
-    assert "ПРЕТЕНДУЮЩИЙ БЫТЬ ИСТОЧНИКОМ ДАННЫХ" in c
-    assert "99.4" in c, "у запрета должен быть его повод — иначе правило сотрут как украшение"
-    assert "примет цифры с этой картинки за факт" in c, "нужен рабочий тест, а не список признаков"
+# ── ИНСТРУКЦИЯ ОТБОРА ЖИВЁТ В ПАМЯТИ, А НЕ В КОДЕ ───────────────────────────────────────────────
+# Владелец 07.09: «проведи анализ всех скоупов и картинок к постам, собери инструкцию подбора».
+# Инструкция выведена из 23 опубликованных обложек, прочитанных вместе с ТЕКСТАМИ их постов, и
+# лежит в memory/scope_cover_manual.md — владелец правит её руками, как остальные мануалы.
+
+def test_cover_rules_come_from_memory():
+    r = sw._cover_rules()
+    assert "ПОРТРЕТ ГЕРОЯ ПОВОДА" in r, "главное правило замера пропало из инструкции"
+    assert "НЕ РИСУЕТ" in r, "запрет рисовать — решение владельца, он должен доезжать до судьи"
+    assert "## 8." not in r, "каталог замера — материал для человека, в промпт его не тянем"
+
+
+def test_cover_manual_keeps_all_measured_routes():
+    """Пять маршрутов = то, откуда обложки реально брались. Пропал маршрут — сузился поиск."""
+    r = sw._cover_rules()
+    for route in ("Снятый объект компании или института", "Фирменное полотно или пресс-материал",
+                  "Человек из повода", "Предмет повода крупно", "Иллюстрация издания-первоисточника"):
+        assert route in r, f"маршрут «{route}» пропал из инструкции"
+
+
+def test_cover_manual_forbids_zero():
+    """§7: «ничего не подошло» — не ответ. Это ровно тот сбой, из-за которого чинили 07.09."""
+    r = sw._cover_rules()
+    assert "Ноль запрещён" in r
+    assert "наименее плохой" in r
 
 
 def test_text_on_cover_is_not_a_defect():
-    """Почти на каждой принятой обложке есть надпись (бренд, вывеска, заголовок) — браковать нельзя."""
-    assert "ТЕКСТ НА КАДРЕ — НОРМА" in sw._MEDIA_CRITERIA
+    """18 из 23 принятых обложек несут надпись (бренд, вывеска, заголовок) — браковать нельзя."""
+    assert "Надпись на кадре — норма" in sw._cover_rules()
 
 
-def test_subject_logo_is_first_class():
-    """Лого компании из повода — самый частый принятый кадр (7 из 23) и не вотермарк."""
-    c = sw._MEDIA_CRITERIA
-    assert "вотермарком НЕ считается" in c
+def test_small_frame_is_not_a_reason_to_refuse():
+    """Самая мелкая ПРИНЯТАЯ обложка канала — 499x281 (#440). Порог «мелко» бил по принятому."""
+    assert "499×281" in sw._cover_rules()
+
+
+def test_harm_list_is_the_only_ground_for_refusal():
+    """Второй круг отсекает по ВРЕДУ. Если в список просочится «скучно» — вернётся старый сбой."""
+    h = sw._COVER_HARM
+    for sign in ("ИИ-рендер", "вотермарк", "18+", "битая", "ПРОТИВОРЕЧАЩИЙ углу"):
+        assert sign in h
+    assert "«Скучно», «слабовато», «не идеально по смыслу», «похожее уже было» — НЕ вред" in h
+
+
+def test_rules_fall_back_when_manual_missing(monkeypatch):
+    """Файл памяти не доехал — судья всё равно получает ядро правил, а не пустую строку."""
+    monkeypatch.setattr(sw, "_read", lambda rel: "")
+    r = sw._cover_rules()
+    assert "ПОРТРЕТ ГЕРОЯ ПОВОДА" in r and len(r) > 200
 
 
 def test_cover_pick_is_not_on_the_cheapest_tier():
     """Выбор обложки — РАЗЛИЧЕНИЕ рисунка и скриншота, а не грубый гейт «картинка осмысленная?».
-    28.08 Haiku выбрал самую убедительную ИИ-инфографику вместо того, чтобы вернуть 0."""
-    assert sw.VISION_PICK_MODEL != sw.VISION_MODEL
+    28.08 Haiku на этом ошибся: из трёх ИИ-картинок выбрал самую убедительную ИИ-инфографику."""
+    assert "haiku" not in sw.VISION_PICK_MODEL
     assert sw.VISION_PICK_MODEL in cost.RATES, "новых моделей в учёт не заводим — цена должна быть известна"
 
 
@@ -304,3 +354,78 @@ def test_pipeline_scope_branch_never_generates():
     branch = src[start:end]
     assert "make_image" not in branch, "скоуп снова научился рисовать обложку — это запрещено"
     assert "MEDIA_OUTBOX" not in branch, "аутбокс флагман-обложки к скоупу отношения не имеет"
+
+
+# ── КОРЕНЬ СБОЯ 28.08–07.09: СУДЬЯ МОЛЧАЛ, А КОД ЗВАЛ ЭТО «НЕ НАШЛОСЬ» ───────────────────────────
+# Роль переехала на claude-sonnet-5 (0fba26b, 28.08). Модель новее думает по умолчанию, а вызов стоял
+# с max_tokens=40 — весь бюджет уходил в блок thinking, текста в ответе не оставалось. Пять скоупов
+# подряд ушли голым текстом, и панель всё это время писала «годного кадра не нашлось».
+
+class _ThinkingOnlyResp:
+    """Ответ модели, где весь бюджет съело мышление: блок есть, текста нет."""
+    def __init__(self):
+        self.stop_reason = "max_tokens"
+        self.content = [type("B", (), {"type": "thinking", "thinking": "..."})()]
+        self.usage = type("U", (), {"input_tokens": 1, "output_tokens": 40,
+                                    "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0})()
+
+
+def test_judge_is_asked_without_thinking(monkeypatch, tmp_path):
+    """Мышление гасим ЯВНО и держим запас токенов: иначе судья снова замолчит."""
+    seen = {}
+
+    class _Msgs:
+        def create(self, **kw):
+            seen.update(kw)
+            return _FakeResp("1 | печать ФРС")
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = _Msgs()
+
+    imgs = _fake_vision(monkeypatch, tmp_path, "1 | печать ФРС")
+    monkeypatch.setattr(sw, "Anthropic", _Client)
+    sw._vision_pick(imgs, "тело", "ФРС", "key")
+    assert seen.get("thinking") == {"type": "disabled"}, "мышление у судьи должно быть выключено явно"
+    assert seen.get("max_tokens", 0) >= 100, "40 токенов не оставляли запаса — ровно на этом всё и встало"
+
+
+def test_silent_judge_is_reported_as_breakage(monkeypatch, tmp_path):
+    """Пустой ответ — техническая поломка. Панель не должна выдавать её за «нет годных кадров»."""
+    imgs = _fake_vision(monkeypatch, tmp_path, "")
+
+    class _Msgs:
+        def create(self, **kw):
+            return _ThinkingOnlyResp()
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = _Msgs()
+
+    monkeypatch.setattr(sw, "Anthropic", _Client)
+    assert sw._vision_pick(imgs, "тело", "ФРС", "key") is None
+    assert "сбой" in sw.LAST_COVER_NOTE and "не ответил" in sw.LAST_COVER_NOTE
+
+
+def test_model_without_thinking_param_still_works(monkeypatch, tmp_path):
+    """Модель не знает параметра (400) — повторяем без него, а не остаёмся без обложки."""
+    from anthropic import BadRequestError
+    imgs = _fake_vision(monkeypatch, tmp_path, "2 | вывеска BNY")
+    calls = []
+
+    class _Msgs:
+        def create(self, **kw):
+            calls.append(kw)
+            if "thinking" in kw:
+                raise BadRequestError("thinking not supported", response=type("R", (), {
+                    "status_code": 400, "headers": {}, "request": None})(), body=None)
+            return _FakeResp("2 | вывеска BNY")
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = _Msgs()
+
+    monkeypatch.setattr(sw, "Anthropic", _Client)
+    got = sw._vision_pick(imgs, "тело", "BNY", "key")
+    assert got is not None and got[0] == imgs[1]
+    assert len(calls) == 2 and "thinking" not in calls[1]
