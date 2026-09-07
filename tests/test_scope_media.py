@@ -704,4 +704,4 @@ def test_drawing_reached_only_after_photo_and_brand(monkeypatch, tmp_path):
     imgs = _fake_vision_seq(monkeypatch, tmp_path,
                             ["0 | фото нет", "0 | полотна нет", "2 | коллаж моста Liquid"])
     got = sw._vision_pick(imgs, "тело", "Liquid Network", "key")
-    assert got[0] == imgs[1] and sw.LAST_COVER_NOTE == "выбор с первого круга"
+    assert got[0] == imgs[1] and sw.LAST_COVER_NOTE == "иллюстрация издания про это событие"
