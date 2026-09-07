@@ -146,9 +146,13 @@ def _fake_vision(monkeypatch, tmp_path, answer):
     return imgs
 
 
-def test_vision_pick_zero_means_no_cover(monkeypatch, tmp_path):
+def test_all_rounds_refusing_still_gives_a_cover(monkeypatch, tmp_path):
+    """Владелец 07.09: «не почти всегда картинка, а всегда. Без исключений». Все круги отказали —
+    берём ПЕРВЫЙ кадр пула (пул собран в порядке предпочтения), а панель говорит правду."""
     imgs = _fake_vision(monkeypatch, tmp_path, "0")
-    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
+    got = sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key")
+    assert got is not None and got[0] == imgs[0]
+    assert "забраковал весь пул" in sw.LAST_COVER_NOTE
 
 
 def test_vision_pick_takes_number(monkeypatch, tmp_path):
@@ -156,9 +160,11 @@ def test_vision_pick_takes_number(monkeypatch, tmp_path):
     assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key")[0] == imgs[1]
 
 
-def test_vision_pick_out_of_range_is_no_cover(monkeypatch, tmp_path):
+def test_out_of_range_number_is_not_trusted(monkeypatch, tmp_path):
+    """Номер вне диапазона — не выбор; но пост всё равно уходит с обложкой (первый кадр пула)."""
     imgs = _fake_vision(monkeypatch, tmp_path, "7")
-    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
+    got = sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key")
+    assert got is not None and got[0] == imgs[0]
 
 
 # ── ДВА КРУГА СУДЬИ: НОЛЬ ПЕРВОГО КРУГА — НЕ РЕШЕНИЕ (07.09) ────────────────────────────────────
@@ -206,11 +212,12 @@ def test_first_round_pick_does_not_ask_twice(monkeypatch, tmp_path):
     assert sw.LAST_COVER_NOTE == "снятая фотография по поводу", "фото берём первым кругом"
 
 
-def test_zero_twice_is_the_only_refusal(monkeypatch, tmp_path):
-    """Отказ остаётся возможным — но только когда ОБА круга сказали «весь пул вредный»."""
+def test_panel_names_the_reason_when_pool_was_refused(monkeypatch, tmp_path):
+    """Обложка ставится всегда — но владелец должен видеть, что судья ею недоволен."""
     imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0", "0", "0 | всё ИИ-слоп"])
-    assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
-    assert "вредный" in sw.LAST_COVER_NOTE
+    got = sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key")
+    assert got[0] == imgs[0]
+    assert sw.LAST_COVER_NOTE.startswith("⚠️") and "проверь" in sw.LAST_COVER_NOTE
 
 
 # ── ИНСТРУКЦИЯ ОТБОРА ЖИВЁТ В ПАМЯТИ, А НЕ В КОДЕ ───────────────────────────────────────────────
@@ -233,11 +240,13 @@ def test_cover_manual_keeps_all_measured_routes():
         assert route in r, f"маршрут «{route}» пропал из инструкции"
 
 
-def test_cover_manual_forbids_zero():
-    """§7: «ничего не подошло» — не ответ. Это ровно тот сбой, из-за которого чинили 07.09."""
+def test_cover_manual_promises_a_cover_always():
+    """§7 после правки владельца 07.09: «не почти всегда картинка, а всегда. Без исключений».
+    Отказ остаётся только физическим — когда не скачалось ни одного кадра."""
     r = sw._cover_rules()
-    assert "Ноль запрещён" in r
+    assert "ОБЛОЖКА ЕСТЬ ВСЕГДА" in r and "БЕЗ ИСКЛЮЧЕНИЙ" in r
     assert "наименее плохой" in r
+    assert "не скачалось НИ ОДНОГО кадра" in r
 
 
 def test_text_on_cover_is_not_a_defect():
@@ -295,9 +304,12 @@ def test_bare_number_still_works(monkeypatch, tmp_path):
     assert sw._vision_pick(imgs, "тело", "субъект", "key")[0] == imgs[2]
 
 
-def test_zero_with_label_is_still_no_cover(monkeypatch, tmp_path):
+def test_zero_with_label_names_the_reason_but_keeps_a_cover(monkeypatch, tmp_path):
+    """«0 | только ИИ-рендеры» — это диагноз, а не право оставить пост голым (владелец 07.09)."""
     imgs = _fake_vision(monkeypatch, tmp_path, "0 | только ИИ-рендеры")
-    assert sw._vision_pick(imgs, "тело", "субъект", "key") is None
+    got = sw._vision_pick(imgs, "тело", "субъект", "key")
+    assert got is not None and got[0] == imgs[0]
+    assert "проверь" in sw.LAST_COVER_NOTE
 
 
 def test_attach_media_writes_cover_log(monkeypatch, tmp_path):
@@ -392,8 +404,9 @@ def test_judge_is_asked_without_thinking(monkeypatch, tmp_path):
     assert seen.get("max_tokens", 0) >= 100, "40 токенов не оставляли запаса — ровно на этом всё и встало"
 
 
-def test_silent_judge_is_reported_as_breakage(monkeypatch, tmp_path):
-    """Пустой ответ — техническая поломка. Панель не должна выдавать её за «нет годных кадров»."""
+def test_silent_judge_is_named_a_breakage_but_post_keeps_a_cover(monkeypatch, tmp_path):
+    """Пустой ответ — техническая поломка, и панель обязана назвать её так. Но пост без картинки
+    не уходит: ставим первый кадр пула."""
     imgs = _fake_vision(monkeypatch, tmp_path, "")
 
     class _Msgs:
@@ -405,7 +418,8 @@ def test_silent_judge_is_reported_as_breakage(monkeypatch, tmp_path):
             self.messages = _Msgs()
 
     monkeypatch.setattr(sw, "Anthropic", _Client)
-    assert sw._vision_pick(imgs, "тело", "ФРС", "key") is None
+    got = sw._vision_pick(imgs, "тело", "ФРС", "key")
+    assert got is not None and got[0] == imgs[0]
     assert "сбой" in sw.LAST_COVER_NOTE and "не ответил" in sw.LAST_COVER_NOTE
 
 
@@ -484,15 +498,16 @@ def test_vertical_is_dropped_while_horizontal_exists(monkeypatch, tmp_path):
     assert "не-горизонталь отсеяна: 2" in sw.LAST_POOL_NOTE, "панель должна показать, что отсеяно"
 
 
-def test_vertical_is_never_padded_into_the_pool(monkeypatch, tmp_path):
-    """Владелец 07.09 внёс поля в стоп-лист первым пунктом: «вертикальные фото в горизонтальном
-    формате» — нельзя. Раньше тут был фолбэк «нет горизонтали — берём вертикаль с полями», и он же
-    отправил в отложку башню DBS посреди синих полей. Пустой пул честнее плохой обложки."""
+def test_vertical_is_used_when_there_is_no_horizontal(monkeypatch, tmp_path):
+    """Горизонталь — предпочтение, а не вето: это был единственный фильтр, способный опустошить пул.
+    Владелец 07.09: картинка всегда, без исключений."""
     made = _pool(monkeypatch, tmp_path, [0.66, 1.0])
-    monkeypatch.setattr(sw, "_vision_pick", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("судью звать не с чем — весь пул это поля по бокам")))
-    assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k") == ""
-    assert "не-горизонталь отсеяна: 2" in sw.LAST_POOL_NOTE
+    seen = {}
+    monkeypatch.setattr(sw, "_vision_pick",
+                        lambda imgs, *a, **k: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
+    out = sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+    assert out and seen["pool"] == made
+    assert "горизонталей нет" in sw.LAST_POOL_NOTE
 
 
 # ── ПУЛ: ШАПКИ ПЕРЕД ТЕЛОМ, ПОИСК ПО ОБЪЕКТУ — СТРАХОВКА (07.09) ────────────────────────────────
@@ -562,13 +577,13 @@ def test_subject_search_still_saves_an_empty_pool(monkeypatch, tmp_path):
     assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
 
 
-def test_forced_pick_that_admits_a_violation_is_a_refusal(monkeypatch, tmp_path):
-    """Второй круг запрещает ноль — и на мусорном пуле модель называет номер, а в ярлыке пишет, за
-    что кадр браковать («не по теме», «это ИИ-генерация»). Номер из-под палки — не выбор."""
-    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0", "0",
-                                                    "2 | старинная церковь, не по теме"])
-    assert sw._vision_pick(imgs, "тело", "Binance", "key") is None
-    assert "забраковал весь пул" in sw.LAST_COVER_NOTE
+def test_forced_pick_that_admits_a_violation_is_flagged_not_dropped(monkeypatch, tmp_path):
+    """Последний круг называет номер и сам же его бракует («не по теме»). Кадр ставим — обложка
+    обязана быть, — но панель повторяет владельцу его же диагноз."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0", "0", "2 | старинная церковь, не по теме"])
+    got = sw._vision_pick(imgs, "тело", "Binance", "key")
+    assert got is not None and got[0] == imgs[1]
+    assert "лучшее из плохого" in sw.LAST_COVER_NOTE
 
 
 def test_normal_label_is_not_mistaken_for_a_confession(monkeypatch, tmp_path):
