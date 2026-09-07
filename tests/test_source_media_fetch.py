@@ -354,3 +354,50 @@ def test_landscape_photo_is_marked_landscape(monkeypatch, tmp_path):
     monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_png_bytes(1200, 800), "image/png"))
     p = fetch.download("https://cdn.x/hq.png")
     assert fetch.is_landscape(p), "3:2 — нормальная снятая горизонталь канала (#451, #472, #486)"
+
+
+# --- ТИР-1 ЗАКРЫТ ДЛЯ СТРАНИЦ, НО ОТКРЫТ ДЛЯ RSS (07.09) ------------------------------------------
+# coindesk отдаёт 429, theblock — 403: защита от ботов, заголовками не лечится. Замер 31.08 списал их
+# в потери, и пул две недели кормили издания послабее — а лучшая художка среди 23 принятых обложек
+# была как раз оттуда. Лента у обоих открыта и несёт тот же кадр, что стоит в шапке статьи.
+
+_FEED = """<rss><channel>
+<item><link>https://www.theblock.co/news/markets/2026-09-07-bitcoin-holds/</link>
+<media:content url="https://www.tbstat.com/wp/uploads/2026/09/fed-1200x675.jpg"/></item>
+<item><link>https://www.theblock.co/news/other/2026-09-06-something-else</link>
+<media:content url="https://www.tbstat.com/wp/uploads/2026/09/other-1200x675.jpg"/></item>
+</channel></rss>"""
+
+ART = "https://www.theblock.co/news/markets/2026-09-07-bitcoin-holds"
+
+
+def test_feed_image_found_for_blocked_page(monkeypatch):
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_FEED.encode(), "application/rss+xml"))
+    got = fetch.feed_image_url(ART)
+    assert got and got.endswith("fed-1200x675.jpg"), "ссылка сравнивается без слэшей и query"
+
+
+def test_feed_never_substitutes_a_neighbouring_article(monkeypatch):
+    """Чужая картинка из соседней новости хуже отсутствия обложки — подставлять нельзя."""
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: (_FEED.encode(), "application/rss+xml"))
+    assert fetch.feed_image_url("https://www.theblock.co/news/markets/2026-09-07-not-in-feed") is None
+
+
+def test_unknown_host_has_no_feed(monkeypatch):
+    assert fetch.feed_image_url("https://example.com/some/article") is None
+
+
+def test_blocked_page_falls_back_to_feed(monkeypatch, tmp_path):
+    """Сквозной путь: страница 403 → кадр всё равно приезжает, и он считается ШАПКОЙ."""
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+
+    def fake(url, **k):
+        if url == ART:
+            return None                                   # страница закрыта
+        if url.endswith(".jpg"):
+            return (_png_bytes(1200, 675), "image/png")   # кадр из ленты
+        return (_FEED.encode(), "application/rss+xml")
+
+    monkeypatch.setattr(feeds, "fetch_bytes", fake)
+    got = fetch.fetch_source_images(ART, name="tier1")
+    assert len(got) == 1 and fetch.is_header(got[0])

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from connectors.web_sources import feeds
 from core import config
@@ -387,6 +387,68 @@ def download(img_url: str, name: str = "scope", min_side: int = _MIN_SIDE) -> Pa
     return _normalize(dest, min_side)  # ресайз/JPEG → валидное Telegram-фото (Pillow нет → как есть)
 
 
+# ══ ТИР-1 ЗАКРЫТ ДЛЯ СТРАНИЦ, НО ОТКРЫТ ДЛЯ RSS (07.09) ══
+# coindesk отдаёт 429, theblock — 403, и это не заголовки: у них защита от ботов на самой странице.
+# Замер 31.08 списал их в потери, и с тех пор пул кормили издания послабее — а лучшая художка в 23
+# принятых обложках была как раз оттуда. Но лента у обоих открыта БЕЗ ограничений, и в ней лежит
+# ровно тот кадр, что стоит в шапке статьи: 1732x974 у coindesk, 1200x675 у theblock (в живой
+# проверке 07.09 вторым элементом ленты theblock лежало пресс-фото DBS — ровно того класса, что
+# владелец ставит руками). Значит страница нам и не нужна: заблокирована — идём в ленту.
+# Лента отдаёт 20-25 свежих материалов, а скоуп пишет о поводе возрастом 1-3 дня — попадание есть.
+_FEED_BY_HOST = {
+    "coindesk.com": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "theblock.co": "https://www.theblock.co/rss.xml",
+    "cointelegraph.com": "https://cointelegraph.com/rss",
+    "decrypt.co": "https://decrypt.co/feed",
+    "cryptoslate.com": "https://cryptoslate.com/feed/",
+    "coingape.com": "https://coingape.com/feed/",
+    "crypto.news": "https://crypto.news/feed/",
+    "thedefiant.io": "https://thedefiant.io/api/feed",
+    "blockworks.co": "https://blockworks.co/feed",
+}
+_ITEM_SPLIT = re.compile(r"<item\b", re.I)
+_LINK_RE = re.compile(r"<link[^>]*>\s*(?:<!\[CDATA\[)?([^<\]]+)", re.I)
+_FEED_IMG_RE = re.compile(
+    r"""<(?:media:content|media:thumbnail|enclosure)[^>]*?\burl\s*=\s*["']([^"']+)["']""", re.I)
+
+
+def _url_key(url: str) -> str:
+    """Ключ сравнения ссылок: хост+путь без query, слэшей и www — ленты и статьи их пишут по-разному."""
+    try:
+        u = urlparse(url)
+        return (u.netloc.lower().removeprefix("www.") + u.path.rstrip("/")).lower()
+    except Exception:
+        return (url or "").lower()
+
+
+def feed_image_url(page_url: str) -> str | None:
+    """Кадр статьи из RSS её издания. Нужен, когда сама страница закрыта (429/403).
+
+    Ищем в ленте элемент с той же ссылкой и берём его media:content/enclosure. Не нашли элемент —
+    None: чужую картинку из соседней новости подставлять нельзя, это хуже отсутствия обложки."""
+    host = _url_key(page_url).split("/")[0]
+    feed = next((f for h, f in _FEED_BY_HOST.items() if host == h or host.endswith("." + h)), None)
+    if not feed:
+        return None
+    got = feeds.fetch_bytes(feed, max_bytes=800_000)
+    if not got:
+        logging.info("source_media: лента %s не ответила (%s)", feed, feeds.last_error(feed) or "?")
+        return None
+    xml = got[0].decode("utf-8", errors="replace")
+    want = _url_key(page_url)
+    for chunk in _ITEM_SPLIT.split(xml)[1:]:
+        m = _LINK_RE.search(chunk)
+        if not m or _url_key(m.group(1).strip()) != want:
+            continue
+        img = _FEED_IMG_RE.search(chunk)
+        if img:
+            logging.info("source_media: страница закрыта, кадр статьи взят из ленты %s", host)
+            return img.group(1)
+        return None
+    logging.info("source_media: в ленте %s этой статьи нет (лента отдаёт только свежие)", host)
+    return None
+
+
 def fetch_source_image(page_url: str, name: str = "scope") -> Path | None:
     """Полный путь: страница повода → её og:image → скачать. None, если картинки нет/не годна."""
     iu = og_image_url(page_url)
@@ -404,6 +466,12 @@ def fetch_source_images(page_url: str, name: str = "scope", limit: int = 1 + ART
     """
     html = _page_html(page_url)          # страницу тянем ОДИН раз: и шапка, и тело — из этого же HTML
     if not html:
+        # СТРАНИЦА ЗАКРЫТА (429/403 у тир-1) — идём за кадром статьи в её же ленту.
+        alt = feed_image_url(page_url)
+        p = download(alt, name=f"{name}_0", min_side=_MIN_SIDE) if alt else None
+        if p:
+            _ROLE[str(p)] = "шапка"
+            return [p]
         return []
     urls: list[tuple[str, int]] = []          # (url, пол разрешения по роли кадра)
     og = _og_from_html(html, page_url)
