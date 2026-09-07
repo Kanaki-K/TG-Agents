@@ -497,7 +497,7 @@ def _answer_index(ans: str, n: int) -> tuple:
     return (idx if 1 <= idx <= n else 0), " ".join(tail.split())[:80]
 
 
-def _vision_pick(images: list, post_body: str, subject: str, key: str):
+def _vision_pick(images: list, post_body: str, subject: str, key: str, routes: dict | None = None):
     """Vision ВЫБИРАЕТ кадр под пост по инструкции из памяти (см. _cover_rules). Возвращает
     (Path, ярлык) или None. Ярлык («полотно Liquid Network») приходит тем же вызовом и стоит
     несколько токенов — он нужен журналу обложек для анти-повтора (core/scope_cover_log).
@@ -519,11 +519,18 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
             return None
         topic = "\n".join(l for l in post_body.splitlines() if l.strip())[:600]
         anchor = f"Повод про: {subject}\n\n" if subject else ""
+        # МАРШРУТ КАЖДОГО КАДРА — В ПОДПИСЬ. Порядок предпочтения из мануала §3 (снятый объект →
+        # полотно бренда → человек → предмет → иллюстрация издания) неисполним, пока судья не знает,
+        # чем кадр ЯВЛЯЕТСЯ. На глаз фирменное полотно от редакционной иллюстрации отличимо не всегда,
+        # а мы знаем точно: полотно пришло с официального сайта объекта, коллаж — со страницы издания.
+        # 07.09: судья дважды подряд взял коллаж издания при наличии полотна Liquid Network, которое
+        # владелец поставил руками. Полотен на канале 6 из 23, иллюстраций изданий 2.
         shots: list = []
         for i, p in enumerate(images, 1):
             mt = _IMG_MEDIA_TYPE.get(p.suffix.lower(), "image/jpeg")
             b64 = base64.standard_b64encode(p.read_bytes()).decode()
-            shots.append({"type": "text", "text": f"Картинка {i}:"})
+            route = (routes or {}).get(str(p), "")
+            shots.append({"type": "text", "text": f"Картинка {i}{f' — {route}' if route else ''}:"})
             shots.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}})
         model = runmode.resolve(VISION_PICK_MODEL, ceiling=VISION_PICK_MODEL)
         client = Anthropic(api_key=key)
@@ -603,6 +610,9 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
 MEDIA_POOL_CAP = 8
 
 
+# Со скольких кадров со страниц повода поиск по объекту считается ненужным. Один кадр — это ещё не
+# выбор (он может оказаться ИИ-шапкой), два — уже пул.
+SUBJECT_FALLBACK_MIN = 2
 # Сколько кадров приносит ПОИСК ПО ОБЪЕКТУ повода. Три — чтобы у vision был реальный выбор между
 # полотном бренда, снятым объектом и страховочным лого, и при этом пул не раздувался.
 SUBJECT_FRAMES = 3
@@ -671,6 +681,7 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     imgs: list = []
     prints: list = []
     notes: list[str] = []
+    routes: dict = {}   # путь кадра → каким маршрутом он найден (для порядка предпочтения §3 мануала)
 
     def take(path, src: str) -> None:
         """Положить кадр в пул, если такой картинки там ещё нет (дубль по ОТПЕЧАТКУ, не по байтам)."""
@@ -681,30 +692,16 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
         prints.append(fp)
         imgs.append(path)
 
-    # 1) ПОИСК ПО ОБЪЕКТУ ПОВОДА — полотно бренда / снятый объект / человек, и лишь затем лого.
-    # Мету писатель даёт не всегда, а обложка от его дисциплины зависеть не должна: пустой [[MEDIA_SUBJECT]]
-    # означал «искать не по чему» и гарантировал пост без картинки. Имена берём из самого поста.
+    # ══ ПОРЯДОК МАРШРУТОВ ВЕРНУЛИ К ДОПЕРЕЛОМНОМУ (07.09) ══
+    # 31.08 я поставил ПЕРВЫМ поиск по объекту — тогда обе статьи-первоисточника не дали ничего, и
+    # поиск спас прогон. Но как ПОСТОЯННЫЙ первый маршрут он подменяет задачу: Wikidata и Commons
+    # отдают «фото фирмы вообще» (башня, вход в отделение, лого), а не кадр про ЭТО событие. Все 23
+    # принятые обложки канала — кадр материала про конкретный повод: его подобрал живой редактор
+    # издания или пресс-служба. Владелец 07.09, сравнив папки: «раньше делал хорошо».
+    # Поэтому: сперва шапки страниц повода, поиск по объекту — СТРАХОВКА, когда их не набралось.
     subject = subject or _subject_from_post(post_body)
-    try:
-        found = source_media.subject_image_urls(subject, limit=SUBJECT_FRAMES,
-                                                page_urls=source_urls or []) if subject else []
-    except Exception:
-        logging.exception("scope: поиск кадра по объекту повода не отработал")
-        found = []
-    got_n = 0
-    for j, url in enumerate(found):
-        try:
-            p = source_media.download(url, name=f"scope_subj_{j}", min_side=source_media.MIN_LOGO_SIDE)
-        except Exception:
-            logging.exception("scope: найденный кадр не скачался (%s)", url)
-            p = None
-        if p:
-            take(p, "поиск")
-            got_n += 1
-    notes.append(_pool_note("поиск по объекту", got_n,
-                            "" if subject else "писатель не дал [[MEDIA_SUBJECT]]"))
 
-    # 2) КАДРЫ СО СТРАНИЦ ПОВОДА — шапка + тело статьи.
+    # 1) КАДРЫ СО СТРАНИЦ ПОВОДА — то, чем иллюстрировали ИМЕННО ЭТУ новость.
     for i, url in enumerate(source_urls or []):
         if len(imgs) >= MEDIA_POOL_CAP:
             logging.info("scope: пул упёрся в кап %d — остальные страницы не тяну "
@@ -715,10 +712,37 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
         except Exception:
             logging.exception("scope: кадры со страницы не достал (%s)", url)
             got = []
+        host = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
         for p in got:
             take(p, url)
-        host = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+            routes[str(p)] = f"кадр со страницы первоисточника {host}"
         notes.append(_pool_note(host, len(got), feeds.last_error(url)))
+
+    # 2) ПОИСК ПО ОБЪЕКТУ — страховка. Включается, когда страницы дали мало: 31.08 они не дали ничего,
+    # и пост ушёл текстом при живом бренд-полотне Robinhood в открытом доступе.
+    if len([p for p in imgs if source_media.is_header(p)]) < SUBJECT_FALLBACK_MIN and subject:
+        try:
+            found = source_media.subject_image_urls(subject, limit=SUBJECT_FRAMES,
+                                                    page_urls=source_urls or [])
+        except Exception:
+            logging.exception("scope: поиск кадра по объекту повода не отработал")
+            found = []
+        got_n = 0
+        for j, url in enumerate(found):
+            try:
+                p = source_media.download(url, name=f"scope_subj_{j}", min_side=source_media.MIN_LOGO_SIDE)
+            except Exception:
+                logging.exception("scope: найденный кадр не скачался (%s)", url)
+                p = None
+            if p:
+                take(p, "поиск")
+                routes[str(p)] = source_media.kind_of(url)
+                got_n += 1
+        notes.append(_pool_note("поиск по объекту (страховка)", got_n,
+                                "" if subject else "объект повода не определён"))
+    else:
+        logging.info("scope: страницы повода дали достаточно кадров — поиск по объекту не запускаю")
+
     imgs = imgs[:MEDIA_POOL_CAP]
 
     # ══ ФОРМАТ КАНАЛА — ГОРИЗОНТАЛЬ, И ЭТО ОТБОР, А НЕ ПОЖЕЛАНИЕ (07.09) ══
@@ -729,6 +753,25 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     # Достройка полями остаётся, но как ПОСЛЕДНЕЕ средство: пока в пуле есть хоть один снятый
     # горизонтальный кадр, вертикали и квадраты до судьи не доходят. Правилом в промпте это не
     # решается — формат считается арифметикой, значит место ему в коде.
+    # ══ ШАПКИ ПЕРЕД ТЕЛОМ: ВСЕ 23 ПРИНЯТЫЕ ОБЛОЖКИ — ШАПКИ (07.09) ══
+    # Владелец, сравнив папки: «соурс медиа — низкокачественное дерьмо, публишед коверс — отличный
+    # формат». Разница не во вкусе судьи, а в составе пула. Обложки канала — это og:image материала,
+    # пресс-фото и полотна с официальных сайтов; из ТЕЛА статьи не пришла ни одна. Кадры из тела
+    # заведены 26.08 против «пула из одних ИИ-шапок», и вместе с полезным втянули то, что в теле и
+    # живёт: аватарки колумнистов Cointelegraph, инлайн-инфографику с цифрами, превью соседних новостей.
+    # Тело остаётся страховкой на случай, когда шапок нет вовсе, — но пока шапки есть, до судьи доходят
+    # только они. Кадры поиска по объекту считаем шапками: это не выскребание страницы, а адресная
+    # находка (полотно официального сайта, фото объекта).
+    heads = [p for p in imgs if source_media.is_header(p)]
+    if heads and len(heads) < len(imgs):
+        logging.info("scope: из пула убрано %d кадр(ов) из ТЕЛА статей — все 23 принятые обложки "
+                     "канала это шапки материала (og:image/пресс-фото/полотно)", len(imgs) - len(heads))
+        notes.append(f"кадры из тела статей отсеяны: {len(imgs) - len(heads)}")
+        imgs = heads
+    elif not heads and imgs:
+        logging.info("scope: шапок в пуле нет — беру кадры из тела статей (обложка обязана быть)")
+        notes.append("шапок не нашлось — кадры из тела")
+
     wide = [p for p in imgs if source_media.is_landscape(p)]
     if wide and len(wide) < len(imgs):
         logging.info("scope: из пула убрано %d кадр(ов) не-горизонтали — формат канала 21 из 23 "
@@ -745,7 +788,7 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     if not imgs:
         logging.info("scope: кадров нет ни по объекту повода, ни на страницах — уйдём текстом")
         return ""
-    picked = _vision_pick(imgs, post_body, subject, key)
+    picked = _vision_pick(imgs, post_body, subject, key, routes)
     if not picked:
         logging.info("scope: vision не выбрал подходящую по смыслу картинку (%d кандидат.) — уйдём текстом",
                      len(imgs))

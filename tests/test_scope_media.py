@@ -491,3 +491,65 @@ def test_vertical_is_kept_when_nothing_else(monkeypatch, tmp_path):
     out = sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
     assert seen["pool"] == made and out, "без горизонталей берём что есть, а не уходим текстом"
     assert "горизонтали не нашлось" in sw.LAST_POOL_NOTE
+
+
+# ── ПУЛ: ШАПКИ ПЕРЕД ТЕЛОМ, ПОИСК ПО ОБЪЕКТУ — СТРАХОВКА (07.09) ────────────────────────────────
+# Владелец, сравнив data/source_media с data/published_covers: «соурс медиа — низкокачественное
+# дерьмо, публишед коверс — отличный формат. Он продолжает делать дерьмо, когда есть отличный».
+# Все 23 принятые обложки — шапки материала. Из тела статьи не пришла ни одна: там живут аватарки
+# колумнистов, инлайн-инфографика и превью соседних новостей.
+
+def test_body_frames_dropped_while_headers_exist(monkeypatch, tmp_path):
+    _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
+    made = []
+    for i, role in enumerate(("шапка", "тело", "тело")):
+        q = tmp_path / f"h{i}.jpg"
+        q.write_bytes(b"\xff\xd8" + b"0" * 100)
+        monkeypatch.setitem(sw.source_media.fetch._ROLE, str(q), role)
+        monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+        made.append(q)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": list(made))
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    seen = {}
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
+    sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+    assert seen["pool"] == [made[0]], "инлайн-картинки статьи до судьи доходить не должны"
+    assert "кадры из тела статей отсеяны: 2" in sw.LAST_POOL_NOTE
+
+
+def test_subject_search_is_a_fallback_not_the_first_route(monkeypatch, tmp_path):
+    """31.08 поиск по объекту стоял ПЕРВЫМ и подменял «кадр про событие» на «фото фирмы вообще».
+    Страницы дали достаточно — поиск не запускаем (и не тратим на него сеть и время)."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    called = []
+    monkeypatch.setattr(sw.source_media, "subject_image_urls",
+                        lambda *a, **k: called.append(1) or [])
+    made = []
+    for i in range(2):
+        q = tmp_path / f"g{i}.jpg"
+        q.write_bytes(b"\xff\xd8" + b"0" * 100)
+        monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+        made.append(q)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": list(made))
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "кадр"))
+    sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+    assert not called, "две шапки со страниц повода — поиск по объекту не нужен"
+
+
+def test_subject_search_still_saves_an_empty_pool(monkeypatch, tmp_path):
+    """А когда страницы молчат (429/403, как 31.08) — страховка обязана сработать."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    q = tmp_path / "subj.jpg"
+    q.write_bytes(b"\xff\xd8" + b"0" * 100)
+    monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": [])
+    monkeypatch.setattr(sw.source_media, "subject_image_urls", lambda *a, **k: ["https://cdn/x.jpg"])
+    monkeypatch.setattr(sw.source_media, "download", lambda url, name="scope", min_side=0: q)
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "кадр"))
+    assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")

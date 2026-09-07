@@ -12,10 +12,11 @@
 """
 from connectors.source_media.fetch import (LANDSCAPE_MIN, article_images, download,
                                            fetch_source_image, fetch_source_images,
-                                           frame_fingerprint, is_landscape, looks_same,
+                                           frame_fingerprint, is_header, is_landscape, looks_same,
                                            og_image_url, orig_ratio)
-from connectors.source_media.subject_media import MIN_LOGO_SIDE, subject_image_urls
+from connectors.source_media.subject_media import (MIN_LOGO_SIDE, kind_of,
+                                                    subject_image_urls)
 
 __all__ = ["article_images", "download", "fetch_source_image", "fetch_source_images",
-           "frame_fingerprint", "is_landscape", "looks_same", "og_image_url", "orig_ratio",
-           "subject_image_urls", "LANDSCAPE_MIN", "MIN_LOGO_SIDE"]
+           "frame_fingerprint", "is_header", "is_landscape", "looks_same", "og_image_url", "orig_ratio",
+           "subject_image_urls", "kind_of", "LANDSCAPE_MIN", "MIN_LOGO_SIDE"]
