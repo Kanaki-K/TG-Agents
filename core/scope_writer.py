@@ -663,6 +663,9 @@ MEDIA_POOL_CAP = 8
 # Список узкий и заводится по факту: доказательство — ноль таких среди 23 принятых обложек.
 MASCOT_HOSTS = {"cointelegraph.com"}
 SUBJECT_FALLBACK_MIN = 2
+# Сколько кадров берём у поиска по объекту, когда шапок со статей и так хватает: это не спасение
+# пустого пула, а АЛЬТЕРНАТИВА рисунку издания — фирменное полотно с официального сайта.
+SUBJECT_EXTRA = 2
 # Сколько кадров приносит ПОИСК ПО ОБЪЕКТУ повода. Три — чтобы у vision был реальный выбор между
 # полотном бренда, снятым объектом и страховочным лого, и при этом пул не раздувался.
 SUBJECT_FRAMES = 3
@@ -770,10 +773,17 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
 
     # 2) ПОИСК ПО ОБЪЕКТУ — страховка. Включается, когда страницы дали мало: 31.08 они не дали ничего,
     # и пост ушёл текстом при живом бренд-полотне Robinhood в открытом доступе.
-    if len([p for p in imgs if source_media.is_header(p)]) < SUBJECT_FALLBACK_MIN and subject:
+    # ПОИСК ПО ОБЪЕКТУ ИДЁТ ВСЕГДА — НО ВТОРЫМ (07.09, вечер). Сперва он был первым маршрутом и
+    # подменял кадр события «фото фирмы вообще» (31.08). Потом стал включаться только при нехватке
+    # шапок — и это тоже мимо: у сюжетов про ПРОТОКОЛЫ (Ethereum, Solana, Robinhood Chain) шапок
+    # много, но снимать там нечего, и все они РИСОВАННЫЕ. Прогон 07.09: три сюжета из четырёх дали
+    # 3D-логотип, ИИ-коллаж и абстракцию — при живом фирменном полотне на ethereum.org и solana.com.
+    # Фирменное полотно бренда — законный класс канала (6 обложек из 23), и судья должен видеть его
+    # рядом с рисунком издания. Двух кадров хватает: пул и так упирается в кап.
+    if subject:
         try:
-            found = source_media.subject_image_urls(subject, limit=SUBJECT_FRAMES,
-                                                    page_urls=source_urls or [])
+            need = SUBJECT_FRAMES if len(imgs) < SUBJECT_FALLBACK_MIN else SUBJECT_EXTRA
+            found = source_media.subject_image_urls(subject, limit=need, page_urls=source_urls or [])
         except Exception:
             logging.exception("scope: поиск кадра по объекту повода не отработал")
             found = []
@@ -788,10 +798,10 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
                 take(p, "поиск")
                 routes[str(p)] = source_media.kind_of(url)
                 got_n += 1
-        notes.append(_pool_note("поиск по объекту (страховка)", got_n,
+        notes.append(_pool_note("поиск по объекту", got_n,
                                 "" if subject else "объект повода не определён"))
     else:
-        logging.info("scope: страницы повода дали достаточно кадров — поиск по объекту не запускаю")
+        logging.info("scope: объект повода не определён — поиск кадра по нему не запускаю")
 
     imgs = imgs[:MEDIA_POOL_CAP]
 

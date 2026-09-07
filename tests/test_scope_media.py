@@ -520,25 +520,30 @@ def test_body_frames_dropped_while_headers_exist(monkeypatch, tmp_path):
     assert "кадры из тела статей отсеяны: 2" in sw.LAST_POOL_NOTE
 
 
-def test_subject_search_is_a_fallback_not_the_first_route(monkeypatch, tmp_path):
+def test_subject_search_runs_second_but_always(monkeypatch, tmp_path):
     """31.08 поиск по объекту стоял ПЕРВЫМ и подменял «кадр про событие» на «фото фирмы вообще».
-    Страницы дали достаточно — поиск не запускаем (и не тратим на него сеть и время)."""
+    Потом включался только при нехватке шапок — и это тоже мимо: у сюжетов про протоколы шапок
+    много, но все РИСОВАННЫЕ (3D-логотип, ИИ-коллаж, абстракция). Теперь он идёт ВТОРЫМ, но всегда:
+    фирменное полотно с официального сайта — законный класс канала (6 обложек из 23)."""
     _cover_to_tmp(monkeypatch, tmp_path)
-    called = []
+    asked = []
     monkeypatch.setattr(sw.source_media, "subject_image_urls",
-                        lambda *a, **k: called.append(1) or [])
+                        lambda subj, limit=3, page_urls=None: asked.append(limit) or [])
     made = []
     for i in range(2):
         q = tmp_path / f"g{i}.jpg"
         q.write_bytes(b"\xff\xd8" + b"0" * 100)
         monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
         made.append(q)
-    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": list(made))
+    order = []
+    monkeypatch.setattr(sw.source_media, "fetch_source_images",
+                        lambda url, name="scope": order.append("страницы") or list(made))
     monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
     monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
-    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "кадр"))
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a, **k: (imgs[0], "кадр"))
     sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
-    assert not called, "две шапки со страниц повода — поиск по объекту не нужен"
+    assert order == ["страницы"], "страницы повода тянем ПЕРВЫМИ"
+    assert asked == [sw.SUBJECT_EXTRA], "при живых шапках берём у поиска только альтернативу, не пул"
 
 
 def test_subject_search_still_saves_an_empty_pool(monkeypatch, tmp_path):
