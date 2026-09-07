@@ -252,8 +252,9 @@ def test_small_frame_is_not_a_reason_to_refuse():
 def test_harm_list_is_the_only_ground_for_refusal():
     """Второй круг отсекает по ВРЕДУ. Если в список просочится «скучно» — вернётся старый сбой."""
     h = sw._COVER_HARM
-    for sign in ("ИИ-рендер", "вотермарк", "18+", "битая", "ПРОТИВОРЕЧАЩИЙ углу"):
-        assert sign in h
+    for sign in ("ИИ-генерация", "вотермарк", "18+", "мерч", "квитанция", "скриншот интерфейса",
+                 "просто дом", "полями по бокам", "ПРОТИВОРЕЧАЩИЙ углу"):
+        assert sign in h, f"пункт стоп-листа «{sign}» пропал из списка вреда"
     assert "«Скучно», «слабовато», «не идеально по смыслу», «похожее уже было» — НЕ вред" in h
 
 
@@ -482,15 +483,15 @@ def test_vertical_is_dropped_while_horizontal_exists(monkeypatch, tmp_path):
     assert "не-горизонталь отсеяна: 2" in sw.LAST_POOL_NOTE, "панель должна показать, что отсеяно"
 
 
-def test_vertical_is_kept_when_nothing_else(monkeypatch, tmp_path):
-    """#441 (вертикальная инфографика) и #456 (квадратный портрет) на канале приняты — значит
-    вертикаль это последнее средство, а не запрет. Обложка обязана быть."""
+def test_vertical_is_never_padded_into_the_pool(monkeypatch, tmp_path):
+    """Владелец 07.09 внёс поля в стоп-лист первым пунктом: «вертикальные фото в горизонтальном
+    формате» — нельзя. Раньше тут был фолбэк «нет горизонтали — берём вертикаль с полями», и он же
+    отправил в отложку башню DBS посреди синих полей. Пустой пул честнее плохой обложки."""
     made = _pool(monkeypatch, tmp_path, [0.66, 1.0])
-    seen = {}
-    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
-    out = sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
-    assert seen["pool"] == made and out, "без горизонталей берём что есть, а не уходим текстом"
-    assert "горизонтали не нашлось" in sw.LAST_POOL_NOTE
+    monkeypatch.setattr(sw, "_vision_pick", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("судью звать не с чем — весь пул это поля по бокам")))
+    assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k") == ""
+    assert "не-горизонталь отсеяна: 2" in sw.LAST_POOL_NOTE
 
 
 # ── ПУЛ: ШАПКИ ПЕРЕД ТЕЛОМ, ПОИСК ПО ОБЪЕКТУ — СТРАХОВКА (07.09) ────────────────────────────────
@@ -553,3 +554,28 @@ def test_subject_search_still_saves_an_empty_pool(monkeypatch, tmp_path):
     monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
     monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "кадр"))
     assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+
+
+def test_forced_pick_that_admits_a_violation_is_a_refusal(monkeypatch, tmp_path):
+    """Второй круг запрещает ноль — и на мусорном пуле модель называет номер, а в ярлыке пишет, за
+    что кадр браковать («не по теме», «это ИИ-генерация»). Номер из-под палки — не выбор."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "2 | старинная церковь, не по теме"])
+    assert sw._vision_pick(imgs, "тело", "Binance", "key") is None
+    assert "забраковал весь пул" in sw.LAST_COVER_NOTE
+
+
+def test_normal_label_is_not_mistaken_for_a_confession(monkeypatch, tmp_path):
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "2 | вход в штаб-квартиру BNY"])
+    got = sw._vision_pick(imgs, "тело", "BNY", "key")
+    assert got is not None and got[0] == imgs[1]
+
+
+def test_first_round_confession_goes_to_second_round(monkeypatch, tmp_path):
+    """07.09 первый круг вернул «ИИ-рисунок кита. Однако по стоп-листу это ИИ-генерация» — и номер.
+    Признание в ярлыке = ноль на ЛЮБОМ круге, дальше второй заход по остальным кадрам."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path,
+                            ["1 | ИИ-рисунок кита, по стоп-листу это ИИ-генерация",
+                             "3 | печать ФРС на фасаде"])
+    got = sw._vision_pick(imgs, "тело", "Bitcoin", "key")
+    assert got is not None and got[0] == imgs[2]
+    assert "второго круга" in sw.LAST_COVER_NOTE

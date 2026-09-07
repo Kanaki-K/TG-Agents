@@ -63,6 +63,25 @@ def _og_from_html(html: str, page_url: str) -> str | None:
     return None
 
 
+# ── МУСОР ПО ИМЕНИ ФАЙЛА (стоп-лист владельца 07.09) ────────────────────────────────────────────
+# Wikimedia честно отдаёт всё, что подписано именем объекта: у Binance это оказалась ФУТБОЛКА и
+# сумка с логотипом, у Bitcoin — СКРИНШОТ окна Bitcoin Core Wallet. Оба уехали в демо-прогон 07.09
+# как обложки. Судья их отсекает не всегда (формально «объект повода на кадре»), а стоит это
+# vision-токенов на каждом прогоне — дешевле не тащить вовсе.
+_JUNK_NAME = re.compile(
+    r"(t[-_ ]?shirt|tshirt|hoodie|sweatshirt|mug|cup|sticker|merch|tote|cap[-_ ]|badge|lanyard"
+    r"|screenshot|screen[-_ ]?shot|wallet[-_ ]?screen|receipt|invoice|statement"
+    r"|qr[-_ ]?code|favicon|placeholder|avatar|thumb(nail)?[-_ ]?\d*\.)", re.I)
+
+
+def looks_like_junk(url: str) -> bool:
+    """Мерч, скриншот интерфейса, квитанция, аватарка — по имени файла. Стоп-лист мануала §5."""
+    try:
+        return bool(_JUNK_NAME.search(urlparse(url).path))
+    except Exception:
+        return False
+
+
 def og_image_url(page_url: str) -> str | None:
     """URL главной картинки страницы (og:image/twitter:image), абсолютный. None — нет/недоступна."""
     html = _page_html(page_url)
@@ -215,9 +234,11 @@ def _bg_color(im) -> tuple:
 # если я прошу провести анализ того, что было, то и формат должен быть такой же». Замер: горизонталь
 # 21 из 23. Живёт в памяти процесса — отбор идёт в том же прогоне, что и скачивание.
 _ORIG_RATIO: dict[str, float] = {}
-# Ниже этого отношения кадр не горизонталь: квадрат (1.0) и портрет уедут в поля. 3:2 (1.5) и 4:3
-# (1.33) — нормальные снятые горизонтали, их не трогаем.
-LANDSCAPE_MIN = 1.3
+# Порог горизонтали = минимальная пропорция среди 23 ПРИНЯТЫХ обложек (1.4988 у #451, сенаторы).
+# Ниже — кадр поедет в поля, а поля владелец запретил прямо: «вертикальные фото в горизонтальном
+# формате» стоят первым пунктом стоп-листа. 4:3 (1.33) сюда не проходит намеренно: достройка до 16:9
+# съела бы треть ширины полями, и в ленте это читается как чужой формат.
+LANDSCAPE_MIN = 1.45
 
 
 def orig_ratio(path) -> float:
@@ -226,8 +247,14 @@ def orig_ratio(path) -> float:
 
 
 def is_landscape(path) -> bool:
-    """Кадр был снят горизонтальным (а не достроен полями из вертикали/квадрата)."""
-    return orig_ratio(path) >= LANDSCAPE_MIN
+    """Кадр был снят горизонтальным (а не достроен полями из вертикали/квадрата).
+
+    НЕИЗМЕРЕННЫЙ КАДР СЧИТАЕТСЯ ГОДНЫМ. Пропорция пишется в _normalize, а он молча пропускает всё,
+    если не установлен Pillow. Строгая трактовка «не измерено — значит не горизонталь» в такой
+    сборке выбросила бы ВЕСЬ пул и оставила канал без обложек вообще — то есть страховка от полей
+    убила бы саму обложку. Без Pillow полей и не бывает: достраивает их тот же код, что и меряет."""
+    r = orig_ratio(path)
+    return r >= LANDSCAPE_MIN or r == 0.0
 
 
 # ── РОЛЬ КАДРА НА СТРАНИЦЕ: ШАПКА ИЛИ КАРТИНКА ИЗ ТЕЛА (07.09) ──────────────────────────────────
@@ -374,6 +401,10 @@ def looks_same(a: int | None, b: int | None, tolerance: int = 8) -> bool:
 def download(img_url: str, name: str = "scope", min_side: int = _MIN_SIDE) -> Path | None:
     """Скачать картинку в data/source_media/<name>.jpg (нормализованную под Telegram-фото). None — не
     картинка/битая/размер вне гейта. min_side — пол разрешения по РОЛИ кадра (шапка/тело статьи)."""
+    if looks_like_junk(img_url):
+        logging.info("source_media: %s — мерч/скриншот/квитанция по имени файла, не тяну (стоп-лист §5)",
+                     img_url.split("/")[-1][:60])
+        return None
     got = feeds.fetch_bytes(img_url, max_bytes=_MAX_IMG_BYTES)
     if not got:
         return None

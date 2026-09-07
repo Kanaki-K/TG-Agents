@@ -401,3 +401,26 @@ def test_blocked_page_falls_back_to_feed(monkeypatch, tmp_path):
     monkeypatch.setattr(feeds, "fetch_bytes", fake)
     got = fetch.fetch_source_images(ART, name="tier1")
     assert len(got) == 1 and fetch.is_header(got[0])
+
+
+# --- СТОП-ЛИСТ ПО ИМЕНИ ФАЙЛА (владелец 07.09) ----------------------------------------------------
+# Демо-прогон 07.09 принёс обложкой ФУТБОЛКУ с логотипом Binance и СКРИНШОТ окна Bitcoin Core Wallet.
+# Wikimedia честно отдаёт всё, что подписано именем объекта. Дешевле не тянуть, чем платить за то,
+# чтобы судья это отбраковал.
+
+def test_merch_and_screenshots_are_not_downloaded(monkeypatch, tmp_path):
+    monkeypatch.setattr(fetch, "OUT_DIR", tmp_path)
+    called = []
+    monkeypatch.setattr(feeds, "fetch_bytes", lambda url, **k: called.append(url) or None)
+    for junk in ("https://commons/Binance_T-Shirt.jpg", "https://commons/Bitcoin_Core_screenshot.png",
+                 "https://cdn/x/invoice-2026.png", "https://cdn/x/receipt_final.jpg",
+                 "https://cdn/x/author-avatar.jpg", "https://commons/Coffee_mug_logo.jpg"):
+        assert fetch.download(junk) is None, junk
+    assert not called, "мусор не должен доходить даже до сети"
+
+
+def test_real_photos_are_not_caught_by_the_junk_filter():
+    for ok in ("https://cdn/x/dbs-tower-singapore-1200x675.jpg",
+               "https://commons/Federal_Reserve_Building.jpg",
+               "https://cdn/x/2026-09-07-bitcoin-holds.jpg"):
+        assert not fetch.looks_like_junk(ok), ok

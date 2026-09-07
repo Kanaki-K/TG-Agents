@@ -59,10 +59,11 @@ def test_commons_search_wants_word_boundary(monkeypatch):
     assert sm._commons_search("SEC logo", "SEC") is None
 
 
-# ── ПОРЯДОК: живой кадр раньше голого лого ─────────────────────────────────────────────────────
-def test_rich_frames_come_before_bare_logo(monkeypatch):
-    """Владелец 31.08: «просто логотип на белом фоне — можно же немного интереснее подобрать».
-    Полотно бренда и фото объекта обязаны стоять в пуле ПЕРЕД страховочным лого."""
+# ── ГОЛОЕ ЛОГО СТРАХОВКА БОЛЬШЕ НЕ ПРЕДЛАГАЕТ ──────────────────────────────────────────────────
+def test_bare_logo_is_not_offered_at_all(monkeypatch):
+    """31.08 владелец сказал «просто логотип на белом фоне — можно интереснее», и лого поставили
+    последним. 07.09 он внёс его в стоп-лист прямо: «низкокачественные ПНГ лого и прочее». Среди 23
+    принятых обложек голого лого нет ни одного — оно живёт только внутри фирменного полотна."""
     monkeypatch.setattr(sm, "entity_id", lambda e: ("Q1", "American financial services company"))
     monkeypatch.setattr(sm, "_claims", lambda qid: {
         "P856": [{"mainsnak": {"datavalue": {"value": "https://site.example"}}}],
@@ -75,8 +76,8 @@ def test_rich_frames_come_before_bare_logo(monkeypatch):
     monkeypatch.setattr(sm, "commons_photo", lambda e: None)
     got = sm.subject_image_urls("Robinhood", limit=4)
     assert got[0] == "https://site.example/brand.jpg", "первым — полотно бренда"
-    assert got.index("https://commons/HQ.jpg.png") < got.index("https://commons/Logo.svg.png"), \
-        "фото объекта раньше голого лого"
+    assert "https://commons/HQ.jpg.png" in got, "фото объекта остаётся"
+    assert "https://commons/Logo.svg.png" not in got, "голое лого в пул не идёт (стоп-лист §5 п.8)"
 
 
 # ── ФОРМАТ КАНАЛА: 16:9, без чёрного под прозрачностью ─────────────────────────────────────────
