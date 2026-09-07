@@ -533,8 +533,11 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str):
             try:
                 resp = client.messages.create(model=model, max_tokens=PICK_MAX_TOKENS,
                                               thinking=_NO_THINKING, messages=msg)
-            except BadRequestError:  # модель не знает параметра — идём без него, бюджета хватит и так
-                logging.info("scope vision: модель %s не принимает thinking — повтор без параметра", model)
+            except (BadRequestError, TypeError):
+                # BadRequestError — параметра не знает МОДЕЛЬ; TypeError — его не знает старый SDK
+                # (в requirements потолок <1, версии гуляют). Оба случая обязаны кончиться повтором,
+                # а не потерей обложки: ровно так этот сбой и прятался — молча.
+                logging.info("scope vision: thinking не принят (%s) — повтор без параметра", model)
                 resp = client.messages.create(model=model, max_tokens=PICK_MAX_TOKENS, messages=msg)
             cost.record(model, resp.usage)
             out = "".join(b.text for b in resp.content if b.type == "text").strip()

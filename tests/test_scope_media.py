@@ -429,3 +429,25 @@ def test_model_without_thinking_param_still_works(monkeypatch, tmp_path):
     got = sw._vision_pick(imgs, "тело", "BNY", "key")
     assert got is not None and got[0] == imgs[1]
     assert len(calls) == 2 and "thinking" not in calls[1]
+
+
+def test_old_sdk_without_thinking_param_still_works(monkeypatch, tmp_path):
+    """Параметра не знает не модель, а старый SDK — это TypeError. Обложка теряться не должна."""
+    imgs = _fake_vision(monkeypatch, tmp_path, "1 | фасад BNY")
+    calls = []
+
+    class _Msgs:
+        def create(self, **kw):
+            calls.append(kw)
+            if "thinking" in kw:
+                raise TypeError("create() got an unexpected keyword argument 'thinking'")
+            return _FakeResp("1 | фасад BNY")
+
+    class _Client:
+        def __init__(self, *a, **k):
+            self.messages = _Msgs()
+
+    monkeypatch.setattr(sw, "Anthropic", _Client)
+    got = sw._vision_pick(imgs, "тело", "BNY", "key")
+    assert got is not None and got[0] == imgs[0]
+    assert len(calls) == 2 and "thinking" not in calls[1]
