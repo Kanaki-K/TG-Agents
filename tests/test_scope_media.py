@@ -579,3 +579,93 @@ def test_first_round_confession_goes_to_second_round(monkeypatch, tmp_path):
     got = sw._vision_pick(imgs, "тело", "Bitcoin", "key")
     assert got is not None and got[0] == imgs[2]
     assert "второго круга" in sw.LAST_COVER_NOTE
+
+
+def test_number_without_label_is_not_a_choice(monkeypatch, tmp_path):
+    """Живой ответ 07.09: «1 |» без описания — и код взял маскот издания как обложку. Ярлык нужен и
+    журналу анти-повтора, так что номер без ярлыка = сбой формата, а не выбор."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["1 |", "3 | фасад Citi с вывеской"])
+    got = sw._vision_pick(imgs, "тело", "Citi", "key")
+    assert got is not None and got[0] == imgs[2] and got[1] == "фасад Citi с вывеской"
+
+
+def test_camera_shot_beats_drawing_is_in_the_prompt():
+    """Ступень 0 «снято камерой бьёт нарисованное» — из провала 07.09 (3D-лого Ethereum, маскот)."""
+    r = sw._cover_rules()
+    assert "СНЯТО КАМЕРОЙ БЬЁТ НАРИСОВАННОЕ" in r
+
+
+def test_mascot_outlets_are_dropped_when_alternatives_exist(monkeypatch, tmp_path):
+    """Cointelegraph иллюстрирует всё своим маскотом — к поводу он не относится по построению.
+    Среди 23 принятых обложек таких нет ни одной, а судья на них ловится."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
+    made = []
+    for i in range(2):
+        q = tmp_path / f"m{i}.jpg"
+        q.write_bytes(b"\xff\xd8" + b"0" * 100)
+        monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+        made.append(q)
+    pages = ["https://cointelegraph.com/news/x", "https://www.theblock.co/news/y"]
+    monkeypatch.setattr(sw.source_media, "fetch_source_images",
+                        lambda url, name="scope": [made[0] if "cointelegraph" in url else made[1]])
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    seen = {}
+    monkeypatch.setattr(sw, "_vision_pick",
+                        lambda imgs, *a, **k: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
+    sw._attach_media(pages, "тело", "субъект", "k")
+    assert seen["pool"] == [made[1]], "маскот не должен доходить до судьи при живой альтернативе"
+    assert "мультяшные шапки отсеяны: 1" in sw.LAST_POOL_NOTE
+
+
+def test_mascot_is_kept_if_it_is_all_there_is(monkeypatch, tmp_path):
+    """Обложка обязана быть: единственный кандидат не выбрасываем, даже если это маскот."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
+    q = tmp_path / "only.jpg"
+    q.write_bytes(b"\xff\xd8" + b"0" * 100)
+    monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": [q])
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a, **k: (imgs[0], "кадр"))
+    assert sw._attach_media(["https://cointelegraph.com/news/x"], "тело", "субъект", "k")
+
+
+def test_small_frames_dropped_when_sharp_ones_exist(monkeypatch, tmp_path):
+    """Владелец 07.09: «качество картинок должно быть выше среднего — высокое». Пол 460 это
+    минимум, чтобы не остаться без обложки; ориентир — медиана канала 1024."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
+    made = []
+    for i, side in enumerate((600, 1400, 500)):
+        q = tmp_path / f"q{i}.jpg"
+        q.write_bytes(b"\xff\xd8" + b"0" * 100)
+        monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+        monkeypatch.setitem(sw.source_media.fetch._LONG_SIDE, str(q), side)
+        made.append(q)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": list(made))
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    seen = {}
+    monkeypatch.setattr(sw, "_vision_pick",
+                        lambda imgs, *a, **k: seen.update(pool=list(imgs)) or (imgs[0], "кадр"))
+    sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+    assert seen["pool"] == [made[1]], "мелкие кадры не должны доходить до судьи при наличии крупных"
+    assert "мелкие кадры отсеяны: 2" in sw.LAST_POOL_NOTE
+
+
+def test_single_small_frame_is_still_used(monkeypatch, tmp_path):
+    """Единственный мелкий кадр остаётся: #440 вышел в канал в 499x281. Обложка обязана быть."""
+    _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)
+    q = tmp_path / "small.jpg"
+    q.write_bytes(b"\xff\xd8" + b"0" * 100)
+    monkeypatch.setitem(sw.source_media.fetch._ORIG_RATIO, str(q), 1.78)
+    monkeypatch.setitem(sw.source_media.fetch._LONG_SIDE, str(q), 500)
+    monkeypatch.setattr(sw.source_media, "fetch_source_images", lambda url, name="scope": [q])
+    monkeypatch.setattr(sw.source_media, "frame_fingerprint", lambda p: str(p))
+    monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
+    monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a, **k: (imgs[0], "кадр"))
+    assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
