@@ -190,7 +190,8 @@ def _fake_vision_seq(monkeypatch, tmp_path, answers):
 
 def test_second_round_rescues_the_cover(monkeypatch, tmp_path):
     """Первый круг сказал 0 — обложка всё равно обязана найтись среди невредных кадров."""
-    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0 | только ИИ-рендеры", "2 | вордмарк Bitmine"])
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0 | фото нет", "0 | полотна нет",
+                                                    "0 | только ИИ-рендеры", "2 | вордмарк Bitmine"])
     got = sw._vision_pick(imgs, "тело поста", "Bitmine", "key")
     assert got is not None, "ноль первого круга не должен оставлять пост без картинки"
     assert got[0] == imgs[1] and got[1] == "вордмарк Bitmine"
@@ -199,15 +200,15 @@ def test_second_round_rescues_the_cover(monkeypatch, tmp_path):
 
 def test_first_round_pick_does_not_ask_twice(monkeypatch, tmp_path):
     """Нормальный случай: выбрал сразу — второго вызова (и лишних денег) быть не должно."""
-    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["2 | печать SEC"])
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["2 | печать SEC на фасаде"])
     got = sw._vision_pick(imgs, "тело поста", "SEC", "key")
     assert got[0] == imgs[1]
-    assert sw.LAST_COVER_NOTE == "выбор с первого круга"
+    assert sw.LAST_COVER_NOTE == "снятая фотография по поводу", "фото берём первым кругом"
 
 
 def test_zero_twice_is_the_only_refusal(monkeypatch, tmp_path):
     """Отказ остаётся возможным — но только когда ОБА круга сказали «весь пул вредный»."""
-    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0 | всё ИИ-слоп"])
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0", "0", "0 | всё ИИ-слоп"])
     assert sw._vision_pick(imgs, "тело поста", "Dallas Fed", "key") is None
     assert "вредный" in sw.LAST_COVER_NOTE
 
@@ -564,26 +565,27 @@ def test_subject_search_still_saves_an_empty_pool(monkeypatch, tmp_path):
 def test_forced_pick_that_admits_a_violation_is_a_refusal(monkeypatch, tmp_path):
     """Второй круг запрещает ноль — и на мусорном пуле модель называет номер, а в ярлыке пишет, за
     что кадр браковать («не по теме», «это ИИ-генерация»). Номер из-под палки — не выбор."""
-    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "2 | старинная церковь, не по теме"])
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0", "0",
+                                                    "2 | старинная церковь, не по теме"])
     assert sw._vision_pick(imgs, "тело", "Binance", "key") is None
     assert "забраковал весь пул" in sw.LAST_COVER_NOTE
 
 
 def test_normal_label_is_not_mistaken_for_a_confession(monkeypatch, tmp_path):
-    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "2 | вход в штаб-квартиру BNY"])
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0", "0", "0", "2 | вход в штаб-квартиру BNY"])
     got = sw._vision_pick(imgs, "тело", "BNY", "key")
     assert got is not None and got[0] == imgs[1]
 
 
-def test_first_round_confession_goes_to_second_round(monkeypatch, tmp_path):
-    """07.09 первый круг вернул «ИИ-рисунок кита. Однако по стоп-листу это ИИ-генерация» — и номер.
-    Признание в ярлыке = ноль на ЛЮБОМ круге, дальше второй заход по остальным кадрам."""
+def test_confession_is_zero_on_any_round(monkeypatch, tmp_path):
+    """07.09 круг вернул «ИИ-рисунок кита. Однако по стоп-листу это ИИ-генерация» — и номер.
+    Признание в ярлыке = ноль на ЛЮБОМ круге, дальше следующий заход по остальным кадрам."""
     imgs = _fake_vision_seq(monkeypatch, tmp_path,
                             ["1 | ИИ-рисунок кита, по стоп-листу это ИИ-генерация",
-                             "3 | печать ФРС на фасаде"])
+                             "3 | вордмарк Bitmine на чёрном"])
     got = sw._vision_pick(imgs, "тело", "Bitcoin", "key")
     assert got is not None and got[0] == imgs[2]
-    assert "второго круга" in sw.LAST_COVER_NOTE
+    assert sw.LAST_COVER_NOTE == "фирменное полотно бренда"
 
 
 def test_number_without_label_is_not_a_choice(monkeypatch, tmp_path):
@@ -674,3 +676,32 @@ def test_single_small_frame_is_still_used(monkeypatch, tmp_path):
     monkeypatch.setattr(sw.source_media, "looks_same", lambda a, b: a == b)
     monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a, **k: (imgs[0], "кадр"))
     assert sw._attach_media(["https://a.com/x"], "тело", "субъект", "k")
+
+
+# ── ТРИ КРУГА: РИСУНОК НЕ МОЖЕТ ВЫИГРАТЬ У ФОТОГРАФИИ (07.09, вечер) ────────────────────────────
+# Ступень «снято камерой бьёт нарисованное» стояла в правилах и не работала: в одном вопросе судья
+# взвешивает всё сразу и берёт то, что ярче. Замер по шести сюжетам дня: в ряд с 23 опубликованными
+# встал один кадр из шести. Теперь это последовательность, а не просьба ранжировать.
+
+def test_photo_wins_even_if_asked_second(monkeypatch, tmp_path):
+    """Круг А спрашивает ТОЛЬКО про снятую фотографию — рисунку нечем её перебить."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["3 | фасад BNY с вывеской"])
+    got = sw._vision_pick(imgs, "тело", "BNY", "key")
+    assert got[0] == imgs[2]
+    assert sw.LAST_COVER_NOTE == "снятая фотография по поводу"
+
+
+def test_brand_canvas_is_the_second_question(monkeypatch, tmp_path):
+    """Фотографии нет — спрашиваем полотно бренда, и только потом общий круг."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path, ["0 | фотографий нет", "1 | вордмарк на градиенте"])
+    got = sw._vision_pick(imgs, "тело", "Bitmine", "key")
+    assert got[0] == imgs[0]
+    assert sw.LAST_COVER_NOTE == "фирменное полотно бренда"
+
+
+def test_drawing_reached_only_after_photo_and_brand(monkeypatch, tmp_path):
+    """Иллюстрация издания остаётся законной — но берётся последней, как в замере 23 обложек."""
+    imgs = _fake_vision_seq(monkeypatch, tmp_path,
+                            ["0 | фото нет", "0 | полотна нет", "2 | коллаж моста Liquid"])
+    got = sw._vision_pick(imgs, "тело", "Liquid Network", "key")
+    assert got[0] == imgs[1] and sw.LAST_COVER_NOTE == "выбор с первого круга"
