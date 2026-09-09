@@ -52,9 +52,22 @@ if (-not $chrome) { Write-Error "Chrome ne nayden"; exit 1 }
 New-Item -ItemType Directory -Force -Path $outDir, $profileDir | Out-Null
 
 if ($Login) {
-    Write-Host "Otkryvayu Chrome. Voydite v Threads i zakroyte okno."
-    & $chrome --user-data-dir="$profileDir" "https://www.threads.com/login" | Out-Null
+    # Start-Process, a NE "& chrome ... | Out-Null": pri konvejere PowerShell zhdet vyhoda Chrome i
+    # terminal ostaetsya zanyat do zakrytiya okna. Zdes zapuskaem i srazu otdaem priglashenie.
+    Write-Host "Otkryvayu Chrome. Voydite v Threads, potom ZAKROYTE eto okno Chrome."
+    Start-Process -FilePath $chrome -ArgumentList @("--user-data-dir=$profileDir",
+                                                    "https://www.threads.com/login")
+    Write-Host "Posle vhoda i zakrytiya okna zapustite:  powershell -ExecutionPolicy Bypass -File tools\threads_insights.ps1 -Now"
     exit 0
+}
+
+# Snimok i vhod delyat odin profil, a Chrome ne daet dvum ekzemplyaram rabotat s odnim profilem.
+# Poetomu esli okno vhoda eshche otkryto - govorim ob etom yavno, a ne otdaem pustoy fayl.
+$busy = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*ThreadsInsights*" }
+if ($busy) {
+    Write-Warning "Okno Chrome s etim profilem eshche otkryto - zakroyte ego i povtorite komandu."
+    exit 1
 }
 
 function Set-NextRun {
