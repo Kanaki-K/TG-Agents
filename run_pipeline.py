@@ -861,7 +861,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # берёт вышедший скоуп, а мини-флагман — вышедший флагман, и каждый применяет СВОЙ свод правил.
     # На сам пост и публикацию это не влияет — только запись строки в журнал (сбой её проглатывается).
     if scope:
-        published_journal.record(post, scope_rec, kind="scope")
+        # Обложку кладём В ЖУРНАЛ: мини-скоуп для Threads берёт ту же картинку, что уже вышла в ТГ.
+        published_journal.record(post, scope_rec, kind="scope", cover=cover_path)
         out("🧵 Скоуп записан в журнал вышедших — доступен мини-скоупу Threads "
             "(run_threads_pipeline.py --scope).")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")

@@ -53,9 +53,12 @@ def _migrate() -> None:
         logging.exception("published_journal: миграция старого журнала не удалась (иду дальше)")
 
 
-def record(text: str, theme: str = "", kind: str = "flagship") -> None:
-    """Дописать вышедший пост (полный текст + формат + тема + дата) в журнал. Мету после [[SPLIT]]
-    отбрасываем (в Threads уходит только тело). Сбой записи НЕ роняет публикацию — журнал вторичен."""
+def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "") -> None:
+    """Дописать вышедший пост (текст + формат + тема + дата + путь к обложке) в журнал.
+
+    Мету после [[SPLIT]] отбрасываем (в Threads уходит только тело). cover — файл обложки, с которой
+    пост вышел в ТГ: мини-скоуп берёт ЕЁ же (решение владельца 09.09 — картинку для Threads не ищем
+    заново, она уже опубликована и одобрена). Сбой записи НЕ роняет публикацию — журнал вторичен."""
     body = (text or "").split("[[SPLIT]]")[0].strip()
     if not body:
         return
@@ -63,7 +66,7 @@ def record(text: str, theme: str = "", kind: str = "flagship") -> None:
         _migrate()
         JOURNAL.parent.mkdir(parents=True, exist_ok=True)
         entry = {"date": date.today().isoformat(), "kind": content_plan.norm_kind(kind),
-                 "theme": (theme or "").strip(), "text": body}
+                 "theme": (theme or "").strip(), "text": body, "cover": (cover or "").strip()}
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:

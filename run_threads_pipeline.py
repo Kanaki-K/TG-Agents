@@ -26,6 +26,7 @@ Threads-серии лягут в общую отложку рядом с нас�
 """
 import sys
 from datetime import timedelta
+from pathlib import Path
 
 from connectors.telegram_publish import publish as tg_publish
 from core import config, content_plan, cost, logging_setup, runmode, threads_creator, threads_source
@@ -33,6 +34,21 @@ from core import config, content_plan, cost, logging_setup, runmode, threads_cre
 logging_setup.setup()
 
 THREADS_SERIES_GAP_MIN = 10   # разнос постов серии по времени, чтобы легли ОТДЕЛЬНЫМИ отложенными
+
+
+def _cover_on_disk(path: str) -> str:
+    """Путь к обложке, который РЕАЛЬНО существует здесь. Пустая строка — картинки нет.
+
+    В журнал путь пишется абсолютным, а завод живёт в двух местах: боевые прогоны идут на Windows,
+    проверки — в контейнере на том же диске, но с другим корнем. Абсолютный путь из чужой среды не
+    открывается, хотя файл лежит на месте, — поэтому вторым заходом ищем его по имени в data/source_media."""
+    path = (path or "").strip()
+    if not path:
+        return ""
+    if Path(path).exists():
+        return path
+    local = config.ROOT / "data" / "source_media" / Path(path.replace("\\", "/")).name
+    return str(local) if local.exists() else ""
 
 
 def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: str = "flagship",
@@ -156,11 +172,21 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     # времени выхода у Threads пока нет (открытый вопрос владельца) — когда будет, слот станет реальным
     # временем публикации в Threads, а отложка ревью-канала — пультом «оставить / поправить / удалить».
     base = content_plan.next_slot("short")
+    # ОБЛОЖКА (решение владельца 09.09): мини-скоуп идёт с ТОЙ ЖЕ картинкой, что уже вышла с ТГ-постом
+    # — искать и судить кадр заново незачем, он одобрен. Мини-флагману картинка не нужна вовсе.
+    cover = _cover_on_disk(src.get("cover")) if kind == "scope" else ""
+    if kind == "scope":
+        if cover:
+            out(f"🖼 Беру обложку ТГ-поста: {Path(cover).name}")
+        elif src.get("cover"):
+            out(f"🖼 Обложка ТГ-поста не найдена на диске ({src['cover']}) — ревью уйдёт текстом.")
+        else:
+            out("🖼 У исходного поста обложки в журнале нет (старый пост из выгрузки) — ревью текстом.")
     ok = 0
     for i, p in enumerate(posts):
         when = base + timedelta(minutes=THREADS_SERIES_GAP_MIN * i)
         body = f"🧵 [THREADS · {fmt['label']} {i + 1}/{len(posts)}]\n\n{p}"
-        res = tg_publish.publish(channel, body, None, when)
+        res = tg_publish.publish(channel, body, cover if i == 0 else None, when)
         if res.get("ok"):
             ok += 1
             out(f"  ✅ пост {i + 1}/{len(posts)} → {content_plan.human(when)} ({res.get('mode', '?')})")
