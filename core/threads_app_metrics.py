@@ -175,6 +175,40 @@ def known() -> dict[str, dict]:
     return io_safe.load_json(STORE, {})
 
 
+def missing(days: int = 3) -> list[dict]:
+    """Посты последних N дней, по которым цифр из интерфейса ещё НЕТ.
+
+    Нужно, чтобы знать, накрыл ли снимок страницы всё, что вышло: страница Insights показывает
+    последние посты, и если пост туда не попал (или разбор его не опознал), мы должны это видеть —
+    иначе дырка в замере выглядит как «пост не привёл никого», а это разные вещи."""
+    from datetime import date, timedelta
+
+    edge = date.today() - timedelta(days=days)
+    have = known()
+    out = []
+    for p in io_safe.load_json(THREADS_POSTS, []):
+        d = (p.get("date") or "")[:10]
+        try:
+            if date.fromisoformat(d) < edge:
+                continue
+        except ValueError:
+            continue
+        if str(p.get("id")) not in have:
+            out.append(p)
+    return sorted(out, key=lambda x: x.get("date") or "")
+
+
+def coverage_note(days: int = 3) -> str:
+    """Строка отчёта: чего не хватает за последние N дней (пусто — накрыто всё)."""
+    gap = missing(days)
+    if not gap:
+        return ""
+    lines = [f"⚠️ Без цифр из интерфейса за {days} дн: {len(gap)} пост(ов) — снимок их не накрыл:"]
+    for p in gap:
+        lines.append(f"   {(p.get('date') or '')[:10]} «{' '.join((p.get('text') or '').split())[:52]}»")
+    return "\n".join(lines)
+
+
 def funnel_report() -> str:
     """Воронка по постам, для которых цифры из приложения уже есть."""
     data = known()
