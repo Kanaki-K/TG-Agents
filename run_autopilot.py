@@ -285,6 +285,46 @@ def _threads_followers_daily() -> None:
         log.warning("[автопилот] не смог снять счётчик подписчиков Threads", exc_info=True)
 
 
+def _threads_insights_intake() -> None:
+    """Забрать снимок страницы Insights, который положил браузер владельца (tools/threads_insights.ps1).
+
+    ЗАЧЕМ ИМЕННО ТАК. Подписки и заходы в профиль НА ПОСТ есть в интерфейсе Threads и отсутствуют в
+    API. Дневной счётчик подписчиков эту дырку НЕ закрывает: владелец 09.09 верно заметил, что люди
+    приходят и с его ответов под чужими ветками, а мы меряем качество постов ЗАВОДА — значит нужен
+    сигнал, привязанный к посту, а не к суткам. Его даёт только интерфейс.
+
+    Сети здесь нет: читаем файл с диска. В Meta ходил браузер владельца, на его машине и его IP."""
+    try:
+        from core import threads_insights_page
+        report = threads_insights_page.intake()
+        if report:
+            log.info("[автопилот] снимки Insights разобраны:\n%s", report)
+    except Exception:  # noqa: BLE001 — фоновая гигиена не роняет прогон
+        log.warning("[автопилот] снимок Insights разобрать не смог", exc_info=True)
+
+
+def _threads_metric_watch() -> None:
+    """Раз в неделю спросить у Meta список доступных метрик — вдруг подписки на пост открыли.
+
+    Может не сработать никогда (владелец прав), но стоит один запрос в неделю и снимает с нас
+    обязанность следить за анонсами. Появится метрика — ручной путь закроется сам."""
+    try:
+        from connectors.threads import _guard
+        if _guard.frozen_reason() or schedule.warned_today("threads-metrics"):
+            return
+        from datetime import datetime as _dt
+        if _dt.now(content_plan.tz()).weekday() != 0:      # только по понедельникам
+            return
+        schedule.mark_warned("threads-metrics")
+        from core import threads_metric_watch
+        news = threads_metric_watch.check()
+        if news:
+            log.info("[автопилот] %s", news)
+            bot_alert.notify_owner(news)
+    except Exception:  # noqa: BLE001
+        log.warning("[автопилот] сторож метрик не отработал", exc_info=True)
+
+
 def _threads_daily_hygiene() -> None:
     """Ежедневная гигиена аккаунта Threads — НЕ зависит от того, включён ли автопилот на выход.
 
@@ -295,6 +335,8 @@ def _threads_daily_hygiene() -> None:
     восстановления, поэтому идёт первой и молча."""
     _threads_token_keepalive()
     _threads_followers_daily()
+    _threads_insights_intake()
+    _threads_metric_watch()
 
 
 def check_once() -> str:

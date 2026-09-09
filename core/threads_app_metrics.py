@@ -105,20 +105,23 @@ def parse(raw: str) -> list[dict]:
     Граница блоков — не метка сводки, а КОНЕЦ её цифр: сразу за ними начинается текст следующего
     поста (в приложении это строка с ником). Делить по самой метке нельзя — тогда текст второго
     поста уезжает в первый блок, а второй остаётся без текста и его не опознать."""
-    marks = [m.start() for m in _SUMMARY.finditer(raw or "")]
+    marks = [(m.start(), m.end(), m.group(1)) for m in _SUMMARY.finditer(raw or "")]
     if not marks:
         return [parse_block(raw)]
     blocks, text_start = [], 0
-    for i, pos in enumerate(marks):
-        text = (raw or "")[text_start:pos]
-        seg = (raw or "")[pos:(marks[i + 1] if i + 1 < len(marks) else len(raw))]
+    for i, (start, end, word) in enumerate(marks):
+        text = (raw or "")[text_start:start]
+        # ВАЖНО: сегмент цифр начинается ПОСЛЕ строки-метки. Раньше он начинался с самой метки, и
+        # первая же строка обрывала скан («Зведення» — не число и не название метрики), из-за чего
+        # с веб-страницы не разбиралось НИ ОДНОЙ цифры, хотя из чата всё читалось.
+        seg = (raw or "")[end:(marks[i + 1][0] if i + 1 < len(marks) else len(raw))]
         lines = seg.splitlines()
-        j = 1
+        j = 0
         while j < len(lines) and _is_stats_line(lines[j]):
             j += 1
         stats = "\n".join(lines[:j])
-        blocks.append(parse_block(text + "\n" + stats))
-        text_start = pos + len(stats) + 1
+        blocks.append(parse_block(f"{text}\n{word}\n{stats}"))
+        text_start = end + len(stats)
     return blocks
 
 
@@ -193,6 +196,25 @@ def funnel_report() -> str:
         out.append(f"   {d}  {str(vw or '—'):>7}  {str(pv or '—'):>7}  {str(nf or '—'):>8}  "
                    f"{r1:>21}  {r2:>21}")
     return "\n".join(out)
+
+
+def record(text_fragment: str, **metrics) -> str:
+    """Записать цифры, СНЯТЫЕ С ЭКРАНА (скриншот из приложения/веба), привязав их к посту по тексту.
+
+    Самый безопасный путь получения этих метрик, выбранный владельцем 09.09.2026: он открывает
+    Insights у себя в браузере и присылает картинку, я читаю её глазами и вызываю эту функцию.
+    Threads при этом не видит нас вообще — ни запроса, ни сессии, ни автоматизации.
+
+    text_fragment — кусок текста поста со скриншота (хватает первой строки: пост ищется по
+    сходству). Не опознали — говорим об этом, а не привязываем к похожему."""
+    post = match_post(text_fragment, min_coverage=0.35)
+    if not post:
+        return f"❓ Не опознал пост по фрагменту «{text_fragment[:60]}» — нужна строка из его текста"
+    clean = {k: int(v) for k, v in metrics.items() if v is not None and str(v).strip() != ""}
+    save(post["id"], clean, post.get("date", ""))
+    head = " ".join((post.get("text") or "").split())[:44]
+    return (f"✅ {post.get('date','')[:10]} «{head}» ← " +
+            " · ".join(f"{k} {v}" for k, v in clean.items()))
 
 
 if __name__ == "__main__":
