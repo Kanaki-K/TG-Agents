@@ -1,0 +1,158 @@
+{
+  "taken_at": "2026-09-09T23:11:22",
+  "window_days": 90,
+  "window_from": "2026-06-11",
+  "money": {
+    "total_usd": 204.9,
+    "by_role_usd": {
+      "scope": 53.46,
+      "creator": 53.05,
+      "verify": 48.39,
+      "scout": 27.18,
+      "creator-fix": 11.42,
+      "dedup": 3.62,
+      "?": 2.57,
+      "topic-select": 2.18,
+      "usefulness": 0.76,
+      "theme-pick": 0.59,
+      "topic-gate": 0.58,
+      "funnel": 0.53,
+      "threads": 0.33,
+      "channel-analyst": 0.23
+    },
+    "by_month_usd": {
+      "2026-06": 32.9,
+      "2026-07": 102.55,
+      "2026-08": 51.36,
+      "2026-09": 18.09
+    }
+  },
+  "production": {
+    "telegram_posts": 59,
+    "threads_posts": 82,
+    "cost_per_post_usd": 1.45
+  },
+  "telegram": {
+    "channel_now": {
+      "followers": 1178.0,
+      "views_per_post": 457.0,
+      "shares_per_post": 7.0,
+      "reactions_per_post": 5.0
+    },
+    "channel_prev": {
+      "followers": 1191.0,
+      "views_per_post": 737.0,
+      "shares_per_post": 11.0,
+      "reactions_per_post": 4.0
+    },
+    "stats_period": {
+      "from": "2026-09-01T11:51:30+00:00",
+      "to": "2026-09-08T11:51:30+00:00"
+    },
+    "mature_posts_by_month": {
+      "2026-06": {
+        "posts": 8,
+        "views_median": 1076,
+        "reactions_avg": 9.1,
+        "forwards_avg": 25.1,
+        "comments_avg": 2.2
+      },
+      "2026-07": {
+        "posts": 22,
+        "views_median": 984,
+        "reactions_avg": 6.3,
+        "forwards_avg": 15.4,
+        "comments_avg": 1.7
+      },
+      "2026-08": {
+        "posts": 23,
+        "views_median": 872,
+        "reactions_avg": 5.3,
+        "forwards_avg": 11.4,
+        "comments_avg": 1.7
+      },
+      "2026-09": {
+        "posts": 3,
+        "views_median": 448,
+        "reactions_avg": 4.7,
+        "forwards_avg": 6.7,
+        "comments_avg": 0
+      }
+    }
+  },
+  "threads": {
+    "account_last_snapshot": {
+      "views": 70797,
+      "viewers": 59282,
+      "net_followers": 3,
+      "interactions": 837,
+      "follower_viewers": 171,
+      "followers": 619,
+      "date": "2026-09-09"
+    },
+    "flagship": {
+      "posts": 41,
+      "posts_measured": 40,
+      "viewers": 39507,
+      "profile_visits": 585,
+      "new_followers": 10,
+      "viewers_to_profile_pct": 1.48,
+      "profile_to_follow_pct": 1.7,
+      "views_median": 170,
+      "people_avg": 1.54,
+      "zero_profile_visits": 26
+    },
+    "scope": {
+      "posts": 23,
+      "posts_measured": 23,
+      "viewers": 12920,
+      "profile_visits": 103,
+      "new_followers": 8,
+      "viewers_to_profile_pct": 0.8,
+      "profile_to_follow_pct": 7.8,
+      "views_median": 278,
+      "people_avg": 0.39,
+      "zero_profile_visits": 14
+    },
+    "factory_all": {
+      "posts": 64,
+      "posts_measured": 63,
+      "viewers": 52427,
+      "profile_visits": 688,
+      "new_followers": 18,
+      "viewers_to_profile_pct": 1.31,
+      "profile_to_follow_pct": 2.6,
+      "views_median": 253,
+      "people_avg": 1.12,
+      "zero_profile_visits": 40
+    },
+    "personal": {
+      "posts": 17,
+      "posts_measured": 16,
+      "viewers": 11238,
+      "profile_visits": 936,
+      "new_followers": 2,
+      "viewers_to_profile_pct": 8.33,
+      "profile_to_follow_pct": 0.2,
+      "views_median": 205,
+      "people_avg": 4.71,
+      "zero_profile_visits": 6
+    },
+    "stake_lever": {
+      "with": {
+        "posts": 21,
+        "viewers": 45507,
+        "profile_visits": 639,
+        "new_followers": 14,
+        "viewers_to_profile_pct": 1.4
+      },
+      "without": {
+        "posts": 25,
+        "viewers": 6018,
+        "profile_visits": 46,
+        "new_followers": 4,
+        "viewers_to_profile_pct": 0.76
+      }
+    }
+  }
+}
