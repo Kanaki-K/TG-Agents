@@ -178,9 +178,13 @@ foreach ($code in $codes) {
 # naberutsya za paru nedel. Kogda dogonim - perehodim na redkiy temp 3-5 sutok, kak prosil
 # vladelec. Posle strannogo otveta - pauza podlinnee, chtoby ne davit.
 $left = if (Test-Path $queueFile) { (Get-Content $queueFile | Where-Object { $_.Trim() }).Count } else { 0 }
-if ($stopped)          { $next = Set-NextRun -MinD 3 -MaxD 5 }
+# Posle -All ochered v fayle eshche staraya (ee peresobiraet zavod, kogda razberet snimki),
+# poetomu po $left sudit nelzya: reshaem po rezhimu. Sobrali vse za den - dalshe redkiy temp,
+# kak prosil vladelec ("sleduyushchie sessii budut raz v 3 dnya").
+if ($stopped)             { $next = Set-NextRun -MinD 3 -MaxD 5 }
+elseif ($All)             { $next = Set-NextRun -MinD $MinDays -MaxD $MaxDays }
 elseif ($left -gt $Posts) { $next = Set-NextRun -MinD 1 -MaxD 1 }
-else                   { $next = Set-NextRun -MinD $MinDays -MaxD $MaxDays }
+else                      { $next = Set-NextRun -MinD $MinDays -MaxD $MaxDays }
 
 Write-Host "Snyato: obshchaya stranica ($size bayt), stranic postov: $done, v ocheredi ostalos: $left."
 Write-Host "Sleduyushchiy zahod: $next"
