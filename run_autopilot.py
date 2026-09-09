@@ -112,8 +112,29 @@ def _digest(report: str) -> str:
     panel = report.find("━━━━━━ ИТОГ")
     if panel >= 0:
         parts.append(report[panel:].strip())
+    # ВОПРОС ПРО ПРАВКИ — В ЧАТ ЦЕЛИКОМ, и последним блоком. Владелец 09.09: «где будет спрашивать,
+    # если я просто гоняю пайплайн, а не сижу в живом окне?» В терминал вопрос печатается, но за
+    # 10-20 минут прогона он уползает вверх, а при автозапуске терминала вообще нет. Значит вопрос
+    # обязан приехать туда, где владелец живёт, — в Telegram, вместе с готовой командой для ответа.
+    q = _question_block(report)
+    if q:
+        parts.append(q)
     out = "\n\n".join(parts) if parts else report[-TG_ALERT_LIMIT:]
     return out[:TG_ALERT_LIMIT]
+
+
+def _question_block(report: str) -> str:
+    """Блок «🙋 Спрашиваю…» из отчёта прогона целиком (с цитатами и командой /lesson). Нет — пусто."""
+    lines = report.splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.lstrip().startswith("🙋")), -1)
+    if start < 0:
+        return ""
+    block = [lines[start].strip()]
+    for ln in lines[start + 1:]:
+        if not ln.strip():                     # вопрос кончается пустой строкой
+            break
+        block.append(ln.rstrip())
+    return "\n".join(block)
 
 
 def _emit(line: str = "") -> None:

@@ -875,6 +875,14 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             "(run_threads_pipeline.py --scope).")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
     out(_panel_block())
+    # Вопрос про повторяющуюся правку печатаем ЕЩЁ РАЗ, последним: в начале прогона он уползает за
+    # 10-20 минут вывода, а последнее, что владелец видит в терминале, — вот это.
+    try:
+        _q_tail = edit_delta.ask("scope" if scope else "флагман")
+        if _q_tail:
+            out("\n" + _q_tail)
+    except Exception:
+        logging.exception("вопрос по правкам не собрался — прогон это не роняет")
     out("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $
     return "\n".join(report)
 

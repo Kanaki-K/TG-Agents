@@ -634,3 +634,23 @@ def test_threads_token_keepalive_is_silent_when_network_locked(monkeypatch, tmp_
         raise RuntimeError("Meta прилегла")
     monkeypatch.setattr(auth, "valid_token", _boom)
     run_autopilot._threads_token_keepalive()      # не бросает
+
+
+def test_digest_carries_the_question_to_telegram():
+    """Вопрос про правки обязан доехать до владельца В ЧАТ — в терминал он смотрит не всегда."""
+    import run_autopilot
+    report = (
+        "🙋 Спрашиваю, потому что это НЕ разовая правка: заголовок (3 из 3) — заголовок.\n"
+        "   #497  я:   «Биткоинщик Дорси строит банк»\n"
+        "           ты:  «Бывший CEO Твиттера строит банк»\n"
+        "   Ответь одной фразой: /lesson scope <правило> — положу в уроки этого формата.\n"
+        "\n"
+        "📝 --- ГОТОВЫЙ ПОСТ ---\n**Заголовок поста**\n\n"
+        "✅ Поставил в отложенные канала: скоуп на Пн 14.09 16:00\n"
+        "━━━━━━ ИТОГ (вход → решение → почему) ━━━━━━\n  формат: скоуп\n"
+    )
+    d = run_autopilot._digest(report)
+    assert "/lesson scope" in d                      # готовая команда для ответа доехала
+    assert "Бывший CEO Твиттера" in d                # и улика, без неё вопрос беспредметен
+    assert d.rstrip().endswith("уроки этого формата.")   # вопрос идёт ПОСЛЕДНИМ блоком
+    assert run_autopilot._question_block("отчёт без вопроса") == ""
