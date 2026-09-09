@@ -33,20 +33,39 @@ def code_of(post: dict) -> str:
     return m.group(1) if m else ""
 
 
+MATURE_DAYS = 14       # после этого срока метрики поста практически не растут
+
+
 def pending(days: int = DAYS) -> list[dict]:
-    """Посты за N дней, по которым цифр из интерфейса ещё нет. Свежие первыми."""
+    """Посты, которые нужно снять: сперва ни разу не меренные, затем меренные СЛИШКОМ РАНО.
+
+    ПОЧЕМУ ДВА ЗАМЕРА, А НЕ ОДИН (владелец 09.09: «некоторые посты живут дольше четырёх дней»).
+    Пост добирает просмотры и заходы в профиль примерно две недели. Снимок, сделанный на второй
+    день, — это не итог, а промежуточный кадр, и сравнивать по нему посты между собой нельзя:
+    свежий проиграет старому просто по возрасту. Поэтому каждый пост меряется дважды — рано (чтобы
+    вообще иметь цифру) и после созревания (чтобы иметь ИТОГОВУЮ). Третий раз не нужен: снятый
+    зрелым в очередь больше не попадает, и очередь не превращается в вечный круг.
+    """
     have = threads_app_metrics.known()
     edge = date.today() - timedelta(days=days)
-    out = []
+    fresh, stale = [], []
     for p in io_safe.load_json(THREADS_POSTS, []):
         try:
             d = date.fromisoformat((p.get("date") or "")[:10])
         except ValueError:
             continue
-        if d < edge or str(p.get("id")) in have or not code_of(p):
+        if d < edge or not code_of(p):
             continue
-        out.append(p)
-    return sorted(out, key=lambda p: p.get("date") or "", reverse=True)
+        seen = have.get(str(p.get("id")))
+        if not seen:
+            fresh.append(p)
+            continue
+        age_at_snap = seen.get("age_days_at_snap")
+        age_now = (date.today() - d).days
+        if age_at_snap is not None and age_at_snap < MATURE_DAYS <= age_now:
+            stale.append(p)                 # мерили молодым, а теперь он созрел — нужен итог
+    newest = lambda rows: sorted(rows, key=lambda p: p.get("date") or "", reverse=True)
+    return newest(fresh) + newest(stale)    # новое важнее: у свежего поста окно замера уходит
 
 
 def write_queue(days: int = DAYS, limit: int = 400) -> str:
@@ -67,7 +86,7 @@ def write_queue(days: int = DAYS, limit: int = 400) -> str:
 
 def status(days: int = DAYS) -> str:
     have, left = len(threads_app_metrics.known()), len(pending(days))
-    total = have + left
+    total = have + len([p for p in pending(days) if str(p.get("id")) not in threads_app_metrics.known()])
     if not total:
         return "Постов за период нет."
     pct = 100 * have / total

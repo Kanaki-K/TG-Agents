@@ -25,9 +25,12 @@
 #     powershell -ExecutionPolicy Bypass -File tools\threads_insights.ps1 -Now -All
 #   V papke data\incoming dolzhen poyavitsya fayl insights-GGGG-MM-DD.html
 #
-# RASPISANIE - PN i PT (dni skoupa). V terminale PyCharm (PowerShell):
+# KOGDA RABOTAET. Ne po svoemu raspisaniyu, a PO OTMETKE payplayna skoupa Threads: on kladet
+# data\threads_insights_request.txt posle uspeshnogo progona. Zadacha Windows prosto zaglyadyvaet,
+# est li otmetka - eto deshevo i v Meta ne hodit. Skoup vyhodit pn/sr/pt, no minimum trое sutok
+# mezhdu zahodami delaet iz treh progonov ~dva zahoda v nedelyu.
 #     $cmd = 'powershell -ExecutionPolicy Bypass -File "' + $PWD + '\tools\threads_insights.ps1"'
-#     schtasks /create /tn "ThreadsInsights" /tr $cmd /sc weekly /d MON,FRI /st 20:00 /f
+#     schtasks /create /tn "ThreadsInsights" /tr $cmd /sc daily /st 20:00 /f
 #   Skript sam podozhdet ot 0 do 2 chasov posle starta - chtoby vremya bylo ne rovnym.
 #   Proverit:  schtasks /query /tn "ThreadsInsights"
 #   Ubrat:     schtasks /delete /tn "ThreadsInsights" /f
@@ -46,6 +49,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $outDir = Join-Path $root "data\incoming"
 $stateFile = Join-Path $root "data\threads_insights_last.txt"
+$requestFile = Join-Path $root "data\threads_insights_request.txt"   # otmetku stavit payplayn skoupa
 $profileDir = Join-Path $env:LOCALAPPDATA "ThreadsInsights\profile"
 
 $chrome = @(
@@ -91,9 +95,15 @@ Start-Sleep -Seconds 2
 # Vnutrenniy predohranitel ostaetsya odin: ne chashche raza v sutki. Esli zadacha srabotala dvazhdy
 # (ruchnoy zapusk + raspisanie), vtoroy raz v Meta my ne poydem.
 if (-not $Now) {
+    # Hodim TOLKO po otmetke payplayna skoupa Threads (reshenie vladelca 09.09: "skript sbora
+    # rabotaet tolko pri payplayne skoup tredsa"). Net otmetki - net zahoda: svoego raspisaniya u
+    # sbora bolshe net, on prosto sledstvie togo, chto zavod otrabotal.
+    if (-not (Test-Path $requestFile)) { exit 0 }
+    # Skoup vyhodit tri raza v nedelyu, a snimat statistiku tak chasto ni k chemu: metriki posta
+    # rastut nedelyami. Minimum trое sutok mezhdu zahodami prevrashchaet tri progona v ~dva zahoda.
     if (Test-Path $stateFile) {
         $last = [datetime]::Parse((Get-Content $stateFile -Raw).Trim())
-        if (((Get-Date) - $last).TotalHours -lt 20) { exit 0 }   # segodnya uzhe hodili
+        if (((Get-Date) - $last).TotalHours -lt 72) { exit 0 }
     }
     $wait = Get-Random -Minimum 0 -Maximum 7200
     Write-Host "Zhdu $([int]($wait/60)) min pered zahodom (sluchaynoe vremya vmesto rovnogo raspisaniya)."
@@ -200,6 +210,7 @@ foreach ($code in $codes) {
 # vladelec. Posle strannogo otveta - pauza podlinnee, chtoby ne davit.
 $left = if (Test-Path $queueFile) { (Get-Content $queueFile | Where-Object { $_.Trim() }).Count } else { 0 }
 Set-LastRun | Out-Null
+Remove-Item $requestFile -ErrorAction SilentlyContinue   # otmetka otrabotala
 Write-Host "Snyato: obshchaya stranica ($size bayt), stranic postov: $done, v ocheredi ostalos: $left."
 Write-Host "Sleduyushchiy zahod - v blizhayshiy den raspisaniya (pn/pt)."
 if ($size -lt 20000) {

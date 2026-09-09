@@ -25,7 +25,7 @@ Threads-серии лягут в общую отложку рядом с нас�
 выверен до создания), это машинерия Формата 2. Изоляция от ТГ-мира: общий только нейтральный слой.
 """
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from connectors.telegram_publish import publish as tg_publish
@@ -237,6 +237,19 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         n = tg_publish.notify(target, msg)
         out("📨 Уведомил мейн владельца." if n.get("ok")
             else f"📨 Уведомление на мейн НЕ ушло: {n.get('error', '?')}")
+    # ОТМЕТКА ДЛЯ СБОРА АНАЛИТИКИ (решение владельца 09.09: «скрипт сбора работает только при
+    # пайплайне скоуп Threads»). Своего расписания у сбора больше нет: он идёт в Meta только после
+    # того, как этот пайплайн отработал. Связь — файл на диске, потому что браузер живёт на машине
+    # владельца, а пайплайн в контейнере: запустить процесс Windows отсюда нельзя, оставить метку
+    # на общем диске — можно. Метку кладём ПОСЛЕ успешной постановки в отложку: прогон, который
+    # ничего не выдал, поводом ходить за цифрами не является.
+    if kind == "scope" and ok:
+        try:
+            (config.ROOT / "data" / "threads_insights_request.txt").write_text(
+                datetime.now(content_plan.tz()).isoformat(timespec="seconds") + "\n", encoding="ascii")
+            out("📊 Отметил, что можно снять свежую аналитику Threads (снимет браузер владельца).")
+        except Exception:  # noqa: BLE001 — метка вторична к посту
+            out("   (отметку для сбора аналитики поставить не вышло — соберём следующим прогоном)")
     out("Публикация в сам Threads пока руками из приложения (авто-публикация из отложки — следующий шаг).")
     out("\n" + cost.summary())
     return "\n".join(report)
