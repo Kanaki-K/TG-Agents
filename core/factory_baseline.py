@@ -9,8 +9,10 @@
 ЧТО ВНУТРИ: деньги (по ролям), производство (сколько постов), Telegram (динамика зрелых постов и
 счётчики канала), Threads (аккаунт + воронка заводских постов по форматам), рычаги (ставка).
 
-КАК СРАВНИВАТЬ: `python tools/factory_baseline.py` в любой день → новый JSON рядом со старым в
-docs/baselines/. Разница по одинаковым ключам и есть ответ «стало лучше или нет».
+КАК СРАВНИВАТЬ: снимок берётся САМ, раз в месяц, из автопилота — владелец не должен ничего
+помнить и запускать (его прямые слова 09.09: «вот это я не запомню»). Новый JSON ложится рядом со
+старым в docs/baselines/, разница по одинаковым ключам уходит владельцу в Telegram обычным
+сообщением. Руками: `python -m core.factory_baseline`.
 
 ЧЕСТНОСТЬ: где данных мало (например, финал-вопрос стоит на двух постах), снимок пишет n рядом с
 числом. Метрика без размера выборки — это мнение, а не замер.
@@ -19,14 +21,10 @@ from __future__ import annotations
 
 import json
 import statistics as st
-import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from core import config, factory_link, threads_app_metrics, threads_lint  # noqa: E402
+from core import config, factory_link, threads_app_metrics, threads_lint
 
 DAYS = 90
 OUT_DIR = config.ROOT / "docs" / "baselines"
@@ -152,15 +150,92 @@ def build() -> dict:
     }
 
 
-if __name__ == "__main__":
-    snap = build()
+def _last_two() -> tuple[dict | None, dict | None]:
+    files = sorted(OUT_DIR.glob("????-??-??.json"))
+    load = lambda f: json.loads(f.read_text(encoding="utf-8"))
+    if not files:
+        return None, None
+    return (load(files[-2]) if len(files) > 1 else None), load(files[-1])
+
+
+def _delta(now, was, digits: int = 0, suffix: str = "") -> str:
+    """«872 (−204)» — число и изменение. Нет прошлого — просто число, без выдуманного нуля."""
+    if now is None:
+        return "—"
+    body = f"{now:.{digits}f}{suffix}"
+    if was is None:
+        return body
+    d = now - was
+    return f"{body} ({d:+.{digits}f})"
+
+
+def diff_text() -> str:
+    """Короткое человеческое сравнение двух последних снимков — то, что уходит владельцу.
+
+    Показываем ТОЛЬКО то, что решает: деньги, производство, обе площадки и воронку. Всё
+    остальное лежит в JSON и ждёт вопроса; сообщение, которое лень дочитать, не читают вовсе."""
+    was, now = _last_two()
+    if not now:
+        return "Снимков ещё нет."
+    g = lambda d, *path: (None if d is None else
+                          (lambda v: v)(_dig(d, path)))
+    lines = [f"📊 Точка отсчёта {now['taken_at'][:10]}"
+             + (f" против {was['taken_at'][:10]}" if was else " (первая, сравнивать не с чем)")]
+    lines.append("\nДЕНЬГИ И ВЫПУСК за 90 дней")
+    lines.append(f"   потрачено ${_delta(g(now,'money','total_usd'), g(was,'money','total_usd'), 2)} · "
+                 f"постов {_delta(g(now,'production','telegram_posts'), g(was,'production','telegram_posts'))}"
+                 f" в ТГ и {_delta(g(now,'production','threads_posts'), g(was,'production','threads_posts'))}"
+                 f" в Threads · ${g(now,'production','cost_per_post_usd')}/пост")
+    lines.append("\nTELEGRAM")
+    lines.append(f"   подписчиков {_delta(g(now,'telegram','channel_now','followers'), g(was,'telegram','channel_now','followers'))}"
+                 f" · просмотров на пост {_delta(g(now,'telegram','channel_now','views_per_post'), g(was,'telegram','channel_now','views_per_post'))}")
+    lines.append("\nTHREADS — воронка заводских постов")
+    for key, label in (("factory_all", "все заводские"), ("flagship", "мини-флагман"),
+                       ("scope", "мини-скоуп"), ("personal", "личные (для сравнения)")):
+        n, w = g(now, "threads", key), (g(was, "threads", key) if was else None)
+        if not n:
+            continue
+        lines.append(f"   {label:24} в профиль {_delta(n.get('viewers_to_profile_pct'), (w or {}).get('viewers_to_profile_pct'), 2, '%')}"
+                     f" · подписок {_delta(n.get('new_followers'), (w or {}).get('new_followers'))}")
+    fa = g(now, "threads", "factory_all") or {}
+    lines.append(f"   постов без единого захода в профиль: {fa.get('zero_profile_visits')} из {fa.get('posts_measured')}")
+    st_now = g(now, "threads", "stake_lever") or {}
+    if st_now:
+        lines.append("\nРЫЧАГ СТАВКИ (заходов в профиль на 100 зрителей)")
+        lines.append(f"   со ставкой {st_now.get('with',{}).get('viewers_to_profile_pct')}% "
+                     f"(постов {st_now.get('with',{}).get('posts')}) · "
+                     f"без ставки {st_now.get('without',{}).get('viewers_to_profile_pct')}% "
+                     f"(постов {st_now.get('without',{}).get('posts')})")
+    return "\n".join(lines)
+
+
+def _dig(d: dict, path):
+    for k in path:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
+
+
+def take(force: bool = False) -> tuple[bool, str]:
+    """Снять точку, если пора (раз в месяц). Возвращает (снял ли, текст для владельца).
+
+    Раз в месяц — потому что метрики, по которым мы судим, меняются медленно: недельная разница в
+    охвате это шум площадки, а не результат наших правок."""
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"{date.today().isoformat()}.json"
-    path.write_text(json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Снимок записан: {path.relative_to(config.ROOT)}")
-    t = snap["threads"]["factory_all"]
-    print(f"Threads завод: зрителей {t['viewers']}, заходов в профиль {t['profile_visits']}, "
-          f"подписок {t['new_followers']} · без заходов {t['zero_profile_visits']} из {t['posts_measured']}")
-    print(f"Деньги за {snap['window_days']} дн: ${snap['money']['total_usd']} · "
-          f"постов {snap['production']['telegram_posts']}+{snap['production']['threads_posts']} · "
-          f"${snap['production']['cost_per_post_usd']}/пост")
+    files = sorted(OUT_DIR.glob("????-??-??.json"))
+    if files and not force:
+        last = date.fromisoformat(files[-1].stem)
+        if (date.today() - last).days < 28:
+            return False, ""
+    snap = build()
+    (OUT_DIR / f"{date.today().isoformat()}.json").write_text(
+        json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
+    return True, diff_text()
+
+
+if __name__ == "__main__":
+    import sys
+
+    took, text = take(force="--force" in sys.argv)
+    print(text if took else "Снимок за этот месяц уже есть — рано. Пересилить: --force")

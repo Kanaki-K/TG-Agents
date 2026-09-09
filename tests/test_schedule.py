@@ -654,3 +654,19 @@ def test_digest_carries_the_question_to_telegram():
     assert "Бывший CEO Твиттера" in d                # и улика, без неё вопрос беспредметен
     assert d.rstrip().endswith("уроки этого формата.")   # вопрос идёт ПОСЛЕДНИМ блоком
     assert run_autopilot._question_block("отчёт без вопроса") == ""
+
+
+def test_baseline_snapshot_is_monthly_not_daily(tmp_path, monkeypatch):
+    """Точка отсчёта снимается раз в месяц: недельная разница в охвате — шум площадки, а не
+    результат наших правок. И владелец про ручной запуск сказал прямо, что не запомнит."""
+    from core import factory_baseline
+
+    monkeypatch.setattr(factory_baseline, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(factory_baseline, "build", lambda: {"taken_at": "2026-09-09T00:00:00"})
+    took, _ = factory_baseline.take()
+    assert took                                   # снимков не было — снимаем
+    took, _ = factory_baseline.take()
+    assert not took                               # сегодня уже снимали — молчим
+    (tmp_path / "2026-07-01.json").write_text('{"taken_at": "2026-07-01T00:00:00"}', encoding="utf-8")
+    took, _ = factory_baseline.take(force=True)
+    assert took                                   # --force пересиливает
