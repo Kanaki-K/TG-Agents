@@ -33,6 +33,7 @@ param(
     [switch]$Now,
     [int]$MinDays = 3,
     [int]$MaxDays = 5,
+    [int]$Budget = 25000,
     [string]$Url = "https://www.threads.com/insights"
 )
 
@@ -95,13 +96,27 @@ $stamp = Get-Date -Format "yyyy-MM-dd"
 $out = Join-Path $outDir "insights-$stamp.html"
 
 # --dump-dom otdaet UZHE OTRISOVANNUYU stranicu. Eto odin zahod, kak esli by Vy otkryli vkladku.
-& $chrome --headless=new --disable-gpu --user-data-dir="$profileDir" `
-          --virtual-time-budget=25000 --dump-dom $Url 2>$null |
-    Out-File -FilePath $out -Encoding utf8
+#
+# ZAPUSKAEM CHEREZ Start-Process, a ne cherez konveyer. Prichina (09.09.2026): Chrome pishet svoyu
+# diagnostiku ("Created TensorFlow Lite XNNPACK delegate", oshibki rasshireniy) v potok OSHIBOK, a
+# pri $ErrorActionPreference = "Stop" PowerShell schitaet lyuboy takoy vyvod nativnoy komandy
+# terminiruyushchey oshibkoy - skript umiral do zapisi i ostavlyal fayl na 0 bayt. Start-Process s
+# yavnym perenapravleniem potokov v fayly etu problemu ubiraet polnostyu.
+$errFile = Join-Path $env:TEMP "threads_insights_stderr.txt"
+$proc = Start-Process -FilePath $chrome -NoNewWindow -Wait -PassThru `
+    -ArgumentList @("--headless=new", "--disable-gpu", "--user-data-dir=$profileDir",
+                    "--virtual-time-budget=$Budget", "--dump-dom", $Url) `
+    -RedirectStandardOutput $out -RedirectStandardError $errFile
 
+if (-not (Test-Path $out)) { Write-Error "Chrome ne sozdal fayl (kod $($proc.ExitCode))"; exit 1 }
 $size = (Get-Item $out).Length
 $next = Set-NextRun
 Write-Host "Snyato: $out ($size bayt). Sleduyushchiy zahod: $next"
 if ($size -lt 20000) {
-    Write-Warning "Fayl podozritelno malenkiy - vozmozhno, sessiya proshla. Zapustite s -Login."
+    Write-Warning "Fayl podozritelno malenkiy ($size bayt) - veroyatno, sessiya proshla ili stranica"
+    Write-Warning "ne uspela otrisovatsya. Poprobuyte: -Login zanovo, libo -Now -Budget 45000."
+    if (Test-Path $errFile) {
+        Write-Host "--- poslednie stroki stderr Chrome ---"
+        Get-Content $errFile -Tail 5
+    }
 }
