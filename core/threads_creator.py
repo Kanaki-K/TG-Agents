@@ -23,7 +23,7 @@ import logging
 import re
 from datetime import date
 
-from core import config, content_plan, cost, llm, published_journal, runmode, threads_distill_journal
+from core import config, content_plan, cost, llm, runmode, threads_distill_journal, threads_source
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
 THREADS_MODEL = "claude-sonnet-5"        # короткий формат — Opus избыточен (как у scope); /test → Haiku
@@ -206,18 +206,21 @@ def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[s
     return fixed
 
 
-def write(kind: str = "flagship", hint: str = "") -> str:
-    """Переработать ПОСЛЕДНИЙ вышедший ТГ-пост своего формата в пост(ы) Threads.
+def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | None = None) -> str:
+    """Переработать вышедший ТГ-пост своего формата в пост(ы) Threads.
 
-    Возвращает текст (посты через POST_SEP) или сообщение об отказе: журнал пуст / свод правил не задан.
-    hint — пожелание владельца (необязательно)."""
+    src — готовый исходник от вызывающего (пайплайн уже его достал и показал владельцу). Передавать
+    ЕГО, а не доставать заново: 09.09 пайплайн печатал один пост, а писатель молча брал из журнала
+    другой — в отчёте был скоуп про SEC, а на выходе тред про Дорси. Один источник на прогон.
+    back — если src не передан: 0 = последний из журнала, N≥1 = N-й с конца пост канала (обкатка).
+    Возвращает текст (посты через POST_SEP) или сообщение об отказе (нет материала / нет свода правил)."""
     k = content_plan.norm_kind(kind)
     fmt = spec(k)
     if manual_missing(k):
         return (f"⚠️ Свод правил формата «{fmt['label']}» ещё не написан ({fmt['manual']}). "
                 "Пока он пуст, я не пишу: взял бы правила соседнего формата — а они не про этот. "
                 "Положи правила в файл и убери строку-заглушку.")
-    src = published_journal.latest(k)
+    src = src or threads_source.resolve(k, back)
     if not src or not src.get("text"):
         return (f"⚠️ В журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}» — "
                 f"перерабатывать нечего. Опубликуй {fmt['source_label']} в ТГ (он запишется в журнал), "

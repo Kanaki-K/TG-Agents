@@ -13,6 +13,7 @@
 * Threads-форматы — ОДНИМ модулем с реестром FORMATS: сверяем, что наборы файлов не пересекаются
   и что ни один не тянет ТГ-память.
 Общий для всех канон (brand.md) изоляцией НЕ считается — он и должен грузиться везде."""
+import ast
 import re
 from pathlib import Path
 
@@ -78,3 +79,46 @@ def test_guard_not_vacuous():
     assert "scope_manual.md" in _loaded_memory("core/scope_writer.py")
     assert "content_manual.md" in _loaded_memory("core/creator_bot.py")
     assert _format_files("flagship") and _format_files("scope")
+
+
+# --- ВТОРОЙ КОНТУР ИЗОЛЯЦИИ: не только память, но и КОД (требование владельца 09.09.2026:
+# «пайплайны не должны пересекаться»). ТГ-пайплайн и Threads-пайплайн — две отдельные машины;
+# единственная разрешённая точка контакта — журнал вышедших постов (published_journal): ТГ туда
+# пишет, Threads оттуда читает. Всё остальное — общий нейтральный слой (config/llm/cost/план/руки).
+TG_BRAINS = {"core.creator_tools", "core.creator_bot", "core.scope_writer", "core.verify", "core.dedup",
+             "core.topic_gate", "core.scout_tools", "core.scout_bot", "core.scout_funnel",
+             "core.post_angle", "core.title_emoji", "core.market_tools", "run_pipeline"}
+THREADS_BRAINS = {"core.threads_creator", "core.threads_source", "run_threads_pipeline",
+                  "core.threads_dedup"}
+
+
+def _imported_modules(module_rel: str) -> set[str]:
+    """Модули проекта, которые файл импортирует (import X / from X import y, включая `from core import a, b`)."""
+    tree = ast.parse((ROOT / module_rel).read_text(encoding="utf-8"))
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            found.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.add(node.module)
+            found.update(f"{node.module}.{a.name}" for a in node.names)
+    return found
+
+
+def test_threads_pipeline_does_not_import_tg_machinery():
+    for mod in ("core/threads_creator.py", "core/threads_source.py", "run_threads_pipeline.py"):
+        leak = _imported_modules(mod) & TG_BRAINS
+        assert leak == set(), f"{mod} тянет мозги ТГ-пайплайна: {leak}"
+
+
+def test_tg_pipeline_does_not_import_threads_machinery():
+    for mod in ("run_pipeline.py", "core/creator_tools.py", "core/scope_writer.py"):
+        leak = _imported_modules(mod) & THREADS_BRAINS
+        assert leak == set(), f"{mod} тянет мозги Threads-пайплайна: {leak}"
+
+
+def test_the_only_bridge_is_the_journal():
+    # Мост существует и он ОДИН: ТГ пишет в журнал, Threads из него читает. Если однажды Threads-ветка
+    # начнёт читать драфты или звать ТГ-писателя — тест выше покраснеет, а этот покажет, что мост цел.
+    assert "core.published_journal" in _imported_modules("run_pipeline.py")
+    assert "core.published_journal" in _imported_modules("core/threads_source.py")

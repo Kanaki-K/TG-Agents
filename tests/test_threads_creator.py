@@ -146,3 +146,28 @@ def test_length_round_keeps_originals_if_model_loses_a_post(monkeypatch):
     posts = ["я" * (threads_creator.MAX_LEN + 10), "Второй"]
     assert threads_creator._enforce_length(posts, "flagship", "key", "model") == posts
     assert "оставил исходные" in threads_creator.LAST_LENGTH_NOTE
+
+
+def test_writer_uses_the_source_it_was_given(monkeypatch):
+    """Баг 09.09: пайплайн показывал один пост, а писатель брал из журнала другой (тред про Дорси
+    из скоупа про SEC). Источник теперь ОДИН на прогон — тот, что передал вызывающий."""
+    seen = {}
+
+    def _fake_reply(model, system, history, task, *a, **kw):
+        seen["task"] = task
+        return "Готовый тред", None
+
+    monkeypatch.setattr(threads_creator.llm, "reply", _fake_reply)
+    monkeypatch.setattr(threads_creator, "_system", lambda _k: "sys")
+    monkeypatch.setattr(threads_creator, "manual_missing", lambda _k: False)
+    monkeypatch.setattr(threads_creator, "_save", lambda *a, **kw: None)
+    monkeypatch.setattr(threads_creator.threads_distill_journal, "record", lambda *a, **kw: None)
+    monkeypatch.setattr(threads_creator.config, "load_agent", lambda _n: {"persona": "p"})
+    monkeypatch.setattr(threads_creator.config, "agent_api_key", lambda _c: "key")
+    # журнал специально «заряжен» ДРУГИМ постом — писатель не должен его увидеть
+    monkeypatch.setattr(threads_creator.threads_source, "resolve",
+                        lambda *a, **kw: {"text": "ЧУЖОЙ ПОСТ ИЗ ЖУРНАЛА", "date": "2026-09-09"})
+
+    out = threads_creator.write("scope", src={"text": "ПЕРЕДАННЫЙ ИСХОДНИК", "date": "2026-09-02"})
+    assert out == "Готовый тред"
+    assert "ПЕРЕДАННЫЙ ИСХОДНИК" in seen["task"] and "ЧУЖОЙ" not in seen["task"]

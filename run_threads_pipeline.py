@@ -3,6 +3,7 @@
     python run_threads_pipeline.py                 # мини-флагман (из вышедшего ТГ-флагмана)
     python run_threads_pipeline.py --scope         # мини-скоуп  (из вышедшего ТГ-скоупа)
     python run_threads_pipeline.py --review-only   # только показать, в отложку НЕ ставить
+    python run_threads_pipeline.py --scope --old 3 # ОБКАТКА: третий с конца скоуп ИЗ ВЫГРУЗКИ канала
 
 ЧЕТЫРЕ СВОДА ПРАВИЛ (площадка × формат) не смешиваются: ТГ-флагман, ТГ-скоуп, Threads-флагман,
 Threads-скоуп. Формат выбирает, чей мануал/эталоны/уроки грузятся — см. core/threads_creator.
@@ -27,18 +28,21 @@ import sys
 from datetime import timedelta
 
 from connectors.telegram_publish import publish as tg_publish
-from core import config, content_plan, cost, published_journal, logging_setup, runmode, threads_creator
+from core import config, content_plan, cost, logging_setup, runmode, threads_creator, threads_source
 
 logging_setup.setup()
 
 THREADS_SERIES_GAP_MIN = 10   # разнос постов серии по времени, чтобы легли ОТДЕЛЬНЫМИ отложенными
 
 
-def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: str = "flagship") -> str:
+def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: str = "flagship",
+                      back: int = 0) -> str:
     """Полный прогон Threads-формата: журнал → переработка по СВОЕМУ своду → ОТЛОЖКА ТГ-канала
     (тестового, если THREADS_TEST_CHANNEL задан; иначе боевого PUBLISH_CHANNEL — с предупреждением).
 
     kind — 'flagship' (мини-флагман) или 'scope' (мини-скоуп); имена общие с ТГ (content_plan).
+    back — 0: последний вышедший пост из журнала (боевой путь); N≥1: N-й с конца пост этого формата
+    ИЗ ВЫГРУЗКИ канала (обкатка на старых постах — их в журнале нет, он моложе).
     publish=False (или --review-only / тест-режим) — только показать, в отложку не ставить.
     emit — куда слать прогресс (print в терминал; бот передаёт свой коллектор, чтобы вернуть в чат)."""
     kind = content_plan.norm_kind(kind)
@@ -61,21 +65,26 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    src = published_journal.latest(kind)
+    src = threads_source.resolve(kind, back)
     if not src or not src.get("text"):
-        out(f"⛔ В журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}» — "
-            f"перерабатывать нечего. Опубликуй {fmt['source_label']} в ТГ (он запишется в журнал), "
-            f"затем запускай {fmt['label']}.")
+        where = (f"в выгрузке канала нет {back}-го с конца поста формата «{fmt['source_label']}»"
+                 if back else
+                 f"в журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}»")
+        out(f"⛔ {where} — перерабатывать нечего.\n"
+            f"   Боевой путь: опубликуй {fmt['source_label']} в ТГ (он запишется в журнал).\n"
+            f"   Обкатка: возьми пост из истории канала — флаг --old N (1 = самый свежий).")
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    out(f"🧵 Источник: {fmt['source_label']} от {src.get('date', '?')} — «{src.get('theme') or '(без темы)'}»")
+    out(f"🧵 Источник: {fmt['source_label']} от {src.get('date', '?')} — "
+        f"«{src.get('theme') or '(без темы)'}» [{src.get('origin', 'журнал')}], "
+        f"{len(src['text'])} знаков")
     # Анти-повтор/домен/ориентир на мини-флагмане НЕ нужны: флагман уже прошёл все гейты (Скаут,
     # антиповтор темы, пикер, 2FA) ДО создания — мы его лишь дистиллируем. Эта машинерия — для Формата 2
     # (он originates контент), модули threads_dedup/orientation_digest ждут его, к мини-флагману не привязаны.
     out(f"✍️ Делаю {fmt['label']} (Sonnet, свой свод правил — без Скаута/2FA/обложки)...\n")
     try:
-        series = threads_creator.write(kind, hint)
+        series = threads_creator.write(kind, hint, src=src)   # ровно тот источник, что показан выше
     except Exception as e:
         out(f"❌ Дистилляция не удалась: {e}")
         out("\n" + cost.summary())
@@ -172,7 +181,7 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         first = content_plan.human(base)
         msg = (f"🧵 Threads · {fmt['label']}: {ok} пост(а) готовы и лежат в «Отложенных» канала "
                f"«{channel}» (первый на {first}).\n"
-               f"Источник — {fmt['source_label']} от {src.get('date', '?')}.\n"
+               f"Источник — {fmt['source_label']} от {src.get('date', '?')} ({src.get('origin', 'журнал')}).\n"
                "Проверь и поправь ПРЯМО В ОТЛОЖКЕ: в Threads уйдёт та версия, что там останется. "
                "Не годится — удали сообщение, и в Threads ничего не уйдёт.")
         n = tg_publish.notify(target, msg)
@@ -183,11 +192,20 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     return "\n".join(report)
 
 
+def _arg_old() -> int:
+    """--old N → N (какой с конца пост канала брать). Без флага 0 = штатный путь через журнал."""
+    if "--old" not in sys.argv:
+        return 0
+    i = sys.argv.index("--old")
+    raw = sys.argv[i + 1] if len(sys.argv) > i + 1 else "1"
+    return int(raw) if raw.isdigit() and int(raw) > 0 else 1
+
+
 def main() -> None:
     logging_setup.set_agent("threads-pipeline")
     logging_setup.new_request()
     kind = "scope" if "--scope" in sys.argv else "flagship"
-    run_threads_cycle(publish="--review-only" not in sys.argv, kind=kind)
+    run_threads_cycle(publish="--review-only" not in sys.argv, kind=kind, back=_arg_old())
 
 
 if __name__ == "__main__":
