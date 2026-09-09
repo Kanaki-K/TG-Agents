@@ -190,8 +190,11 @@ def report(since_days: int = 90, top: int = 8) -> str:
                "материал для разбора «почему молчат».")
     # Подписки. На пост их Meta не отдаёт вообще — единственный доступный сигнал это дневной
     # прирост счётчика аккаунта, который мы копим сами с 09.09.2026 (core/threads_followers).
-    from core import threads_followers
+    from core import threads_app_metrics, threads_followers
     out.append("\n" + threads_followers.report(factory))
+    # Подписки и заходы в профиль НА ПОСТ есть только в приложении (проверено запросами 09.09:
+    # Meta перечисляет допустимые метрики явно, этих там нет). Владелец присылает их вставкой.
+    out.append("\n" + threads_app_metrics.funnel_report())
     return "\n".join(out)
 
 
