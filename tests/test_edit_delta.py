@@ -143,9 +143,34 @@ def test_ask_quotes_the_evidence(monkeypatch):
     assert "/lesson scope" in q                                   # готовая команда для ответа
 
 
-def test_compare_keeps_removed_and_added_fragments():
+def test_compare_keeps_the_fragments_themselves():
+    """Замер хранит САМИ фразы, а не только счётчики — без них вопрос владельцу беспредметен.
+    Абзац, заменённый на своём месте, — это пара «я → ты» (переформулировка), а не потеря."""
     from core import edit_delta as ed
     rep = ed.compare("Заголовок\n\nПервый абзац про механику\n\nФинал",
                      "Заголовок\n\nСовсем другой абзац владельца\n\nФинал")
+    assert rep["reworded"], "замена абзаца на своём месте должна читаться как переформулировка"
+    mine, yours = rep["reworded"][0]
+    assert "механику" in mine and "владельца" in yours
+
+
+def test_rewritten_paragraph_is_a_pair_not_a_loss():
+    """Баг 09.09: переписанный заголовок показывался как «выбросил X» + «дописал Y», и владелец не
+    понимал вопроса — он не выбрасывал, он ПЕРЕПИСАЛ. Пара ищется по месту, а не по похожести:
+    у нового заголовка со старым общих слов почти нет."""
+    from core import edit_delta as ed
+    rep = ed.compare("320 млн$ ушли, а ключи целы\n\nТело поста без изменений\n\nФинал",
+                     "Защита сработала идеально, но деньги всё равно ушли\n\nТело поста без изменений\n\nФинал")
+    assert rep["reworded"] and rep["reworded"][0][0].startswith("320 млн$")
+    assert rep["reworded"][0][1].startswith("Защита сработала")
+    assert rep["removed_texts"] == [] and rep["added_texts"] == []      # ничего не потеряно и не дописано
+    assert any(t.startswith("переформулировал") for t in rep["tags"])
+    assert not any(t.startswith("снял блок") for t in rep["tags"])
+
+
+def test_truly_dropped_paragraph_still_counts_as_loss():
+    """А вот когда абзац исчез и заменить его нечем — это именно снятый блок, класс другой."""
+    from core import edit_delta as ed
+    rep = ed.compare("Заголовок\n\nЛишний абзац про механику\n\nФинал", "Заголовок\n\nФинал")
     assert rep["removed_texts"] and "механику" in rep["removed_texts"][0]
-    assert rep["added_texts"] and "владельца" in rep["added_texts"][0]
+    assert rep["reworded"] == []

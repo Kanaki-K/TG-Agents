@@ -33,6 +33,7 @@ from core import analytics
 # ── Пороги. Все — из замера 20.08 по 62 драфтам и 407 постам канала, не с потолка ──
 MATCH_MIN = 0.45      # покрытие ниже → это ВООБЩЕ не тот пост (драфт не опубликован)
 PARA_MATCH = 0.55     # взаимное покрытие абзацев: пара найдена
+REWORD_SHIFT = 1      # на сколько абзацев мысль могла съехать, оставаясь «переписанной», а не новой
 WORDY_KEEP = 0.80     # изменённый абзац с таким сходством = шлифовка СЛОВ, не переписывание мысли
 REWRITE_MAX = 0.60    # покрытие ниже → пост переписан заново (31.07 Coldcard 51%, 10.08 BIP-110 59%)
 CLEAN_MIN = 0.94      # выше → правка была лёгкой (scope 19.08 = 95%); ниже — уже содержательная
@@ -80,7 +81,7 @@ def compare(draft: str, published: str) -> dict:
     """Карта различий драфт→канал. Чистая функция (тесты гоняют её напрямую)."""
     D, P = _paras(draft), _paras(published)
     used, same, wordy, rewritten, removed = set(), 0, 0, 0, 0
-    removed_texts: list = []
+    _removed_pairs: list = []
     for d in D:
         best_i, best_s = -1, 0.0
         for i, p in enumerate(P):
@@ -99,9 +100,28 @@ def compare(draft: str, published: str) -> dict:
                 rewritten += 1                    # мысль переписана
         else:
             removed += 1
-            removed_texts.append(_clip(d))     # что владелец ВЫБРОСИЛ — улика для вопроса ему же
+            _removed_pairs.append((D.index(d), d))   # позиция важнее текста: по ней ищем пару ниже
     added = len(P) - len(used)
     added_texts = [_clip(P[i]) for i in range(len(P)) if i not in used]
+    # ПЕРЕФОРМУЛИРОВКА ≠ «выбросил и дописал». Пара «снятый абзац + дописанный на его месте» — это
+    # чаще всего ОДНА мысль, сказанная иначе, и владельцу надо показывать именно пару. Баг 09.09:
+    # вопрос показывал «ты выбросил "320 млн$ ушли, а ключи целы"» — владелец не понял, о чём речь,
+    # потому что он не выбросил, а ПЕРЕПИСАЛ заголовок. Второй проход, порог мягче основного.
+    # Пару ищем ПО МЕСТУ, а не по похожести: переписанный заголовок с оригиналом слов почти не делит
+    # («320 млн$ ушли, а ключи целы» → «Защита сработала идеально, но деньги всё равно ушли»), зато
+    # стоит ровно там же. Соседний абзац (±1) допускаем — владелец иногда переносит мысль на строку.
+    reworded, still_removed = [], []
+    free_add = [i for i in range(len(P)) if i not in used]
+    for i_d, dtext in _removed_pairs:
+        cand = [j for j in free_add if abs(j - i_d) <= REWORD_SHIFT]
+        if cand:
+            j = min(cand, key=lambda x: (abs(x - i_d), -_cov(dtext, P[x])))
+            reworded.append((_clip(dtext), _clip(P[j])))
+            free_add.remove(j)
+        else:
+            still_removed.append(dtext)
+    removed_texts = still_removed
+    added_texts = [_clip(P[j]) for j in free_add]
     # Покрытие меряем по ТЕЛУ, без футера: он режется и возвращается кодом (линтер 14.08), в драфте
     # лежит markdown-ссылками, а в выгрузке канала — голым текстом. Считать его — мерить разметку,
     # а не правку владельца: на коротком посте один футер утягивал бы покрытие процентов на сорок.
@@ -113,10 +133,12 @@ def compare(draft: str, published: str) -> dict:
         tags.append("заголовок")
     if D and P and _norm(D[-1]) != _norm(P[-1]):
         tags.append("финал")
-    if removed:
-        tags.append(f"снял блок×{removed}")
-    if added:
-        tags.append(f"дописал×{added}")
+    if reworded:
+        tags.append(f"переформулировал×{len(reworded)}")
+    if removed_texts:
+        tags.append(f"снял блок×{len(removed_texts)}")
+    if added_texts:
+        tags.append(f"дописал×{len(added_texts)}")
     if rewritten:
         tags.append(f"переписал мысль×{rewritten}")
     if wordy and not rewritten:
@@ -132,7 +154,8 @@ def compare(draft: str, published: str) -> dict:
     return {"coverage": round(coverage, 3), "same": same, "wordy": wordy, "rewritten": rewritten,
             "removed": removed, "added": added, "n_draft": len(D), "n_post": len(P), "tags": tags,
             "head_pair": head_pair, "tail_pair": tail_pair,
-            "removed_texts": removed_texts[:2], "added_texts": added_texts[:2],
+            "removed_texts": [_clip(t) for t in removed_texts][:2], "added_texts": added_texts[:2],
+            "reworded": reworded[:2],
             "clean": not (removed or added or rewritten or wordy) and bool(D)}
 
 
@@ -252,6 +275,7 @@ def text_report(kind: str = "", limit: int = 5) -> str:
 # закроет, а на «вот три твоих правки, что в них общего» отвечают одной фразой.
 _ASK_FIELD = {"заголовок": "head_pair", "финал": "tail_pair"}
 _ASK_LIST = {"снял блок": ("removed_texts", "выбросил"), "дописал": ("added_texts", "дописал")}
+_ASK_PAIRS = {"переформулировал"}    # показываем парами «я → ты», иначе вопрос беспредметен
 
 
 def ask(kind: str = "") -> str:
@@ -263,7 +287,14 @@ def ask(kind: str = "") -> str:
     top = rep[0].split(" (")[0]                      # самый частый класс правки
     field = _ASK_FIELD.get(top)
     lines = [f"🙋 Спрашиваю, потому что это НЕ разовая правка: {rep[0]} — {top}."]
-    if field:
+    if top in _ASK_PAIRS:
+        for r in reps:
+            for mine, yours in r.get("reworded") or []:
+                lines.append(f"   #{r['post_id']}  я:   «{mine}»")
+                lines.append(f"           ты:  «{yours}»")
+        lines.append("   Что общее в твоих переформулировках — какое правило записать, чтобы я "
+                     "сразу писал так?")
+    elif field:
         for r in reps:
             pair = r.get(field)
             if pair:
