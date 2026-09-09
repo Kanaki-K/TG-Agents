@@ -84,6 +84,31 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyC
     }
 Start-Sleep -Seconds 2
 
+function Set-NextRun {
+    # Sleduyushchiy zahod v sluchaynyy chas i minutu. Imenno sluchaynost delaet povedenie pohozhim
+    # na cheloveka, kotoryy zaglyadyvaet v statistiku kogda vspomnit, a ne po budilniku.
+    param([int]$MinD = 3, [int]$MaxD = 5)
+    $next = (Get-Date).Date.AddDays((Get-Random -Minimum $MinD -Maximum ($MaxD + 1))).
+            AddHours((Get-Random -Minimum 9 -Maximum 23)).
+            AddMinutes((Get-Random -Minimum 0 -Maximum 60))
+    $next.ToString("o") | Out-File -FilePath $stateFile -Encoding ascii
+    return $next
+}
+
+# RASPISANIE. Zadacha budit skript kazhdyy chas, no rabotaet on redko: hranim vremya sleduyushchego
+# zahoda i do nego prosto vyhodim. Bez etoy proverki ezhechasnaya zadacha snimala by stranicu
+# KAZHDYY CHAS - rovno to, chego my izbegaem.
+if (-not $Now) {
+    if (Test-Path $stateFile) {
+        $next = [datetime]::Parse((Get-Content $stateFile -Raw).Trim())
+        if ((Get-Date) -lt $next) { exit 0 }        # eshche ne pora - vyhodim molcha
+    } else {
+        $n = Set-NextRun -MinD 0 -MaxD 0            # pervyy zapusk: naznachaem na segodnya
+        Write-Host "Pervyy zahod naznachen na $n"
+        exit 0
+    }
+}
+
 $stamp = Get-Date -Format "yyyy-MM-dd"
 $out = Join-Path $outDir "insights-$stamp.html"
 
