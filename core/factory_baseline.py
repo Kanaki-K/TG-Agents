@@ -27,7 +27,10 @@ from datetime import date, datetime, timedelta
 from core import config, factory_link, threads_app_metrics, threads_lint
 
 DAYS = 90
-OUT_DIR = config.ROOT / "docs" / "baselines"
+# Снимки лежат в ПРИВАТНОМ репозитории памяти (решение владельца 09.09: «это аналитика моего
+# проекта; инструменты и методы оставляем, но сейчас это касается только моего проекта»).
+# Код репозитория публичный — числа канала, расходы и динамика подписчиков там не место.
+OUT_DIR = config.ROOT / "memory" / "analytics" / "baselines"
 
 
 def _money(edge: str) -> dict:
