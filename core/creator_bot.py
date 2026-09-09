@@ -41,6 +41,8 @@ WELCOME = (
     "флагмана), «/run_threads скоуп» — мини-скоуп (из скоупа). У каждого свой свод правил. Ставлю в "
     "ОТЛОЖКУ тестового канала на обкатку (не живая публикация; в Threads отложку ставишь руками); "
     "/run_threads_feedback [скоуп] <твой финал> — усвою урок из твоей правки.\n"
+    "📝 /lesson [формат] <правило> — ответ на мой вопрос «почему ты это правишь»: фраза ложится в уроки "
+    "нужного формата (скоуп / флагман / тредс-скоуп / тредс-флагман).\n"
     "🤖 /autopilot — пульт расписания ДВУХ форматов (флагман Вт/Чт и скоуп 🔭 Пн/Ср/Пт): что включено, "
     "дни и время выхода, окно старта. Форматы НЕЗАВИСИМЫ — включаются и выключаются по отдельности. "
     "Меняется РАЗГОВОРОМ со мной: «включи автопилот для скоупа», «выключи для флагмана», «скоуп в 16:00», "
@@ -419,6 +421,42 @@ def _run_threads_feedback(final_text: str = "") -> str:
     return threads_creator.write_feedback(raw, kind)
 
 
+def _lesson(arg: str = "") -> str:
+    """📝 /lesson [формат] <правило> — ответ на вопрос завода «почему ты это правишь».
+
+    Замер правок (core/edit_delta) сам спрашивает, когда класс правки ПОВТОРИЛСЯ; эта команда —
+    короткий путь ответить одной фразой, чтобы она сразу легла в уроки СВОЕГО формата. Формат
+    первым словом: «скоуп» (по умолчанию), «флагман», «тредс-скоуп», «тредс-флагман»."""
+    from pathlib import Path
+
+    from core import config, content_plan, creator_tools, threads_creator
+    raw = (arg or "").strip()
+    if not raw:
+        return ("Скажи правило после команды:\n"
+                "/lesson скоуп <правило> · /lesson флагман <правило> · "
+                "/lesson тредс-скоуп <правило> · /lesson тредс-флагман <правило>")
+    head, _, rest = raw.partition(" ")
+    low = head.strip().lower().strip("«»\"',.:")
+    home, rest = None, rest.strip()
+    if low.startswith("тредс") or low.startswith("threads"):
+        # «тредс-скоуп» / «тредс флагман» — второе слово решает, чей это свод
+        kind = "scope" if any(w in low for w in ("скоуп", "scope", "коротк")) else "flagship"
+        if "-" not in low and "_" not in low:      # формат назвали ОТДЕЛЬНЫМ словом
+            kind_word, _, rest2 = rest.partition(" ")
+            kind = content_plan.norm_kind(kind_word, "flagship")
+            rest = rest2.strip()
+        home = config.ROOT / threads_creator.spec(kind)["lessons"]
+    elif low in content_plan.kind_words("flagship"):
+        home = creator_tools.LESSONS
+    elif low in content_plan.kind_words("scope"):
+        home = creator_tools.SCOPE_LESSONS
+    else:                                          # формат не назвали — правило про scope (правят его чаще)
+        home, rest = creator_tools.SCOPE_LESSONS, raw
+    if not rest:
+        return "Формат назвал, а само правило — нет. Повтори: /lesson <формат> <правило>."
+    return creator_tools._record_lesson({"lesson": rest}, Path(home))
+
+
 def _autopilot_panel() -> str:
     """🤖 /autopilot — пульт расписания ОБОИХ форматов. Показывает панель БЕЗ LLM (детерминированно и
     бесплатно), а менять параметры владелец может тут же словами: правку подхватит инструмент
@@ -458,6 +496,8 @@ async def main() -> None:
                          # 🧵 петля обучения Threads-форматов на правках владельца (учит свои файлы уроков)
                          "run_threads_feedback": _run_threads_feedback,
                          # 🤖 пульт автопилота: панель без LLM; правки — словами в диалоге (инструмент autopilot)
+                         # 📝 ответ на вопрос замера правок: фраза владельца → урок своего формата
+                         "lesson": _lesson,
                          "autopilot": _autopilot_panel},
         # авто-2FA СРАЗУ после генерации поста (на каждом /post и /light; в тест-режиме пропускается)
         post_hooks={"post": _post_2fa, "light": _post_2fa},

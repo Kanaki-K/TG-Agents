@@ -117,3 +117,35 @@ def test_no_import_cycle():
     import importlib
     for mod in ("core.creator_tools", "core.analytics_tools", "core.edit_delta"):
         assert importlib.import_module(mod) is not None
+
+
+def test_ask_is_silent_on_single_edits(monkeypatch):
+    """Одиночная правка = вкус дня: молчим. Спрашиваем только когда класс ПОВТОРИЛСЯ."""
+    from core import edit_delta as ed
+    monkeypatch.setattr(ed, "reports", lambda *a, **kw: [
+        {"post_id": 1, "coverage": 0.9, "tags": ["заголовок"], "head_pair": ("мой", "твой")},
+    ])
+    assert ed.ask("scope") == ""
+
+
+def test_ask_quotes_the_evidence(monkeypatch):
+    """Вопрос всегда с уликой: показываем сами фразы, иначе владельцу нечего ответить."""
+    from core import edit_delta as ed
+    monkeypatch.setattr(ed, "reports", lambda *a, **kw: [
+        {"post_id": 497, "coverage": 0.99, "tags": ["заголовок"],
+         "head_pair": ("Биткоинщик Дорси строит банк", "Бывший CEO Твиттера строит банк")},
+        {"post_id": 494, "coverage": 0.88, "tags": ["заголовок"],
+         "head_pair": ("320 млн$ ушли, а ключи целы", "Защита сработала, деньги ушли")},
+    ])
+    q = ed.ask("scope")
+    assert "Биткоинщик" in q and "Бывший CEO Твиттера" in q      # обе стороны пары
+    assert "#497" in q and "#494" in q
+    assert "/lesson scope" in q                                   # готовая команда для ответа
+
+
+def test_compare_keeps_removed_and_added_fragments():
+    from core import edit_delta as ed
+    rep = ed.compare("Заголовок\n\nПервый абзац про механику\n\nФинал",
+                     "Заголовок\n\nСовсем другой абзац владельца\n\nФинал")
+    assert rep["removed_texts"] and "механику" in rep["removed_texts"][0]
+    assert rep["added_texts"] and "владельца" in rep["added_texts"][0]

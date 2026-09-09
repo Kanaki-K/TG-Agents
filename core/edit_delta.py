@@ -70,10 +70,17 @@ def _paras(text: str) -> list:
     return out
 
 
+def _clip(s: str, n: int = 120) -> str:
+    """Фраза для показа владельцу: одной строкой и без хвоста — вопрос должен читаться с телефона."""
+    s = " ".join((s or "").split())
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
 def compare(draft: str, published: str) -> dict:
     """Карта различий драфт→канал. Чистая функция (тесты гоняют её напрямую)."""
     D, P = _paras(draft), _paras(published)
     used, same, wordy, rewritten, removed = set(), 0, 0, 0, 0
+    removed_texts: list = []
     for d in D:
         best_i, best_s = -1, 0.0
         for i, p in enumerate(P):
@@ -92,7 +99,9 @@ def compare(draft: str, published: str) -> dict:
                 rewritten += 1                    # мысль переписана
         else:
             removed += 1
+            removed_texts.append(_clip(d))     # что владелец ВЫБРОСИЛ — улика для вопроса ему же
     added = len(P) - len(used)
+    added_texts = [_clip(P[i]) for i in range(len(P)) if i not in used]
     # Покрытие меряем по ТЕЛУ, без футера: он режется и возвращается кодом (линтер 14.08), в драфте
     # лежит markdown-ссылками, а в выгрузке канала — голым текстом. Считать его — мерить разметку,
     # а не правку владельца: на коротком посте один футер утягивал бы покрытие процентов на сорок.
@@ -115,8 +124,15 @@ def compare(draft: str, published: str) -> dict:
     # «Чисто» = владелец не тронул НИЧЕГО (даже слова). Мягче нельзя: 19.08 покрытие было 95%, но пять
     # абзацев он всё-таки поправил — назвать такой пост «без правок» значит соврать самим себе о цели
     # «не редактирую вообще». Покрытие рядом остаётся как мера ТЯЖЕСТИ правки.
+    # ПАРЫ «моё → твоё» для заголовка и финала. Раньше наружу шли только счётчики, и вопрос владельцу
+    # получался бы беспредметным («ты часто правишь заголовок» — а какой именно?). Спрашивать можно
+    # только с уликой в руках, поэтому таскаем сами фразы (обрезанные — в чат, не в архив).
+    head_pair = (_clip(D[0]), _clip(P[0])) if D and P and D[0] != P[0] else None
+    tail_pair = (_clip(D[-1]), _clip(P[-1])) if D and P and _norm(D[-1]) != _norm(P[-1]) else None
     return {"coverage": round(coverage, 3), "same": same, "wordy": wordy, "rewritten": rewritten,
             "removed": removed, "added": added, "n_draft": len(D), "n_post": len(P), "tags": tags,
+            "head_pair": head_pair, "tail_pair": tail_pair,
+            "removed_texts": removed_texts[:2], "added_texts": added_texts[:2],
             "clean": not (removed or added or rewritten or wordy) and bool(D)}
 
 
@@ -225,4 +241,45 @@ def text_report(kind: str = "", limit: int = 5) -> str:
     avg = sum(r["coverage"] for r in reps) / len(reps)
     lines.append(f"Среднее сохранение по {len(reps)} постам: {round(avg * 100)}% "
                  f"(ориентир — флагман: 100% на семи постах с конца июля).")
+    return "\n".join(lines)
+
+
+# ── Вопрос владельцу. Замер показывает ЧТО и СКОЛЬКО; спросить, ПОЧЕМУ, может только он ────────────
+# Владелец 09.09.2026: «не просто какой %, а чтобы записывал себе и при возможности задавал вопросы,
+# как сделать лучше, раз столько правок. Мне до сих пор не нравится, что 11 из 15 я редактирую».
+# Отсюда правило: молчим, пока правка одиночная (вкус дня), и спрашиваем — с цитатами — как только
+# класс повторился. Вопрос ОДИН, конкретный, с готовой командой для ответа: длинный опрос владелец
+# закроет, а на «вот три твоих правки, что в них общего» отвечают одной фразой.
+_ASK_FIELD = {"заголовок": "head_pair", "финал": "tail_pair"}
+_ASK_LIST = {"снял блок": ("removed_texts", "выбросил"), "дописал": ("added_texts", "дописал")}
+
+
+def ask(kind: str = "") -> str:
+    """Вопрос владельцу про ПОВТОРЯЮЩУЮСЯ правку — или пустая строка, если спрашивать не о чем."""
+    reps = reports(kind, limit=REPEAT_WINDOW)
+    rep = repeats(reps)
+    if not reps or not rep:
+        return ""
+    top = rep[0].split(" (")[0]                      # самый частый класс правки
+    field = _ASK_FIELD.get(top)
+    lines = [f"🙋 Спрашиваю, потому что это НЕ разовая правка: {rep[0]} — {top}."]
+    if field:
+        for r in reps:
+            pair = r.get(field)
+            if pair:
+                lines.append(f"   #{r['post_id']}  я:   «{pair[0]}»")
+                lines.append(f"           ты:  «{pair[1]}»")
+        lines.append("   Что общее в твоих правках — какое правило записать, чтобы я делал так СРАЗУ?")
+    elif top in _ASK_LIST:
+        key, verb = _ASK_LIST[top]
+        for r in reps:
+            for frag in r.get(key) or []:
+                lines.append(f"   #{r['post_id']}  {verb}: «{frag}»")
+        lines.append("   Это лишнее по смыслу или по длине? Какое правило записать, чтобы я не "
+                     "приносил такое снова?")
+    else:
+        worst = ", ".join(f"#{r['post_id']} {round(r['coverage'] * 100)}%" for r in reps[:3])
+        lines.append(f"   Посты: {worst}. Что именно не так — и какое правило это лечит?")
+    fmt = (kind or "scope").strip()
+    lines.append(f"   Ответь одной фразой: /lesson {fmt} <правило> — положу в уроки этого формата.")
     return "\n".join(lines)
