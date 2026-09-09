@@ -132,10 +132,12 @@ if ($size -lt 1) { Write-Error "Chrome ne sozdal fayl"; exit 1 }
 $queueFile = Join-Path $root "data\threads_insights_queue.txt"
 $codes = @()
 if (Test-Path $queueFile) {
-    $all = Get-Content $queueFile | Where-Object { $_.Trim() }
+    # Peremennaya NE $all: v PowerShell imena registro-nezavisimy, i $all zatiraet klyuch -All
+    # (svitch prevrashchaetsya v massiv strok i skript padaet na starte). Poymano na zhivom zapuske.
+    $queue = Get-Content $queueFile | Where-Object { $_.Trim() }
     # -All: vsya ochered za odin den (reshenie vladelca 09.09 - "nuzhno za segodnya sobrat 90
     # postov"). Bez flaga - obychnyy korotkiy zahod.
-    $codes = if ($All) { $all } else { $all | Select-Object -First $Posts }
+    $codes = if ($All) { $queue } else { $queue | Select-Object -First $Posts }
 }
 
 $done = 0
