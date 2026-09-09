@@ -20,6 +20,9 @@
 #
 # PROVERKA SEYCHAS (ignoriruet raspisanie):
 #     powershell -ExecutionPolicy Bypass -File tools\threads_insights.ps1 -Now
+#
+# SOBRAT VSYU OCHERED ZA DEN (~2-3 chasa, s pereryvami; okno PowerShell ne zakryvat):
+#     powershell -ExecutionPolicy Bypass -File tools\threads_insights.ps1 -Now -All
 #   V papke data\incoming dolzhen poyavitsya fayl insights-GGGG-MM-DD.html
 #
 # RASPISANIE (kazhdyy chas; skript sam reshaet, pora li). V terminale PyCharm (PowerShell):
@@ -35,6 +38,8 @@ param(
     [int]$MaxDays = 5,
     [int]$Budget = 25000,
     [int]$Posts = 5,
+    [switch]$All,
+    [int]$Batch = 20,
     [string]$Url = "https://www.threads.com/insights"
 )
 
@@ -127,15 +132,34 @@ if ($size -lt 1) { Write-Error "Chrome ne sozdal fayl"; exit 1 }
 $queueFile = Join-Path $root "data\threads_insights_queue.txt"
 $codes = @()
 if (Test-Path $queueFile) {
-    $codes = Get-Content $queueFile | Where-Object { $_.Trim() } | Select-Object -First $Posts
+    $all = Get-Content $queueFile | Where-Object { $_.Trim() }
+    # -All: vsya ochered za odin den (reshenie vladelca 09.09 - "nuzhno za segodnya sobrat 90
+    # postov"). Bez flaga - obychnyy korotkiy zahod.
+    $codes = if ($All) { $all } else { $all | Select-Object -First $Posts }
 }
 
 $done = 0
 $stopped = $false
+$inBatch = 0
 foreach ($code in $codes) {
-    # Pauza 60-180 sekund. Eto ne "vezhlivost k serveru" - eto edinstvennoe otlichie ot robota:
-    # chelovek smotrit statistiku posta poltory minuty, a ne 300 millisekund.
-    Start-Sleep -Seconds (Get-Random -Minimum 60 -Maximum 181)
+    # Pauza mezhdu postami. V obychnom rezhime 60-180 sekund: eto ne "vezhlivost k serveru", a
+    # edinstvennoe otlichie ot robota - chelovek smotrit statistiku posta poltory minuty.
+    # V rezhime -All pauza korotkaya (20-50 s), no zato posle kazhdyh $Batch postov idet BOLSHOY
+    # pereryv 20-40 minut. Eto pohozhe na cheloveka, kotoryy sadilsya za statistiku neskolko raz
+    # za den, a ne na robota, ravnomerno stuchashchego 80 raz podryad.
+    if ($All) {
+        Start-Sleep -Seconds (Get-Random -Minimum 20 -Maximum 51)
+        $inBatch++
+        if ($inBatch -ge $Batch) {
+            $pause = Get-Random -Minimum 1200 -Maximum 2401
+            Write-Host "  ...pereryv $([int]($pause/60)) min (snyato $done iz $($codes.Count))"
+            Start-Sleep -Seconds $pause
+            $inBatch = 0
+        }
+    } else {
+        Start-Sleep -Seconds (Get-Random -Minimum 60 -Maximum 181)
+    }
+
     $target = Join-Path $outDir "insights-post-$code-$stamp.html"
     $n = Get-Page -PageUrl "https://www.threads.com/insights/post/$code" -Target $target
     if ($n -lt 1000) {
@@ -147,6 +171,7 @@ foreach ($code in $codes) {
         break
     }
     $done++
+    if ($done % 10 -eq 0) { Write-Host "  snyato $done iz $($codes.Count)" }
 }
 
 # Sleduyushchiy zahod. Poka ochered dlinnaya - raz v sutki (v sluchaynyy chas): tak 90 dney
