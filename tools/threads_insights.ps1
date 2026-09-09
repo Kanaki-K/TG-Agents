@@ -69,11 +69,22 @@ if ($Login) {
 }
 
 # Snimok i vhod delyat odin profil, a Chrome ne daet dvum ekzemplyaram rabotat s odnim profilem.
-# Poetomu esli okno vhoda eshche otkryto - govorim ob etom yavno, a ne otdaem pustoy fayl.
+# Nash osnovnoy brauzer eto ne zatragivaet: filtr tolko po NASHEMU profilyu (ThreadsInsights).
+$busy = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*ThreadsInsights*" }
+# Zavisshiy FONOVYY Chrome ubiraem sami. Zhivoy sluchay 09.09: Ctrl+C ubil PowerShell, a docherniy
+# headless ostalsya visеt, i sledushchiy zapusk upiralsya v "zakroyte okno", hotya zakryvat bylo
+# nechego - okna u nego net. Okno vhoda (bez --headless) trogat ne imeem prava: tam chelovek.
+$stale = $busy | Where-Object { $_.CommandLine -like "*--headless*" }
+foreach ($proc in $stale) {
+    Write-Host "Ubirayu zavisshiy fonovyy Chrome (PID $($proc.ProcessId)) ot proshloy sessii."
+    try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop } catch { }
+}
+if ($stale) { Start-Sleep -Seconds 3 }
 $busy = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like "*ThreadsInsights*" }
 if ($busy) {
-    Write-Warning "Okno Chrome s etim profilem eshche otkryto - zakroyte ego i povtorite komandu."
+    Write-Warning "Okno Chrome s etim profilem otkryto (vhod?) - zakroyte ego i povtorite komandu."
     exit 1
 }
 
