@@ -36,6 +36,19 @@ logging_setup.setup()
 THREADS_SERIES_GAP_MIN = 10   # разнос постов серии по времени, чтобы легли ОТДЕЛЬНЫМИ отложенными
 
 
+def _review_channel() -> str:
+    """Куда кладём ревью-копии Threads. Ключ окружения главнее, иначе — настройка плана на диске.
+
+    Почему две двери: файл с ключами закрыт хуком на запись (харденинг секретов), и завести туда
+    канал самому нельзя — а владельцу «допиши строку руками» ради обкатки мешает работать. Поэтому
+    канал ревью живёт ещё и в data/plan_settings.json (там же, где дни и время выхода): его правит
+    чат, он переживает перезапуск и не смешивается с секретами. Приоритет у окружения — если владелец
+    однажды пропишет ключ, он победит настройку из чата, а не наоборот."""
+    from core import content_plan as cp
+    return (config.get_optional("THREADS_TEST_CHANNEL")
+            or str(cp.settings().get("threads_test_channel") or "").strip())
+
+
 def _cover_on_disk(path: str) -> str:
     """Путь к обложке, который РЕАЛЬНО существует здесь. Пустая строка — картинки нет.
 
@@ -141,7 +154,7 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         out(f"🧪 В отложку НЕ ставлю ({why}) — серия выше на проверку.")
         out("\n" + cost.summary())
         return "\n".join(report)
-    channel = config.get_optional("THREADS_TEST_CHANNEL")
+    channel = _review_channel()
     if not channel:
         channel = config.get_optional("PUBLISH_CHANNEL")
         if channel:
