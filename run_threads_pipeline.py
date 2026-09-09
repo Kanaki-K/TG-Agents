@@ -29,7 +29,8 @@ from datetime import timedelta
 from pathlib import Path
 
 from connectors.telegram_publish import publish as tg_publish
-from core import config, content_plan, cost, logging_setup, runmode, threads_creator, threads_source
+from core import (config, content_plan, cost, logging_setup, runmode, threads_creator,
+                  threads_lint, threads_source)
 
 logging_setup.setup()
 
@@ -140,6 +141,12 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         out("")
     if threads_creator.LAST_LENGTH_NOTE:
         out(f"📏 Длина: {threads_creator.LAST_LENGTH_NOTE}\n")
+    # ПРОВЕРКА ПО ЗАМЕРУ ВИРАЛЬНОСТИ (09.09.2026). Текст НЕ переписываем: линтер называет цену
+    # («нет ставки» = ×3.6 мимо), решает автор в отложке. Проверено на 64 живых постах — у лидеров
+    # корпуса претензий нет, у дна есть у всех, поэтому претензии можно читать всерьёз.
+    lint_report = threads_lint.check_series(posts)
+    if lint_report:
+        out(lint_report + "\n")
     # Блок для ВЛАДЕЛЬЦА (что осталось в ТГ, какой спор пойдёт в ответах, что честно отвечать).
     # В отложку и в Threads он не идёт — это подсказка к дежурству в комментах, метод владельца Шаг 7.
     if guide:
@@ -223,6 +230,10 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
                f"Источник — {fmt['source_label']} от {src.get('date', '?')} ({src.get('origin', 'журнал')}).\n"
                "Проверь и поправь ПРЯМО В ОТЛОЖКЕ: в Threads уйдёт та версия, что там останется. "
                "Не годится — удали сообщение, и в Threads ничего не уйдёт.")
+        # Претензии линтера идут В УВЕДОМЛЕНИЕ, а не в ревью-копию: копия — это ровно тот текст,
+        # который уйдёт в Threads, и служебные строки в ней стали бы частью поста.
+        if lint_report:
+            msg += "\n\n" + lint_report[:700]
         n = tg_publish.notify(target, msg)
         out("📨 Уведомил мейн владельца." if n.get("ok")
             else f"📨 Уведомление на мейн НЕ ушло: {n.get('error', '?')}")
