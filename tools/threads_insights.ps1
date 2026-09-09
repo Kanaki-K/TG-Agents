@@ -68,47 +68,21 @@ if ($Login) {
     exit 0
 }
 
-# Snimok i vhod delyat odin profil, a Chrome ne daet dvum ekzemplyaram rabotat s odnim profilem.
-# Nash osnovnoy brauzer eto ne zatragivaet: filtr tolko po NASHEMU profilyu (ThreadsInsights).
-$busy = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*ThreadsInsights*" }
-# Zavisshiy FONOVYY Chrome ubiraem sami. Zhivoy sluchay 09.09: Ctrl+C ubil PowerShell, a docherniy
-# headless ostalsya visеt, i sledushchiy zapusk upiralsya v "zakroyte okno", hotya zakryvat bylo
-# nechego - okna u nego net. Okno vhoda (bez --headless) trogat ne imeem prava: tam chelovek.
-$stale = $busy | Where-Object { $_.CommandLine -like "*--headless*" }
-foreach ($proc in $stale) {
-    Write-Host "Ubirayu zavisshiy fonovyy Chrome (PID $($proc.ProcessId)) ot proshloy sessii."
-    try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop } catch { }
-}
-if ($stale) { Start-Sleep -Seconds 3 }
-$busy = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*ThreadsInsights*" }
-if ($busy) {
-    Write-Warning "Okno Chrome s etim profilem otkryto (vhod?) - zakroyte ego i povtorite komandu."
-    exit 1
-}
-
-function Set-NextRun {
-    # Sleduyushchiy zahod v sluchaynyy chas i minutu. Imenno sluchaynost delaet povedenie pohozhim
-    # na cheloveka, kotoryy zaglyadyvaet v statistiku kogda vspomnit, a ne po budilniku.
-    param([int]$MinD = 3, [int]$MaxD = 5)
-    $next = (Get-Date).Date.AddDays((Get-Random -Minimum $MinD -Maximum ($MaxD + 1))).
-            AddHours((Get-Random -Minimum 9 -Maximum 23)).
-            AddMinutes((Get-Random -Minimum 0 -Maximum 60))
-    $next.ToString("o") | Out-File -FilePath $stateFile -Encoding ascii
-    return $next
-}
-
-if (-not $Now) {
-    if (Test-Path $stateFile) {
-        $next = [datetime]::Parse((Get-Content $stateFile -Raw).Trim())
-        if ((Get-Date) -lt $next) { exit 0 }        # eshche ne pora - vyhodim molcha
-    } else {
-        $n = Set-NextRun -MinD 0 -MaxD 0            # pervyy zapusk: naznachaem na segodnya
-        Write-Host "Pervyy zahod naznachen na $n"
-        exit 0
+# CHISTKA PERED RABOTOY. Nash headless-Chrome mozhet ostatsya visеt posle Ctrl+C (zhivoy sluchay
+# 09.09: docherniy process perezhil PowerShell). Snimaem ego sami i idem dalshe.
+#
+# ZDES NET OTKAZA "profil zanyat". Ran'she skript v etom sluchae vyhodil - i vladelec upiralsya v
+# soobshchenie "zakroyte okno", kogda zakryvat bylo nechego: okna u zavisshego processa net.
+# Otkaz zdes voobshche ne nuzhen: esli profil deystvitelno zanyat, Chrome prosto ne otdast stranicu,
+# i eto uvidit obychnaya proverka razmera fayla nizhe. Luchshe poprobovat i uznat, chem ne nachat.
+Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine -like "*ThreadsInsights*" -and
+                   $_.CommandLine -like "*--headless*" } |
+    ForEach-Object {
+        Write-Host "Ubirayu zavisshiy fonovyy Chrome (PID $($_.ProcessId)) ot proshloy sessii."
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
     }
-}
+Start-Sleep -Seconds 2
 
 $stamp = Get-Date -Format "yyyy-MM-dd"
 $out = Join-Path $outDir "insights-$stamp.html"
