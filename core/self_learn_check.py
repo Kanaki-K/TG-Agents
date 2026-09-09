@@ -21,55 +21,20 @@ import json
 from collections import Counter
 from datetime import date, timedelta
 
-from core import (analytics, category_scoring, config, io_safe, post_angle, self_learn, tg_scoring,
-                  threads_distill_journal, topic_category as tc, topic_datapoints)
+from core import (analytics, category_scoring, config, io_safe, post_angle, published_journal,
+                  self_learn, tg_scoring, threads_distill_journal, topic_category as tc,
+                  topic_datapoints)
 from connectors.threads import scoring as th_scoring
 
-_FLAGSHIPS = config.ROOT / "data" / "published_flagships.jsonl"
 _THREADS_POSTS = config.ROOT / "data" / "threads_posts.json"
 _THREADS_TOPICS = config.ROOT / "data" / "threads_topics.json"
 _TG_TOPICS = config.ROOT / "data" / "post_topics.json"
 
 
 def _load_flagships() -> list[dict]:
-    if not _FLAGSHIPS.exists():
-        return []
-    rows = []
-    for ln in _FLAGSHIPS.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if ln:
-            try:
-                rows.append(json.loads(ln))
-            except json.JSONDecodeError:
-                continue
-    return rows
-
-
-def _load_threads_posts() -> list[dict]:
-    return io_safe.load_json(_THREADS_POSTS, [])   # битый/нет файла → [] + INFO-лог (не молча)
-
-
-def _fresh_note(created: str) -> str:
-    """Объяснить, почему балл ещё None: посты моложе гейта зрелости (это норма, не поломка)."""
-    mdays = th_scoring.MATURITY_DAYS
-    try:
-        c = date.fromisoformat((created or "")[:10])
-    except ValueError:
-        return "балл: — (нет зрелых данных)"
-    age = (date.today() - c).days
-    if age < mdays:
-        ripe = (c + timedelta(days=mdays)).strftime("%d.%m")
-        return f"балл: — рано судить (посты ~{age} дн из {mdays}; оценка ≈ после {ripe})"
-    return "балл: — нет зрелых цифр (пост без охвата / ТГ не привязался)"
-
-
-def _bank_distribution() -> None:
-    dist = Counter(tc._bank_map().values())
-    print(f"[1] БАНК ТЕМ → категории (всего тем: {sum(dist.values())})")
-    for slug in tc.all_slugs():
-        print(f"    {dist.get(slug, 0):>3}  {tc.label(slug)}")
-    if dist.get(tc.UNKNOWN):
-        print(f"    {dist[tc.UNKNOWN]:>3}  ⚠ UNKNOWN (тема вне слоёв — проверь заголовки банка)")
+    """Вышедшие ФЛАГМАНЫ из общего журнала вышедших постов (скоупы сюда не берём: этот отчёт про
+    join темы флагмана с категорией; у скоупа тема — повод дня, к банку она не привязана)."""
+    return published_journal.entries("flagship")
 
 
 def _published_flagships(rows: list[dict]) -> None:

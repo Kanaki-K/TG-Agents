@@ -22,7 +22,7 @@ JOURNAL = config.ROOT / "data" / "threads_distillations.jsonl"
 def record(flagship: dict, series_text: str, sep: str, post_ids: list | None = None) -> None:
     """Зафиксировать дистилляцию: посты серии + дата/тема/категория исходного флагмана.
 
-    flagship — запись из flagship_journal (date/theme/text). series_text — вывод дистиллятора
+    flagship — запись из published_journal (date/theme/text). series_text — вывод дистиллятора
     (посты через sep). Категория выводится из темы флагмана по банку (core/topic_category).
     post_ids — ID постов в Threads, ЕСЛИ известны (авто-публикация → детерминированная связь без
     сверки текста). Сейчас публикация ручная → пусто; линкер тогда сверяет по тексту серии."""

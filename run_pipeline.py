@@ -21,7 +21,7 @@
      генерации, ведёт writer на него (не блуждает к слабому/протухшему); дубль/слабость ловит владелец в отложке;
   2) Криейтор — утверждённая НЕ-повторная тема: пост + обложка (make_image), сохраняет драфт;
   3) Постановка — нативная ОТЛОЖКА в канал на слот контент-плана + уведомление владельцу (PUBLISH_NOTIFY);
-     вышедший флагман пишется в журнал (flagship_journal) — вход мини-флагмана Threads.
+     вышедший флагман пишется в журнал (published_journal) — вход мини-флагмана Threads.
 Дальше проверяешь готовый пост в нативных «Отложенных» канала.
 
 llm.reply каждого агента гоняется в ОТДЕЛЬНОМ потоке (как в боте через asyncio.to_thread): так
@@ -40,7 +40,7 @@ from pathlib import Path
 
 from connectors.telegram_publish import publish
 from core import (analytics, config, cost, creator_bot, creator_tools, dedup, edit_delta,
-                  flagship_journal, llm, logging_setup, market_tools, runmode, scope_writer,
+                  published_journal, llm, logging_setup, market_tools, runmode, scope_writer,
                   scout_bot, scout_tools, self_learn, text_match, topic_category, topic_gate, verify)
 
 logging_setup.setup()  # N-2: единая идемпотентная настройка логов
@@ -853,10 +853,17 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # МОСТ В THREADS: вышедший флагман (полный текст + тема) → журнал вышедших. Отсюда мини-флагман
         # (run_threads_pipeline) берёт его и дистиллирует в Threads-серию. Только боевая публикация —
         # draft-only/тест сюда не доходят (вышли выше), журнал тестами не засоряется.
-        flagship_journal.record(post, theme)
+        published_journal.record(post, theme)
         out("🧵 Флагман записан в журнал вышедших — доступен мини-флагману Threads (run_threads_pipeline).")
         if dedup.mark_theme_used(theme):
             out(f"🧭 Тема помечена [вышло] в банке — вернётся в ротацию через ~{dedup.BANK_REUSE_DAYS//30} мес.")
+    # ТОТ ЖЕ МОСТ ДЛЯ СКОУПА (09.09.2026). Журнал один, метка формата разная: из него мини-скоуп
+    # берёт вышедший скоуп, а мини-флагман — вышедший флагман, и каждый применяет СВОЙ свод правил.
+    # На сам пост и публикацию это не влияет — только запись строки в журнал (сбой её проглатывается).
+    if scope:
+        published_journal.record(post, scope_rec, kind="scope")
+        out("🧵 Скоуп записан в журнал вышедших — доступен мини-скоупу Threads "
+            "(run_threads_pipeline.py --scope).")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
     out(_panel_block())
     out("\n" + cost.summary())  # реальная цена прогона Скаут→пост в $

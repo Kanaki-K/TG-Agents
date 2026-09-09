@@ -417,7 +417,7 @@ io_safe на горячем пути), инж-зрелость 6→6.5 (CI зе�
 - ☑ **N-24 [docs] ARCHITECTURE.md устарел и противоречил сам себе** (сводная находка 4 осей): «5 ботов»
   вместо 3, «ни один core/* не импортирует connectors.threads» — опровергнуто `analyst_tools.py:12`,
   вся Threads-ветка (мини-флагман/журнал/память) отсутствовала. ✅ СДЕЛАНО 15.07: doc-проход — шапка,
-  §3 (+run_threads_pipeline/refresh*), «построено vs подключено», §4 (threads_creator+flagship_journal+
+  §3 (+run_threads_pipeline/refresh*), «построено vs подключено», §4 (threads_creator+published_journal+
   io_safe/tg_scoring/untrusted), §4.1 (таблица на 3 ветки), §6 (threads-память и data), §9 (+2 хрупкости).
 - ☑ **N-25 [quality] `auth.valid_token()` глушил провал refresh Threads-токена молча** (`except: pass`,
   ни одного лога) — деградация была бы невидима до жёсткого «ИСТЁК» на 60-й день. ✅ СДЕЛАНО 15.07:

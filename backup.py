@@ -32,8 +32,10 @@ IRREPLACEABLE = [
     "data/scout_owner.txt",              # чаты владельца для проактивных отчётов
     "data/creator_owner.txt",
     "data/channel-analyst_owner.txt",
-    "data/published_flagships.jsonl",    # журнал ВЫШЕДШИХ флагманов — вход Threads-дистиллятора;
+    "data/published_posts.jsonl",        # журнал ВЫШЕДШИХ ТГ-постов (флагман+скоуп) — вход Threads-ветки;
                                          # датированная история (драфты эфемерны, а этот — нет)
+    "data/published_flagships.jsonl",    # он же ДО 09.09.2026 (флагман-только): мигрируется один раз,
+                                         # но пока лежит на диске — бэкапим, чтобы не потерять историю
     "data/threads_distillations.jsonl",  # журнал дистилляций (флагман→Threads-серия+категория) —
                                          # append-only вход линкера петли обучения, не пересоздать
     "data/threads_my_replies.json",      # корпус живого голоса (4966 реплик из Threads); формально

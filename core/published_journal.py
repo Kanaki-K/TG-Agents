@@ -1,0 +1,115 @@
+"""🧵 Журнал ВЫШЕДШИХ ТГ-постов — мост Telegram → Threads (оба формата).
+
+Когда ТГ-пост реально уходит в отложку канала (run_pipeline, только боевая публикация — не
+draft-only/тест), его ПОЛНЫЙ текст + формат + тема + дата дописываются сюда одной строкой JSON.
+Это ВХОД Threads-ветки: `threads_creator` берёт последнюю запись СВОЕГО формата и делает из неё
+пост площадки (флагман → мини-флагман, скоуп → мини-скоуп).
+
+Формат в записи обязателен и решает, ЧЕЙ свод правил применится: четыре свода (площадка × формат)
+не смешиваются, и журнал — то место, где ТГ-пост получает свою метку на входе в Threads.
+
+Почему отдельный журнал, а не «читать последний драфт»: драфты эфемерны (их перетирает следующий
+прогон), а журнал — намеренная датированная история (архив + устойчивый вход Threads).
+Файл в data/ (gitignored) — рантайм-состояние, не код. Append-only, один пост = одна строка.
+
+Миграция: до 09.09.2026 журнал был флагман-только и жил в data/published_flagships.jsonl. Старые
+записи переносятся сюда один раз при первом обращении и получают формат 'flagship' — история
+вышедших флагманов (вход мини-флагмана) не теряется.
+"""
+import json
+import logging
+from datetime import date
+
+from core import config, content_plan
+
+JOURNAL = config.ROOT / "data" / "published_posts.jsonl"
+LEGACY_JOURNAL = config.ROOT / "data" / "published_flagships.jsonl"   # флагман-только, до 09.09.2026
+
+
+def _migrate() -> None:
+    """Один раз перелить старый флагман-журнал в новый (формат проставляем 'flagship').
+
+    Старый файл НЕ удаляем: он безвреден, а его наличие — след истории. Повторный вызов ничего не
+    делает (новый файл уже есть). Сбой миграции не роняет вызывающего — журнал вторичен к посту."""
+    if JOURNAL.exists() or not LEGACY_JOURNAL.exists():
+        return
+    try:
+        rows = []
+        for ln in LEGACY_JOURNAL.read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                entry = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            entry.setdefault("kind", "flagship")
+            rows.append(json.dumps(entry, ensure_ascii=False))
+        if rows:
+            JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+            JOURNAL.write_text("\n".join(rows) + "\n", encoding="utf-8")
+            logging.info("published_journal: перенёс %d записей из старого флагман-журнала", len(rows))
+    except Exception:
+        logging.exception("published_journal: миграция старого журнала не удалась (иду дальше)")
+
+
+def record(text: str, theme: str = "", kind: str = "flagship") -> None:
+    """Дописать вышедший пост (полный текст + формат + тема + дата) в журнал. Мету после [[SPLIT]]
+    отбрасываем (в Threads уходит только тело). Сбой записи НЕ роняет публикацию — журнал вторичен."""
+    body = (text or "").split("[[SPLIT]]")[0].strip()
+    if not body:
+        return
+    try:
+        _migrate()
+        JOURNAL.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"date": date.today().isoformat(), "kind": content_plan.norm_kind(kind),
+                 "theme": (theme or "").strip(), "text": body}
+        with JOURNAL.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        logging.exception("published_journal: не смог записать вышедший пост (публикацию не роняю)")
+
+
+def _entries() -> list[dict]:
+    """Все записи (старые→новые). Битую строку пропускаем, битый файл не роняем в трейс."""
+    _migrate()
+    if not JOURNAL.exists():
+        return []
+    out: list[dict] = []
+    try:
+        for ln in JOURNAL.read_text(encoding="utf-8").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                out.append(json.loads(ln))
+            except json.JSONDecodeError:
+                continue
+    except Exception:
+        logging.exception("published_journal: журнал не читается — возвращаю, что успел")
+    return out
+
+
+def entries(kind: str = "") -> list[dict]:
+    """Все записи журнала (старые→новые), при желании — только своего формата.
+
+    Записи без поля 'kind' (доисторические) считаем флагманами — так их и писали."""
+    want = content_plan.norm_kind(kind) if kind else ""
+    rows = [e for e in _entries() if e.get("text")]
+    return [e for e in rows if (e.get("kind") or "flagship") == want] if want else rows
+
+
+def latest(kind: str = "") -> dict | None:
+    """Последняя запись журнала (dict: date/kind/theme/text) или None.
+
+    kind пустой — последний пост ЛЮБОГО формата; иначе последний пост именно этого формата.
+    Вход Threads-ветки: ЧТО перерабатывать. Записи без поля 'kind' (доисторические) считаем
+    флагманами — так их и писали."""
+    want = content_plan.norm_kind(kind) if kind else ""
+    for entry in reversed(_entries()):
+        if not entry.get("text"):
+            continue
+        if want and (entry.get("kind") or "flagship") != want:
+            continue
+        return entry
+    return None

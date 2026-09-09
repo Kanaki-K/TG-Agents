@@ -1,7 +1,11 @@
-"""🧵 Threads-пайплайн (мини-флагман) — Фаза 1: дистилляция вышедшего ТГ-флагмана в серию постов.
+"""🧵 Threads-пайплайн: вышедший ТГ-пост → пост(ы) площадки. ДВА формата, свои правила у каждого.
 
-    python run_threads_pipeline.py                 # дистилляция → серия в ОТЛОЖКУ ТГ-канала (см. ниже!)
-    python run_threads_pipeline.py --review-only   # только показать серию, в отложку НЕ ставить
+    python run_threads_pipeline.py                 # мини-флагман (из вышедшего ТГ-флагмана)
+    python run_threads_pipeline.py --scope         # мини-скоуп  (из вышедшего ТГ-скоупа)
+    python run_threads_pipeline.py --review-only   # только показать, в отложку НЕ ставить
+
+ЧЕТЫРЕ СВОДА ПРАВИЛ (площадка × формат) не смешиваются: ТГ-флагман, ТГ-скоуп, Threads-флагман,
+Threads-скоуп. Формат выбирает, чей мануал/эталоны/уроки грузятся — см. core/threads_creator.
 
 ОБКАТКА (Фаза 1): серию кладём в нативную «Отложенную» очередь ТГ-канала — ТЕМ ЖЕ механизмом, что
 флагман/скоуп (telegram_publish, MTProto, слот content_plan) — чтобы увидеть посты живьём. Это НЕ
@@ -15,27 +19,30 @@ Threads-серии лягут в общую отложку рядом с нас�
 
 Реальная публикация в Threads (веха E) — отдельно; пока владелец ставит отложку руками в приложении.
 
-Скаут в этой ветке НЕ участвует: мини-флагман ничего не разведывает — он дистиллирует уже готовый,
-уже прошедший 2FA флагман (вход — core.flagship_journal). Анти-повтор/домен/ориентир — не нужны (флагман
+Скаут в этой ветке НЕ участвует: Threads-формат ничего не разведывает — он перерабатывает уже готовый,
+уже прошедший 2FA ТГ-пост (вход — core.published_journal). Анти-повтор/домен/ориентир — не нужны (пост
 выверен до создания), это машинерия Формата 2. Изоляция от ТГ-мира: общий только нейтральный слой.
 """
 import sys
 from datetime import timedelta
 
 from connectors.telegram_publish import publish as tg_publish
-from core import config, content_plan, cost, flagship_journal, logging_setup, runmode, threads_creator
+from core import config, content_plan, cost, published_journal, logging_setup, runmode, threads_creator
 
 logging_setup.setup()
 
 THREADS_SERIES_GAP_MIN = 10   # разнос постов серии по времени, чтобы легли ОТДЕЛЬНЫМИ отложенными
 
 
-def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
-    """Полный прогон мини-флагмана: журнал → дистилляция → серия → ОТЛОЖКА ТГ-канала (тестового,
-    если THREADS_TEST_CHANNEL задан; иначе боевого PUBLISH_CHANNEL — с предупреждением). Отчёт.
+def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: str = "flagship") -> str:
+    """Полный прогон Threads-формата: журнал → переработка по СВОЕМУ своду → ОТЛОЖКА ТГ-канала
+    (тестового, если THREADS_TEST_CHANNEL задан; иначе боевого PUBLISH_CHANNEL — с предупреждением).
 
-    publish=False (или --review-only / тест-режим) — только показать серию, в отложку не ставить.
+    kind — 'flagship' (мини-флагман) или 'scope' (мини-скоуп); имена общие с ТГ (content_plan).
+    publish=False (или --review-only / тест-режим) — только показать, в отложку не ставить.
     emit — куда слать прогресс (print в терминал; бот передаёт свой коллектор, чтобы вернуть в чат)."""
+    kind = content_plan.norm_kind(kind)
+    fmt = threads_creator.spec(kind)
     report: list[str] = []
 
     def out(s: str = "") -> None:
@@ -43,25 +50,32 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
         report.append(s)
 
     cost.reset()
-    out("=== 🧵 Threads · мини-флагман (дистилляция вышедшего флагмана) ===\n")
+    out(f"=== 🧵 Threads · {fmt['label']} (переработка вышедшего {fmt['source_label']}а) ===\n")
     _mode = runmode.get()
     if _mode["mode"] == "test":
         out(f"🧪 ТЕСТ-режим: модель → {_mode['model']} (дёшево, НЕ для прода).\n")
 
-    src = flagship_journal.latest()
-    if not src or not src.get("text"):
-        out("⛔ Журнал вышедших флагманов ПУСТ — дистиллировать нечего. Опубликуй флагман в ТГ "
-            "(он запишется в журнал), затем запускай мини-флагман.")
+    if threads_creator.manual_missing(kind):
+        out(f"⛔ Свод правил формата «{fmt['label']}» ещё не написан ({fmt['manual']}). Пока он пуст — "
+            "не пишу: модель добрала бы правила из соседнего формата, а это ровно то, чего мы не хотим.")
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    out(f"🧵 Источник: флагман от {src.get('date', '?')} — «{src.get('theme') or '(без темы)'}»")
+    src = published_journal.latest(kind)
+    if not src or not src.get("text"):
+        out(f"⛔ В журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}» — "
+            f"перерабатывать нечего. Опубликуй {fmt['source_label']} в ТГ (он запишется в журнал), "
+            f"затем запускай {fmt['label']}.")
+        out("\n" + cost.summary())
+        return "\n".join(report)
+
+    out(f"🧵 Источник: {fmt['source_label']} от {src.get('date', '?')} — «{src.get('theme') or '(без темы)'}»")
     # Анти-повтор/домен/ориентир на мини-флагмане НЕ нужны: флагман уже прошёл все гейты (Скаут,
     # антиповтор темы, пикер, 2FA) ДО создания — мы его лишь дистиллируем. Эта машинерия — для Формата 2
     # (он originates контент), модули threads_dedup/orientation_digest ждут его, к мини-флагману не привязаны.
-    out("✍️ Дистиллирую в мини-серию Threads (Sonnet, свой контекст — без Скаута/2FA/обложки)...\n")
+    out(f"✍️ Делаю {fmt['label']} (Sonnet, свой свод правил — без Скаута/2FA/обложки)...\n")
     try:
-        series = threads_creator.write(hint)
+        series = threads_creator.write(kind, hint)
     except Exception as e:
         out(f"❌ Дистилляция не удалась: {e}")
         out("\n" + cost.summary())
@@ -72,18 +86,27 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    posts = [p.strip() for p in series.split(threads_creator.POST_SEP) if p.strip()]
+    posts, guide = threads_creator.split_output(series)
     if not posts:
         out("⚠️ Серия пустая — модель ничего не выдала. Сырой вывод:")
         out(series)
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    out(f"📝 --- МИНИ-ФЛАГМАН · {len(posts)} пост(а) [THREADS] ---\n")
+    out(f"📝 --- {fmt['label'].upper()} · {len(posts)} пост(а) [THREADS] ---\n")
     for i, p in enumerate(posts, 1):
-        over = "  ⚠️ >500" if len(p) > 500 else ""
+        over = f"  ⚠️ >{threads_creator.MAX_LEN} — Threads такой пост не примет" \
+            if len(p) > threads_creator.MAX_LEN else ""
         out(f"🧵 [THREADS {i}/{len(posts)}]  ({len(p)} симв.{over})")
         out(p)
+        out("")
+    if threads_creator.LAST_LENGTH_NOTE:
+        out(f"📏 Длина: {threads_creator.LAST_LENGTH_NOTE}\n")
+    # Блок для ВЛАДЕЛЬЦА (что осталось в ТГ, какой спор пойдёт в ответах, что честно отвечать).
+    # В отложку и в Threads он не идёт — это подсказка к дежурству в комментах, метод владельца Шаг 7.
+    if guide:
+        out("💬 --- ДЛЯ ТЕБЯ (не публикуется): что осталось в ТГ и как вести комменты ---")
+        out(guide)
         out("")
 
     # ОБКАТКА: серию — в ОТЛОЖКУ тестового ТГ-канала (тем же механизмом, что флагман/скоуп). НЕ живая
@@ -97,9 +120,12 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
     if not channel:
         channel = config.get_optional("PUBLISH_CHANNEL")
         if channel:
-            out("ℹ️ THREADS_TEST_CHANNEL не задан — еду в общий PUBLISH_CHANNEL завода. Серия ляжет "
-                "в «Отложенные» рядом с постами флагмана/скоупа: если этот канал уже боевой — "
-                "проверь и удали её оттуда, НЕ дай выйти в эфир.")
+            out("ℹ️ THREADS_TEST_CHANNEL не задан — еду в общий PUBLISH_CHANNEL завода. Посты лягут "
+                "в «Отложенные» рядом с флагманом/скоупом: если этот канал уже боевой — проверь и "
+                "удали их оттуда, НЕ дай выйти в эфир.\n"
+                "   Как развести: заведи ОТДЕЛЬНЫЙ тестовый канал под Threads, добавь бота-публикатора "
+                "туда админом и пропиши ключ  THREADS_TEST_CHANNEL=@имя_канала  рядом с остальными "
+                "ключами (файл окружения проекта).")
     if not channel:
         out("⚠️ Ни THREADS_TEST_CHANNEL, ни PUBLISH_CHANNEL не заданы в .env — публиковать некуда, "
             "серия осталась на ревью выше.")
@@ -110,7 +136,7 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
     ok = 0
     for i, p in enumerate(posts):
         when = base + timedelta(minutes=THREADS_SERIES_GAP_MIN * i)
-        body = f"🧵 [THREADS · мини-флагман {i + 1}/{len(posts)}]\n\n{p}"
+        body = f"🧵 [THREADS · {fmt['label']} {i + 1}/{len(posts)}]\n\n{p}"
         res = tg_publish.publish(channel, body, None, when)
         if res.get("ok"):
             ok += 1
@@ -126,7 +152,8 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print) -> str:
 def main() -> None:
     logging_setup.set_agent("threads-pipeline")
     logging_setup.new_request()
-    run_threads_cycle(publish="--review-only" not in sys.argv)
+    kind = "scope" if "--scope" in sys.argv else "flagship"
+    run_threads_cycle(publish="--review-only" not in sys.argv, kind=kind)
 
 
 if __name__ == "__main__":

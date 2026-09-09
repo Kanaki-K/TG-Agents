@@ -1,29 +1,106 @@
-"""🧵 Мини-флагман (Threads) — дистилляция вышедшего ТГ-флагмана в 1–4 нативных поста.
+"""🧵 Threads-ветка Криейтора: вышедший ТГ-пост → пост(ы) для площадки.
 
-ОТДЕЛЬНАЯ ветка (как scope отделён от флагмана): свой лёгкий контекст (threads_manual + эталоны
-голоса), своя модель, БЕЗ Скаута / web_search / 2FA / GPT-обложки.
+ЧЕТЫРЕ СВОДА ПРАВИЛ, площадка × формат, и они НЕ смешиваются (принцип владельца 09.09.2026):
+    ТГ-флагман      → memory/content_manual.md            (core/creator_bot)
+    ТГ-скоуп        → memory/scope_manual.md              (core/scope_writer)
+    Threads-флагман → memory/threads_flagship_manual.md   (этот модуль, kind='flagship')
+    Threads-скоуп   → memory/threads_scope_manual.md      (этот модуль, kind='scope')
+Каждый формат грузит ТОЛЬКО свой мануал, свои эталоны голоса и свои уроки. Изоляцию стережёт
+tests/test_isolation_formats.py — она статическая: сосед протечёт → тест покраснеет.
 
-Почему без 2FA: факты берутся из УЖЕ вышедшего флагмана — он прошёл фактчек при своей публикации.
-Дистилляция не вводит новых цифр, поэтому заново не верифицируем (дёшево + не тянем флагман-обвязку).
-Медиа опционально: в Фазе 1 владелец ставит серию в отложку Threads руками и картинку цепляет сам.
+ОТДЕЛЬНАЯ ветка (как scope отделён от флагмана): свой лёгкий контекст, своя модель, БЕЗ Скаута /
+web_search / 2FA / GPT-обложки.
 
-Вход — последняя запись `core.flagship_journal` (журнал вышедших флагманов). Выход — текст серии:
-посты, разделённые строкой POST_SEP. Изоляция: свои драфты в memory/threads_drafts/ (ТГ-публикатор
-их НЕ видит — не перепутает с флагман/scope-драфтом).
+Почему без 2FA: факты берутся из УЖЕ вышедшего ТГ-поста — он прошёл фактчек при своей публикации.
+Переработка не вводит новых цифр, поэтому заново не верифицируем (дёшево + не тянем ТГ-обвязку).
+Медиа опционально: пока владелец ставит пост в Threads руками и картинку цепляет сам.
+
+Вход — последняя запись СВОЕГО формата в `core.published_journal` (журнал вышедших ТГ-постов).
+Выход — текст: посты, разделённые строкой POST_SEP. Изоляция: свои драфты в memory/threads_drafts/
+(ТГ-публикатор их НЕ видит — не перепутает с флагман/scope-драфтом).
 """
 import logging
 import re
 from datetime import date
 
-from core import config, cost, flagship_journal, llm, runmode, threads_distill_journal
+from core import config, content_plan, cost, llm, published_journal, runmode, threads_distill_journal
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
 THREADS_MODEL = "claude-sonnet-5"        # короткий формат — Opus избыточен (как у scope); /test → Haiku
 THREADS_THINKING = None                   # короткому дистилляту глубокое мышление не нужно (дёшево)
 
 THREADS_DRAFTS_DIR = config.ROOT / "memory" / "threads_drafts"  # ОТДЕЛЬНО от ТГ-драфтов (изоляция)
-THREADS_LESSONS = config.ROOT / "memory" / "threads_lessons.md"  # уроки из правок владельца (петля)
 POST_SEP = "[[POST]]"                      # разделитель постов серии в выводе модели
+GUIDE_SEP = "[[КОММЕНТЫ]]"                 # после постов — блок ДЛЯ ВЛАДЕЛЬЦА (в канал/Threads не идёт)
+MAX_LEN = 499                              # потолок площадки 500; целимся 440-499 (метод владельца, Шаг 5/7)
+
+# Пока эта строка стоит в мануале — свод НЕ написан, и ветка отказывается работать. Генерировать
+# по пустым правилам хуже, чем не генерировать: модель добрала бы недостающее из соседнего формата,
+# и мы получили бы «мини-флагман под видом мини-скоупа» — ровно то, чего принцип четырёх сводов не хочет.
+MANUAL_PLACEHOLDER = "(ПРАВИЛА ЕЩЁ НЕ ЗАДАНЫ)"
+
+TASK_FLAGSHIP = (
+    "Сделай МИНИ-ФЛАГМАН для Threads из вышедшего ТГ-флагмана (ниже). Правила формата — ТОЛЬКО из мануала "
+    "(memory/threads_flagship_manual.md в контексте: узлы-кандидаты → отбор по трём критериям → "
+    "непересечение по трём слоям → сборка → голос → длина) и эталонов голоса. Правила ТГ-форматов и "
+    "мини-скоупа к тебе НЕ применяются.\n"
+    "Работу по шагам веди молча — наружу выдаёшь только результат:\n"
+    "1) ПОСТЫ (1-4, дефолт 2), каждый ≤" + str(MAX_LEN) + " знаков, разделённые ОТДЕЛЬНОЙ строкой «"
+    + POST_SEP + "», В ПОРЯДКЕ ПУБЛИКАЦИИ, без нумерации и преамбулы.\n"
+    "2) Затем ОТДЕЛЬНОЙ строкой «" + GUIDE_SEP + "» и под ней коротко для владельца (это НЕ публикуется): "
+    "что осталось в ТГ (термины/цифры/honest-блок), почему такой порядок постов, какой спор пойдёт в "
+    "ответах и что честно отвечать — особенно чтобы тред не прочитали как сигнал «покупай».\n\n"
+    "ВЫШЕДШИЙ ФЛАГМАН (источник для переработки):\n{source}"
+)
+
+# У мини-скоупа задача НАМЕРЕННО тонкая: правила живут в его мануале, а не в этом промпте. Иначе
+# получится два хозяина у одного правила — грабли, на которых ТГ-ветки уже стояли (над-инженерия
+# промпта ломает качество, память scope-golden-baseline-locked).
+TASK_SCOPE = (
+    "Сделай МИНИ-СКОУП для Threads из вышедшего ТГ-скоупа (ниже). Правила формата — ТОЛЬКО из мануала "
+    "(memory/threads_scope_manual.md в контексте: найти живущий узел → разделить два слоя → скелет → "
+    "голос → длина → непересечение) и эталонов голоса. Правила ТГ-форматов и мини-флагмана к тебе НЕ "
+    "применяются.\n"
+    "Работу по шагам веди молча — наружу выдаёшь только результат:\n"
+    "1) ОДИН пост ≤" + str(MAX_LEN) + " знаков, без нумерации и преамбулы.\n"
+    "2) Затем ОТДЕЛЬНОЙ строкой «" + GUIDE_SEP + "» и под ней коротко для владельца (это НЕ публикуется): "
+    "что осталось в ТГ, какой спор пойдёт в ответах и что честно отвечать — особенно чтобы тред не "
+    "прочитали как сигнал «покупай».\n\n"
+    "ВЫШЕДШИЙ СКОУП (источник для переработки):\n{source}"
+)
+
+FORMATS = {
+    "flagship": {
+        "label": "мини-флагман",
+        "source_label": "флагман",
+        "manual": "memory/threads_flagship_manual.md",
+        "anchors": "memory/threads_flagship_anchors.md",
+        "lessons": "memory/threads_flagship_lessons.md",
+        "task": TASK_FLAGSHIP,
+        "intro": ("## 🧵 ТЫ ДЕЛАЕШЬ МИНИ-ФЛАГМАН ДЛЯ THREADS\n"
+                  "ОТДЕЛЬНЫЙ формат. Правила ТГ-флагмана (антитеза на весь пост, 2800–4096 знаков, разделы "
+                  "💡/💭, обложка), ТГ-скоупа и мини-скоупа к тебе НЕ применяются. Ты берёшь УЖЕ ВЫШЕДШИЙ "
+                  "ТГ-флагман и дистиллируешь его в 1–4 самостоятельных Threads-поста. Не репост и не "
+                  "пересказ — новая нарезка под площадку.\n\n"),
+    },
+    "scope": {
+        "label": "мини-скоуп",
+        "source_label": "скоуп",
+        "manual": "memory/threads_scope_manual.md",
+        "anchors": "memory/threads_scope_anchors.md",
+        "lessons": "memory/threads_scope_lessons.md",
+        "task": TASK_SCOPE,
+        "intro": ("## 🧵 ТЫ ДЕЛАЕШЬ МИНИ-СКОУП ДЛЯ THREADS\n"
+                  "ОТДЕЛЬНЫЙ формат. Правила ТГ-скоупа, ТГ-флагмана и мини-флагмана к тебе НЕ применяются: "
+                  "у мини-скоупа СВОЙ свод (ниже). Ты берёшь УЖЕ ВЫШЕДШИЙ ТГ-скоуп и делаешь из него пост "
+                  "для площадки. Не репост и не пересказ.\n\n"),
+    },
+}
+
+
+def spec(kind: str = "flagship") -> dict:
+    """Свод правил формата Threads: 'flagship' | 'scope'. Имена формата — общие с ТГ (content_plan)."""
+    return FORMATS[content_plan.norm_kind(kind)]
 
 
 def _read(rel: str) -> str:
@@ -31,100 +108,150 @@ def _read(rel: str) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
-def _system() -> str:
-    """Лёгкий контекст мини-флагмана: персона + Threads-мануал + эталоны голоса + красные линии бренда.
-    БЕЗ флагман-мануала (content_manual), БЕЗ scope-мануала, БЕЗ voice_core — у Threads СВОЙ голос,
-    он переносится с эталонов (threads_flagman_anchors), а не с ТГ-мозгов. Изоляция форматов."""
+def manual_missing(kind: str) -> bool:
+    """Свод формата пуст или помечен заглушкой → работать нельзя (см. MANUAL_PLACEHOLDER)."""
+    text = _read(spec(kind)["manual"]).strip()
+    return not text or MANUAL_PLACEHOLDER in text
+
+
+def _system(kind: str = "flagship") -> str:
+    """Лёгкий контекст формата: персона + ЕГО мануал + ЕГО эталоны + красные линии бренда.
+    БЕЗ ТГ-мануалов (content_manual/scope_manual/voice_core) и БЕЗ мануала соседнего Threads-формата:
+    у каждого из четырёх форматов свой свод, голос переносится эталонами, а не чужими мозгами."""
+    fmt = spec(kind)
     persona = config.load_agent(AGENT_NAME)["persona"]
-    anchors = _read("memory/threads_flagman_anchors.md") or "(эталонов пока нет — держись мануала)"
-    lessons = _read("memory/threads_lessons.md") or "(пока пусто — учусь на твоих правках Threads-серий)"
+    anchors = _read(fmt["anchors"]) or "(эталонов пока нет — держись мануала)"
+    lessons = _read(fmt["lessons"]) or "(пока пусто — учусь на твоих правках)"
     ctx = (
-        "## 🧵 ТЫ ДЕЛАЕШЬ МИНИ-ФЛАГМАН ДЛЯ THREADS\n"
-        "ОТДЕЛЬНЫЙ формат. Правила ТГ-флагмана (антитеза на весь пост, 2800–4096 знаков, разделы 💡/💭, "
-        "обложка) и 🔭-скоупа к тебе НЕ применяются. Ты берёшь УЖЕ ВЫШЕДШИЙ ТГ-флагман и дистиллируешь "
-        "его в 1–4 самостоятельных Threads-поста. Не репост и не пересказ — новая нарезка под площадку.\n\n"
-        "## 📕 МАНУАЛ МИНИ-ФЛАГМАНА (правила механики) — следуй строго (memory/threads_manual.md)\n"
-        f"{_read('memory/threads_manual.md')}\n\n"
-        "## 🎯 ЭТАЛОНЫ ГОЛОСА И НАРЕЗКИ — режь В ЭТОМ голосе (memory/threads_flagman_anchors.md)\n"
-        "Полный текст дистилляций владельца. Голос и приём нарезки переноси ОТСЮДА (как флагман с "
+        fmt["intro"]
+        + f"## 📕 МАНУАЛ ФОРМАТА «{fmt['label'].upper()}» (правила механики) — следуй строго ({fmt['manual']})\n"
+        f"{_read(fmt['manual'])}\n\n"
+        f"## 🎯 ЭТАЛОНЫ ГОЛОСА — пиши В ЭТОМ голосе ({fmt['anchors']})\n"
+        "Полный текст принятых владельцем постов. Голос и приём переноси ОТСЮДА (как флагман с "
         "anchor_posts): payoff первой строкой, строки-биты, регистр «ты», лишнее за борт.\n"
         f"{anchors}\n\n"
         "## Канон бренда — аудитория и КРАСНЫЕ ЛИНИИ (memory/brand.md)\n"
         "Соблюдай красные линии: BTC не проигравший, без политоты/России/торговых сигналов.\n"
         f"{_read('memory/brand.md')}\n\n"
-        "## Уроки из ТВОИХ правок Threads-серий — ПРИМЕНЯЙ (memory/threads_lessons.md)\n"
+        f"## Уроки из ТВОИХ правок этого формата — ПРИМЕНЯЙ ({fmt['lessons']})\n"
         f"{lessons}\n"
     )
     return llm.build_system(persona, ctx)
 
 
-TASK = (
-    "Сделай МИНИ-ФЛАГМАН для Threads из вышедшего ТГ-флагмана (ниже). СТРОГО по мануалу "
-    "(memory/threads_manual.md в контексте — там ПОЛНАЯ логика отбора) и эталонам голоса. Главное:\n"
-    "— НЕ «нарезать», а НАЙТИ то, что живёт само. Тест каждого кандидата: «если человек прочитает "
-    "ТОЛЬКО это и больше ничего не знает — получит ли законченную мысль?». Плюс reply-потенциал: есть "
-    "что ответить (вопрос-себе / удивление / несогласие)? Нет — пост мёртв.\n"
-    "— «Думающий, не знающий»: режь TG-«знающее» (сухая механика, тикеры/суммы/сделки, регуляторы). "
-    "Тест: перестаёт работать для того, кто про крипту слышать не хочет → это TG-контент, не Threads.\n"
-    "— 1–4 поста ≤500 (цель 440–495). Число — по материалу; «лучше два, чем четыре»: слабый пост ПОРТИТ "
-    "сильные, отсекай без жалости (хороший факт ≠ хороший тред).\n"
-    "— НЕПЕРЕСЕЧЕНИЕ постов (три слоя): не совпадать ни фактами, ни ПРИЁМОМ (узнавание / удивление / "
-    "зеркало…), ни финалом. Совпал хотя бы приём → второй лишний.\n"
-    "— Первая строка = payoff-удар/афоризм, не разгон. Строки-биты, регистр «ты» / безличное (кухня, не "
-    "кафедра), без футера/ссылок/хештегов.\n"
-    "— Финал = УДАР: вопрос-зеркало ИЛИ формула-афоризм. НЕ пересказ тезиса, не «время покажет», не «а "
-    "что думаете вы?» в лоб.\n"
-    "— ПОРЯДОК: первым тот, что СИЛЬНЕЕ провоцирует ответ (не «важнее по смыслу»).\n"
-    "ВЫВОД: ТОЛЬКО посты, разделённые ОТДЕЛЬНОЙ строкой «" + POST_SEP + "» между ними, В ПОРЯДКЕ "
-    "ПУБЛИКАЦИИ (без нумерации / преамбулы / комментариев). Один пост — без разделителя.\n\n"
-    "ВЫШЕДШИЙ ФЛАГМАН (источник для дистилляции):\n{flagship}"
-)
-
-
-def _save(series: str, src: dict) -> None:
-    """Сохранить серию в свой архив (memory/threads_drafts/). Не критично — сбой не роняет выдачу."""
+def _save(series: str, src: dict, kind: str) -> None:
+    """Сохранить результат в свой архив (memory/threads_drafts/). Не критично — сбой не роняет выдачу."""
     try:
         THREADS_DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
-        raw = (src.get("theme") or "flagman").lower()
-        slug = re.sub(r"[^a-z0-9-]+", "-", raw).strip("-")[:40] or "flagman"
-        fname = f"{date.today().isoformat()}-{slug}-threads.md"
+        raw = (src.get("theme") or "post").lower()
+        slug = re.sub(r"[^a-z0-9-]+", "-", raw).strip("-")[:40] or "post"
+        fname = f"{date.today().isoformat()}-{content_plan.norm_kind(kind)}-{slug}-threads.md"
         (THREADS_DRAFTS_DIR / fname).write_text(series, encoding="utf-8", newline="\n")
     except Exception:
-        logging.exception("threads_creator: не смог сохранить серию (не критично, выдаю в чат)")
+        logging.exception("threads_creator: не смог сохранить результат (не критично, выдаю в чат)")
 
 
-def write(hint: str = "") -> str:
-    """Дистиллировать ПОСЛЕДНИЙ вышедший флагман (journal) в мини-серию Threads. Возвращает текст серии
-    (посты через POST_SEP) или сообщение об отказе (журнал пуст). hint — пожелание владельца (необязательно)."""
-    src = flagship_journal.latest()
+FIX_LENGTH = (
+    "Твои посты ниже переросли потолок площадки. Верни ВСЕ посты заново, в том же порядке и том же "
+    "голосе, но каждый помеченный ❌ сожми до ≤{max} знаков. Режь ВОДУ, не смысл: лишние прилагательные "
+    "→ уточнения в скобках → дублирующие пояснения → служебные слова («вдруг», «просто», «этот»). "
+    "Мысль, заголовок и финал сохрани. Посты без пометки не трогай.\n"
+    "ВЫВОД: только посты, разделённые ОТДЕЛЬНОЙ строкой «" + POST_SEP + "», без нумерации и комментариев.\n\n"
+    "{posts}"
+)
+
+LAST_LENGTH_NOTE = ""   # что случилось с длиной в последнем прогоне — для панели пайплайна
+
+
+def split_output(text: str) -> tuple[list[str], str]:
+    """Разобрать вывод модели: список постов + блок для ВЛАДЕЛЬЦА (что осталось в ТГ, комменты).
+
+    Блок после GUIDE_SEP никуда не публикуется — он идёт в отчёт прогона."""
+    raw = (text or "").strip()
+    guide = ""
+    if GUIDE_SEP in raw:
+        raw, _, guide = raw.partition(GUIDE_SEP)
+        guide = guide.strip()
+    posts = [p.strip() for p in raw.split(POST_SEP) if p.strip()]
+    return posts, guide
+
+
+def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[str]:
+    """Метод владельца, Шаг «считаю знаки реально»: перебор ≤MAX_LEN лечим ОДНИМ кругом сжатия.
+
+    Почему кодом, а не надеждой на промпт: Threads-публикатор режет пост >500 жёстко (линт охвата),
+    и «на глаз» модель промахивается регулярно. Один круг — потолок цены; не помогло — отдаём как есть
+    с пометкой, владелец видит перебор в отчёте и решает сам (пост не теряем)."""
+    global LAST_LENGTH_NOTE
+    over = [i for i, p in enumerate(posts) if len(p) > MAX_LEN]
+    if not over:
+        LAST_LENGTH_NOTE = ""
+        return posts
+    marked = ("\n" + POST_SEP + "\n").join(
+        f"{'❌ ' if i in over else ''}[{len(p)} знаков] {p}" for i, p in enumerate(posts))
+    try:
+        text, _ = llm.reply(model, _system(kind), [], FIX_LENGTH.format(max=MAX_LEN, posts=marked),
+                            [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
+        fixed, _ = split_output(text)
+    except Exception:
+        logging.exception("threads_creator: круг сжатия по длине упал — отдаю посты как есть")
+        fixed = []
+    if len(fixed) != len(posts):      # модель потеряла/склеила пост — своим версиям верим больше
+        LAST_LENGTH_NOTE = (f"перебор в {len(over)} посте(ах), круг сжатия вернул не тот состав — "
+                            "оставил исходные")
+        return posts
+    still = [i for i, p in enumerate(fixed) if len(p) > MAX_LEN]
+    LAST_LENGTH_NOTE = (f"перебор в {len(over)} посте(ах) → сжал; всё ещё длинны: {len(still)}"
+                        if still else f"перебор в {len(over)} посте(ах) → сжал в норму")
+    return fixed
+
+
+def write(kind: str = "flagship", hint: str = "") -> str:
+    """Переработать ПОСЛЕДНИЙ вышедший ТГ-пост своего формата в пост(ы) Threads.
+
+    Возвращает текст (посты через POST_SEP) или сообщение об отказе: журнал пуст / свод правил не задан.
+    hint — пожелание владельца (необязательно)."""
+    k = content_plan.norm_kind(kind)
+    fmt = spec(k)
+    if manual_missing(k):
+        return (f"⚠️ Свод правил формата «{fmt['label']}» ещё не написан ({fmt['manual']}). "
+                "Пока он пуст, я не пишу: взял бы правила соседнего формата — а они не про этот. "
+                "Положи правила в файл и убери строку-заглушку.")
+    src = published_journal.latest(k)
     if not src or not src.get("text"):
-        return ("⚠️ В журнале вышедших флагманов пусто — дистиллировать нечего. Сначала опубликуй "
-                "флагман в ТГ (он запишется в журнал), потом запускай мини-флагман.")
+        return (f"⚠️ В журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}» — "
+                f"перерабатывать нечего. Опубликуй {fmt['source_label']} в ТГ (он запишется в журнал), "
+                "потом запускай.")
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
     model = runmode.resolve(THREADS_MODEL, ceiling=THREADS_MODEL)
-    task = TASK.format(flagship=src["text"])
+    task = fmt["task"].format(source=src["text"])
     if hint:
         task += f"\n\nПОЖЕЛАНИЕ ВЛАДЕЛЬЦА: {hint}"
     cost.set_context("threads")  # иначе расход пишется who='?' — аудит 15.07 не смог его атрибутировать
     # one-shot без инструментов → кэш системы не окупается (запись 1h = 2× без перечтений)
-    text, _ = llm.reply(model, _system(), [], task, [], lambda _n, _a: "", key, THREADS_THINKING,
+    text, _ = llm.reply(model, _system(k), [], task, [], lambda _n, _a: "", key, THREADS_THINKING,
                         cache_system=False)
-    text = (text or "").strip()
-    if text:
-        _save(text, src)
-        # Журнал дистилляций: связь «флагман → серия» + категория (вход петли само-обучения).
-        threads_distill_journal.record(src, text, POST_SEP)
-    return text
+    posts, guide = split_output(text)
+    if not posts:
+        return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
+    posts = _enforce_length(posts, k, key, model)
+    body = ("\n" + POST_SEP + "\n").join(posts)
+    _save(body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else ""), src, k)
+    # Журнал переработок: связь «ТГ-пост → его Threads-версия» + категория (вход петли само-обучения).
+    # Пишем ТОЛЬКО посты: блок для владельца в Threads не выходит и связь бы только зашумил.
+    threads_distill_journal.record(src, body, POST_SEP)
+    return body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else "")
 
 
 # --- Петля обучения на ПРАВКАХ владельца (token-независимо: учимся на редактуре, не на метриках) ---
 RECORD_THREADS_LESSON_TOOL = {
     "name": "record_threads_lesson",
-    "description": "Усвоить УРОК из правки владельца к Threads-серии — добавить в memory/threads_lessons.md "
-                   "(грузится тебе к каждой дистилляции, ОТДЕЛЬНО от ТГ-уроков). Только устойчивые "
-                   "переносимые правила, не разовую косметику; один вызов — один урок. ПЕРЕД записью "
-                   "сверься: правило уже в мануале/эталонах/уроках — НЕ дублируй. После записи отчитайся.",
+    "description": "Усвоить УРОК из правки владельца — добавить в файл уроков ЭТОГО формата Threads "
+                   "(он грузится тебе к каждому прогону формата; уроки соседних форматов и ТГ живут "
+                   "отдельно). Только устойчивые переносимые правила, не разовую косметику; один вызов "
+                   "— один урок. ПЕРЕД записью сверься: правило уже в мануале/эталонах/уроках — НЕ "
+                   "дублируй. После записи отчитайся.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -136,17 +263,18 @@ RECORD_THREADS_LESSON_TOOL = {
 }
 
 
-def _record_lesson(lesson: str, evidence: str = "") -> str:
-    """Дописать урок в memory/threads_lessons.md с простым анти-дублем (не пишем, если уже есть)."""
+def _record_lesson(kind: str, lesson: str, evidence: str = "") -> str:
+    """Дописать урок в файл уроков СВОЕГО формата с простым анти-дублем (не пишем, если уже есть)."""
     lesson = (lesson or "").strip()
     if not lesson:
         return "пустой урок — не записал"
+    path = config.ROOT / spec(kind)["lessons"]
     try:
-        existing = THREADS_LESSONS.read_text(encoding="utf-8") if THREADS_LESSONS.exists() else ""
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
         if lesson.lower() in existing.lower():
             return "похоже, такой урок уже есть — не дублирую"
-        THREADS_LESSONS.parent.mkdir(parents=True, exist_ok=True)
-        with THREADS_LESSONS.open("a", encoding="utf-8") as f:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
             if existing and not existing.endswith("\n"):
                 f.write("\n")
             f.write(f"- {lesson}" + (f"  _(повод: {evidence.strip()})_" if evidence.strip() else "") + "\n")
@@ -156,16 +284,24 @@ def _record_lesson(lesson: str, evidence: str = "") -> str:
         return "не смог записать урок (см. лог)"
 
 
-def _dispatch(name: str, args: dict) -> str:
-    if name == "record_threads_lesson":
-        return _record_lesson(args.get("lesson", ""), args.get("evidence", ""))
-    return ""
+def _dispatcher(kind: str):
+    """Диспетчер инструментов, знающий СВОЙ формат — чтобы урок лёг в файл своего свода, не соседнего."""
+    def _dispatch(name: str, args: dict) -> str:
+        if name == "record_threads_lesson":
+            return _record_lesson(kind, args.get("lesson", ""), args.get("evidence", ""))
+        return ""
+    return _dispatch
 
 
-def _latest_threads_draft() -> str:
-    """Текст самой свежей Threads-серии из своего архива (для сравнения с финалом владельца)."""
+def _latest_threads_draft(kind: str) -> str:
+    """Текст самого свежего Threads-драфта СВОЕГО формата (для сравнения с финалом владельца)."""
     try:
-        files = sorted(THREADS_DRAFTS_DIR.glob("*.md"), key=lambda p: -p.stat().st_mtime)
+        k = content_plan.norm_kind(kind)
+        files = sorted(THREADS_DRAFTS_DIR.glob(f"*-{k}-*.md"), key=lambda p: -p.stat().st_mtime)
+        if not files and k == "flagship":
+            # до 09.09.2026 имя файла формат не содержало — это были дистилляции флагмана
+            files = sorted((p for p in THREADS_DRAFTS_DIR.glob("*.md") if "-scope-" not in p.name),
+                           key=lambda p: -p.stat().st_mtime)
         return files[0].read_text(encoding="utf-8") if files else ""
     except Exception:
         logging.warning("Не смог прочитать последний Threads-драфт для сравнения", exc_info=True)
@@ -173,29 +309,31 @@ def _latest_threads_draft() -> str:
 
 
 FEEDBACK = (
-    "ОБУЧЕНИЕ НА ПРАВКЕ (Threads мини-флагман). Владелец прислал свой ФИНАЛЬНЫЙ отредактированный "
-    "вариант Threads-серии. 1) Сравни свой драфт ↔ финал: что владелец вырезал/добавил/переформулировал, "
+    "ОБУЧЕНИЕ НА ПРАВКЕ (Threads · {label}). Владелец прислал свой ФИНАЛЬНЫЙ отредактированный "
+    "вариант. 1) Сравни свой драфт ↔ финал: что владелец вырезал/добавил/переформулировал, "
     "как сдвинул нарезку/длину/тон/крючок/концовку/число постов. 2) Выдели УСТОЙЧИВЫЕ переносимые правила "
     "(а не разовую косметику под эту тему) и запиши КАЖДОЕ через record_threads_lesson (один вызов — один "
     "урок), при возможности с коротким evidence. Правило, которое уже в мануале/эталонах — НЕ дублируй. "
-    "3) Отчитайся 2-4 строки «усвоил: …» — что изменю в будущих сериях. Правок мало / косметика — так и "
-    "скажи, урок не плоди ради записи.\n\nТВОЙ ДРАФТ:\n{draft}\n\nФИНАЛ ВЛАДЕЛЬЦА:\n{final}"
+    "3) Отчитайся 2-4 строки «усвоил: …» — что изменю в будущих постах этого формата. Правок мало / "
+    "косметика — так и скажи, урок не плоди ради записи.\n\nТВОЙ ДРАФТ:\n{draft}\n\nФИНАЛ ВЛАДЕЛЬЦА:\n{final}"
 )
 
 
-def write_feedback(final_text: str) -> str:
-    """Петля обучения мини-флагмана: сравнить свою серию с финалом владельца → устойчивые уроки в
-    memory/threads_lessons.md. Учимся на ПРАВКАХ (не на метриках) — работает независимо от сбора данных.
+def write_feedback(final_text: str, kind: str = "flagship") -> str:
+    """Петля обучения формата: сравнить свой вариант с финалом владельца → устойчивые уроки в файл
+    уроков ЭТОГО формата. Учимся на ПРАВКАХ (не на метриках) — работает независимо от сбора данных.
     Метрики-петля — отдельно; заводится прогоном refresh_threads (токен Threads живой, не блокер)."""
     final_text = (final_text or "").strip()
     if not final_text:
-        return "Пришли отредактированный финал Threads-серии в том же сообщении после команды."
+        return "Пришли отредактированный финал в том же сообщении после команды."
+    k = content_plan.norm_kind(kind)
     cfg = config.load_agent(AGENT_NAME)
     key = config.agent_api_key(cfg)
     model = runmode.resolve(THREADS_MODEL, ceiling=THREADS_MODEL)
-    draft = _latest_threads_draft() or "(своего драфта не нашёл — опирайся на эталоны/мануал при сравнении)"
+    draft = _latest_threads_draft(k) or "(своего драфта не нашёл — опирайся на эталоны/мануал при сравнении)"
     cost.set_context("threads")
     # здесь кэш ОСТАВЛЕН: есть инструмент (запись урока) → несколько API-раундов перечитывают систему
-    text, _ = llm.reply(model, _system(), [], FEEDBACK.format(draft=draft, final=final_text),
-                        [RECORD_THREADS_LESSON_TOOL], _dispatch, key, THREADS_THINKING)
+    text, _ = llm.reply(model, _system(k), [],
+                        FEEDBACK.format(label=spec(k)["label"], draft=draft, final=final_text),
+                        [RECORD_THREADS_LESSON_TOOL], _dispatcher(k), key, THREADS_THINKING)
     return text or "(пусто)"
