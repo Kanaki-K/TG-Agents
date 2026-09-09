@@ -43,7 +43,10 @@ _SUMMARY = re.compile(r"^\s*(Зведення|Сводка|Обзор|Overview|I
 # нельзя — Meta может отдать что угодно по своим настройкам аккаунта.
 _LABELS: tuple[tuple[str, str], ...] = (
     ("profile_visits", r"(Відвідування профілю|Посещени[яй] профил[яи]|Profilbesuche|Profile visits)"),
-    ("new_followers",  r"(Нові читачі|Новые (?:читатели|подписчики)|Neue Follower|New followers)"),
+    # «Подписки» — так новые читатели названы на ВЕБ-странице поста (в приложении «Нові читачі»).
+    # Названия одной метрики в двух интерфейсах разные, поэтому список, а не одно слово.
+    ("new_followers",  r"(Нові читачі|Новые (?:читатели|подписчики)|Підписки|Подписки|"
+                       r"Neue Follower|New followers|Follows)"),
     ("viewers",        r"(Глядачі|Зрители|Betrachter|Viewers)"),
     ("views",          r"(Перегляди|Просмотры|Aufrufe|Views)"),
     ("likes",          r"(Вподобайки|Лайки|Gefällt mir|Likes)"),

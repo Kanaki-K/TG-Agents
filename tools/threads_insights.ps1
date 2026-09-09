@@ -105,13 +105,22 @@ $out = Join-Path $outDir "insights-$stamp.html"
 function Get-Page {
     # Odin snimok odnoy stranicy v fayl. Yazyk interfeysa prinuditelno russkiy: svezhiy profil
     # headless otdaval nemeckiy, a razbor idet po SLOVAM interfeysa - pust oni budut predskazuemy.
-    param([string]$PageUrl, [string]$Target)
+    param([string]$PageUrl, [string]$Target, [int]$TimeoutSec = 120)
     $errFile = Join-Path $env:TEMP "threads_insights_stderr.txt"
-    Start-Process -FilePath $chrome -NoNewWindow -Wait `
+    # -PassThru bez -Wait + WaitForExit s TAYMAUTOM. Prichina (zhivoy zapusk 09.09): Chrome zavis na
+    # odnoy stranice, fayl ostalsya na 0 bayt, i skript zhdal ego vechno - sessiya vstala nasmert.
+    # Teper zavisshiy Chrome ubivaetsya, stranica schitaetsya nesnyatoy i my idem dalshe.
+    $proc = Start-Process -FilePath $chrome -NoNewWindow -PassThru `
         -ArgumentList @("--headless=new", "--disable-gpu", "--user-data-dir=$profileDir",
                         "--lang=ru", "--accept-lang=ru-RU,ru",
                         "--virtual-time-budget=$Budget", "--dump-dom", $PageUrl) `
-        -RedirectStandardOutput $Target -RedirectStandardError $errFile | Out-Null
+        -RedirectStandardOutput $Target -RedirectStandardError $errFile
+    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+        Write-Warning "Chrome zavis na $PageUrl - ubivayu i idu dalshe."
+        try { $proc.Kill() } catch { }
+        Start-Sleep -Seconds 5
+        return 0
+    }
     if (Test-Path $Target) { return (Get-Item $Target).Length }
     return 0
 }
@@ -143,6 +152,7 @@ if (Test-Path $queueFile) {
 $done = 0
 $stopped = $false
 $inBatch = 0
+$misses = 0
 foreach ($code in $codes) {
     # Pauza mezhdu postami. V obychnom rezhime 60-180 sekund: eto ne "vezhlivost k serveru", a
     # edinstvennoe otlichie ot robota - chelovek smotrit statistiku posta poltory minuty.
@@ -165,13 +175,16 @@ foreach ($code in $codes) {
     $target = Join-Path $outDir "insights-post-$code-$stamp.html"
     $n = Get-Page -PageUrl "https://www.threads.com/insights/post/$code" -Target $target
     if ($n -lt 1000) {
-        # PERVYY ZHE strannyy otvet = konec sessii, bez povtorov. Retray v oshibku - imenno to,
-        # chem my odnazhdy uzhe navredili akkauntu (razbor 14.07.2026).
+        # Odna pustaya stranica - byvaet (zavis Chrome, ne uspela otrisovka). DVE PODRYAD - eto uzhe
+        # priznak, chto nas ne hotyat obsluzhivat, i sessiya konchaetsya bez povtorov: retray v
+        # oshibku - imenno to, chem my odnazhdy uzhe navredili akkauntu (razbor 14.07.2026).
         Remove-Item $target -ErrorAction SilentlyContinue
-        Write-Warning "Stranica posta $code prishla pustoy - ostanavlivayu sessiyu."
-        $stopped = $true
-        break
+        $misses++
+        Write-Warning "Stranica posta $code ne snyalas ($misses podryad)."
+        if ($misses -ge 2) { Write-Warning "Dve podryad - ostanavlivayu sessiyu."; $stopped = $true; break }
+        continue
     }
+    $misses = 0
     $done++
     if ($done % 10 -eq 0) { Write-Host "  snyato $done iz $($codes.Count)" }
 }

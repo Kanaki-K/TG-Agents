@@ -26,6 +26,7 @@ from pathlib import Path
 
 import json
 import re
+import time
 from datetime import date
 
 from core import config, threads_app_metrics
@@ -36,6 +37,26 @@ OVERVIEW = "insights-????-??-??.html"      # общая страница: циф
 POST_PAGE = "insights-post-*.html"          # страница одного поста: заходы в профиль и подписки
 ACCOUNT_LOG = config.ROOT / "data" / "threads_account_insights.jsonl"
 _POST_CODE = re.compile(r"insights-post-([A-Za-z0-9_-]+)-\d{4}-\d{2}-\d{2}\.html$")
+
+# Страница поста содержит СНАЧАЛА общий список последних постов, и только потом карточку самого
+# поста. Без этого якоря разбор брал «Просмотры» из списка — то есть цифры чужого поста.
+_POST_SECTION = re.compile(r"^\s*(Статистика публикации|Статистика публікації|"
+                           r"Beitrags-Insights|Post insights)\s*$", re.I | re.M)
+
+# «Что влияет на число просмотров» — Meta сама называет доли, повлиявшие на охват, и источники
+# показов. Для разбора виральности это прямое показание площадки, а не наша догадка.
+_FACTORS = (
+    ("like_share",    r"Доля отметок.*|Частка вподобайок.*|Like share"),
+    ("reply_share",   r"Доля ответов|Частка відповідей|Reply share"),
+    ("share_share",   r"Доля поделившихся|Частка поширень|Share share"),
+    ("quote_share",   r"Доля цитат|Частка цитат|Quote share"),
+    ("repost_share",  r"Доля репостов|Частка репостів|Repost share"),
+    ("src_home",      r"Главная|Головна|Home"),
+    ("src_instagram", r"Instagram"),
+    ("src_search",    r"Поиск|Пошук|Search"),
+    ("src_profile",   r"Профиль|Профіль|Profile"),
+)
+_PCT = re.compile(r"^-?\d+(?:[.,]\d+)?\s*%$")
 
 # Цифры аккаунта с общей страницы. Ключ — наше имя, значение — как это называется в интерфейсе.
 _ACCOUNT = (
@@ -68,6 +89,35 @@ def to_text(raw_html: str) -> str:
     s = html.unescape(s)
     s = "\n".join(ln.strip() for ln in s.splitlines())
     return _BLANKS.sub("\n\n", s).strip()
+
+
+def parse_factors(text: str) -> dict:
+    """Доли влияния на охват и источники показов → проценты (float).
+
+    Проценты держим ОТДЕЛЬНО от счётчиков: смешать «366 просмотров» и «0,82 %» в одном словаре
+    значит однажды сложить их в одном отчёте. Значения приводим к точке — «0,82 %» это 0.82."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    out: dict = {}
+    for field, pattern in _FACTORS:
+        rx = re.compile(rf"^(?:{pattern})$", re.I)
+        for i, ln in enumerate(lines):
+            if not rx.match(ln):
+                continue
+            for nxt in lines[i + 1:i + 3]:
+                if _PCT.match(nxt):
+                    out[field] = float(nxt.replace("%", "").replace(",", ".").strip())
+                    break
+            if field in out:
+                break
+    return out
+
+
+def parse_post_page(text: str) -> tuple[dict, dict]:
+    """Страница одного поста → (счётчики, доли). Читаем ТОЛЬКО карточку поста, не список сверху."""
+    m = _POST_SECTION.search(text)
+    body = text[m.end():] if m else text
+    nums = {k: v for k, v in threads_app_metrics.parse_block(body).items() if k != "text"}
+    return nums, parse_factors(body)
 
 
 def parse_account(text: str) -> dict:
@@ -126,10 +176,10 @@ def ingest_file(path: Path) -> str:
         post = threads_app_metrics.by_code(code)
         if not post:
             return f"📄 {path.name}: пост с кодом {code} не найден в выгрузке"
-        nums = {k: v for k, v in threads_app_metrics.parse_block(text).items() if k != "text"}
+        nums, factors = parse_post_page(text)
         if not nums:
             return f"📄 {path.name}: цифр на странице не нашёл (вёрстка или язык изменились)"
-        threads_app_metrics.save(post["id"], nums, post.get("date", ""))
+        threads_app_metrics.save(post["id"], dict(nums, **factors), post.get("date", ""))
         head = " ".join((post.get("text") or "").split())[:44]
         return (f"✅ {(post.get('date') or '')[:10]} «{head}» ← "
                 + " · ".join(f"{k} {v}" for k, v in nums.items()))
@@ -147,9 +197,16 @@ def intake(move: bool = True) -> str:
         return ""
     out = []
     for f in files:
+        # Файл может ПИСАТЬСЯ прямо сейчас (браузер снимает страницы часами). Разобрать половину
+        # и увезти её в «обработанные» — значит потерять пост молча, поэтому свежие не трогаем.
+        if time.time() - f.stat().st_mtime < 60:
+            continue
         try:
-            out.append(ingest_file(f))
-            if move:
+            report = ingest_file(f)
+            out.append(report)
+            # Увозим ТОЛЬКО удачный разбор. Неудачный остаётся на месте: вёрстка могла измениться,
+            # и файл ещё понадобится, когда я починю разбор. Увезённый файл — потерянный день.
+            if move and ("✅" in report or "цифры аккаунта" in report):
                 DONE.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(f), str(DONE / f.name))
         except Exception:  # noqa: BLE001 — один битый файл не отменяет остальные
