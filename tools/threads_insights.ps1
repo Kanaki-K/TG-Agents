@@ -25,17 +25,16 @@
 #     powershell -ExecutionPolicy Bypass -File tools\threads_insights.ps1 -Now -All
 #   V papke data\incoming dolzhen poyavitsya fayl insights-GGGG-MM-DD.html
 #
-# RASPISANIE (kazhdyy chas; skript sam reshaet, pora li). V terminale PyCharm (PowerShell):
+# RASPISANIE - PN i PT (dni skoupa). V terminale PyCharm (PowerShell):
 #     $cmd = 'powershell -ExecutionPolicy Bypass -File "' + $PWD + '\tools\threads_insights.ps1"'
-#     schtasks /create /tn "ThreadsInsights" /tr $cmd /sc hourly /f
+#     schtasks /create /tn "ThreadsInsights" /tr $cmd /sc weekly /d MON,FRI /st 20:00 /f
+#   Skript sam podozhdet ot 0 do 2 chasov posle starta - chtoby vremya bylo ne rovnym.
 #   Proverit:  schtasks /query /tn "ThreadsInsights"
 #   Ubrat:     schtasks /delete /tn "ThreadsInsights" /f
 
 param(
     [switch]$Login,
     [switch]$Now,
-    [int]$MinDays = 3,
-    [int]$MaxDays = 5,
     [int]$Budget = 25000,
     [int]$Posts = 5,
     [switch]$All,
@@ -46,7 +45,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $outDir = Join-Path $root "data\incoming"
-$stateFile = Join-Path $root "data\threads_insights_next.txt"
+$stateFile = Join-Path $root "data\threads_insights_last.txt"
 $profileDir = Join-Path $env:LOCALAPPDATA "ThreadsInsights\profile"
 
 $chrome = @(
@@ -84,29 +83,26 @@ Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyC
     }
 Start-Sleep -Seconds 2
 
-function Set-NextRun {
-    # Sleduyushchiy zahod v sluchaynyy chas i minutu. Imenno sluchaynost delaet povedenie pohozhim
-    # na cheloveka, kotoryy zaglyadyvaet v statistiku kogda vspomnit, a ne po budilniku.
-    param([int]$MinD = 3, [int]$MaxD = 5)
-    $next = (Get-Date).Date.AddDays((Get-Random -Minimum $MinD -Maximum ($MaxD + 1))).
-            AddHours((Get-Random -Minimum 9 -Maximum 23)).
-            AddMinutes((Get-Random -Minimum 0 -Maximum 60))
-    $next.ToString("o") | Out-File -FilePath $stateFile -Encoding ascii
-    return $next
-}
-
-# RASPISANIE. Zadacha budit skript kazhdyy chas, no rabotaet on redko: hranim vremya sleduyushchego
-# zahoda i do nego prosto vyhodim. Bez etoy proverki ezhechasnaya zadacha snimala by stranicu
-# KAZHDYY CHAS - rovno to, chego my izbegaem.
+# RASPISANIE (reshenie vladelca 09.09: "nam ne nuzhno kazhdyy chas, davay privyazhem k dnyam
+# skoupa - ponedelnik i pyatnica"). Zadacha teper budit skript TOLKO v eti dni, a ne 24 raza v
+# sutki. Ezhechasnoe probuzhdenie bylo nuzhno lish zatem, chtoby popast v sluchaynyy chas - no
+# sluchaynost deshevle sdelat vnutri: skript spit ot 0 do 2 chasov posle starta.
+#
+# Vnutrenniy predohranitel ostaetsya odin: ne chashche raza v sutki. Esli zadacha srabotala dvazhdy
+# (ruchnoy zapusk + raspisanie), vtoroy raz v Meta my ne poydem.
 if (-not $Now) {
     if (Test-Path $stateFile) {
-        $next = [datetime]::Parse((Get-Content $stateFile -Raw).Trim())
-        if ((Get-Date) -lt $next) { exit 0 }        # eshche ne pora - vyhodim molcha
-    } else {
-        $n = Set-NextRun -MinD 0 -MaxD 0            # pervyy zapusk: naznachaem na segodnya
-        Write-Host "Pervyy zahod naznachen na $n"
-        exit 0
+        $last = [datetime]::Parse((Get-Content $stateFile -Raw).Trim())
+        if (((Get-Date) - $last).TotalHours -lt 20) { exit 0 }   # segodnya uzhe hodili
     }
+    $wait = Get-Random -Minimum 0 -Maximum 7200
+    Write-Host "Zhdu $([int]($wait/60)) min pered zahodom (sluchaynoe vremya vmesto rovnogo raspisaniya)."
+    Start-Sleep -Seconds $wait
+}
+
+function Set-LastRun {
+    (Get-Date).ToString("o") | Out-File -FilePath $stateFile -Encoding ascii
+    return (Get-Date)
 }
 
 $stamp = Get-Date -Format "yyyy-MM-dd"
@@ -203,16 +199,9 @@ foreach ($code in $codes) {
 # naberutsya za paru nedel. Kogda dogonim - perehodim na redkiy temp 3-5 sutok, kak prosil
 # vladelec. Posle strannogo otveta - pauza podlinnee, chtoby ne davit.
 $left = if (Test-Path $queueFile) { (Get-Content $queueFile | Where-Object { $_.Trim() }).Count } else { 0 }
-# Posle -All ochered v fayle eshche staraya (ee peresobiraet zavod, kogda razberet snimki),
-# poetomu po $left sudit nelzya: reshaem po rezhimu. Sobrali vse za den - dalshe redkiy temp,
-# kak prosil vladelec ("sleduyushchie sessii budut raz v 3 dnya").
-if ($stopped)             { $next = Set-NextRun -MinD 3 -MaxD 5 }
-elseif ($All)             { $next = Set-NextRun -MinD $MinDays -MaxD $MaxDays }
-elseif ($left -gt $Posts) { $next = Set-NextRun -MinD 1 -MaxD 1 }
-else                      { $next = Set-NextRun -MinD $MinDays -MaxD $MaxDays }
-
+Set-LastRun | Out-Null
 Write-Host "Snyato: obshchaya stranica ($size bayt), stranic postov: $done, v ocheredi ostalos: $left."
-Write-Host "Sleduyushchiy zahod: $next"
+Write-Host "Sleduyushchiy zahod - v blizhayshiy den raspisaniya (pn/pt)."
 if ($size -lt 20000) {
     Write-Warning "Fayl podozritelno malenkiy ($size bayt) - veroyatno, sessiya proshla ili stranica"
     Write-Warning "ne uspela otrisovatsya. Poprobuyte: -Login zanovo, libo -Now -Budget 45000."
