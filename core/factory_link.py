@@ -188,8 +188,10 @@ def report(since_days: int = 90, top: int = 8) -> str:
     weak = [p for p in factory if not (p.get("people_count") or 0)]
     out.append(f"\n⚠️ Заводских постов БЕЗ единого собеседника: {len(weak)} из {len(factory)} — "
                "материал для разбора «почему молчат».")
-    out.append("\nℹ️ Подписчиков НА ПОСТ Meta не отдаёт (только счётчик аккаунта). Чтобы связать "
-               "прирост с постами, нужно снимать счётчик ежедневно — заведём отдельным шагом.")
+    # Подписки. На пост их Meta не отдаёт вообще — единственный доступный сигнал это дневной
+    # прирост счётчика аккаунта, который мы копим сами с 09.09.2026 (core/threads_followers).
+    from core import threads_followers
+    out.append("\n" + threads_followers.report(factory))
     return "\n".join(out)
 
 

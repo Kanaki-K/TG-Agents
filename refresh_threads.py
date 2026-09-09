@@ -57,11 +57,23 @@ def run(module: str, *args: str, gentle: bool = True) -> bool:
     return r.returncode == 0
 
 
+def _followers_snapshot() -> None:
+    """Снять дневной счётчик подписчиков перед сбором. Один запрос чтения, сбой не мешает сбору.
+
+    Дублирует автопилот НАМЕРЕННО: ряд подписчиков нельзя восстановить задним числом, поэтому его
+    снимает каждый, кто вообще ходит в Threads. Повторный снимок в тот же день журнал не портит —
+    снимок один на дату."""
+    from core import threads_followers
+    row = threads_followers.snapshot_quiet()
+    print(f"👥 Подписчиков сейчас: {row['followers']}" if row else "👥 Счётчик подписчиков: снимок за сегодня уже есть (или недоступен).")
+
+
 def main() -> int:
     full = "--all" in sys.argv
     gentle = "--normal" not in sys.argv
     print("🐢 Щадящий режим: паузы 3-8с, бюджет прогона 140 запросов, стоп по квоте Меты на 60%."
           if gentle else "⚡ Штатный темп защиты (--normal): паузы 1.5-4с, стоп по квоте на 80%.")
+    _followers_snapshot()
     results = {
         "collect": run("collect", gentle=gentle),                     # посты + метрики + сводка аккаунта
         # обогащение тем — вызовы к Anthropic, не к Мете: щадящий режим на них не влияет
