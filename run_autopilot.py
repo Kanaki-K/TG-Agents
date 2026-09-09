@@ -222,6 +222,29 @@ def _check_kind(kind: str, channel: str) -> str:
     return "run"
 
 
+def _threads_token_keepalive() -> None:
+    """Продлить токен Threads, пока он ещё продлевается. Один запрос в сутки, только если пора.
+
+    ЗАЧЕМ (урок 09.09.2026): токен Меты живёт 60 дней и продлевается лишь в окне «старше суток и
+    младше 60 дней». Продлевает его сам `auth.valid_token()` — но только когда кто-то ходит в API.
+    С 17.07 в Threads не ходил никто, окно закрылось, и токен умер 31.08: свежую аналитику стало не
+    собрать, нужен повторный OAuth руками. Автопилот — единственный, кто ходит регулярно, поэтому
+    держать токен живым его работа.
+
+    Ничего не делает, если сеть Threads закрыта стоп-краном (тогда и ходить нельзя) или токена нет.
+    Любой сбой глотаем: это фоновая гигиена, она не имеет права уронить выход поста."""
+    try:
+        from connectors.threads import _guard, auth
+        if _guard.frozen_reason() or not auth.load_token():
+            return
+        if schedule.warned_today("threads-token"):   # не чаще раза в сутки (проверки идут каждые 10 мин)
+            return
+        schedule.mark_warned("threads-token")
+        auth.valid_token()                            # внутри: продлит, если пора; иначе вернёт как есть
+    except Exception:  # noqa: BLE001 — фоновая гигиена не роняет прогон
+        log.warning("[автопилот] не смог проверить срок токена Threads", exc_info=True)
+
+
 def check_once() -> str:
     """Одна проверка ОБОИХ форматов. Возвращает сводный код исхода: off/no-channel/skip/test/run.
 
@@ -244,6 +267,7 @@ def check_once() -> str:
             bot_alert.notify_owner("❌ Автопилот: канал публикации не задан (PUBLISH_CHANNEL) — выход пропущен.")
             schedule.mark_warned("no-channel")
         return "no-channel"
+    _threads_token_keepalive()   # фоновая гигиена: токен Меты не должен умирать от простоя
     outcomes = []
     for kind in kinds:
         try:

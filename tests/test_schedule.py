@@ -608,3 +608,29 @@ def test_status_all_warns_when_nothing_enabled(tmp_path, monkeypatch):
 def test_frankfurt_is_understood_as_channel_zone():
     """Владелец зовёт время канала франкфуртским; zoneinfo знает его как Europe/Berlin."""
     assert schedule.parse_zone("по франкфурту") == "Europe/Berlin"
+
+
+def test_threads_token_keepalive_is_silent_when_network_locked(monkeypatch, tmp_path):
+    """Гигиена токена Threads не ходит в сеть при закрытом стоп-кране и не роняет проверку форматов."""
+    import run_autopilot
+    from connectors.threads import _guard, auth
+
+    calls = []
+    monkeypatch.setattr(_guard, "frozen_reason", lambda *a, **kw: "сеть закрыта")
+    monkeypatch.setattr(auth, "valid_token", lambda: calls.append("сеть") or "t")
+    run_autopilot._threads_token_keepalive()
+    assert calls == []          # закрыто → ни одного запроса
+
+    # открыто и токен есть → продлеваем, но не чаще раза в сутки
+    monkeypatch.setattr(_guard, "frozen_reason", lambda *a, **kw: "")
+    monkeypatch.setattr(auth, "load_token", lambda: {"access_token": "x"})
+    monkeypatch.setattr(run_autopilot.schedule, "warned_today", lambda _k: False)
+    monkeypatch.setattr(run_autopilot.schedule, "mark_warned", lambda _k: None)
+    run_autopilot._threads_token_keepalive()
+    assert calls == ["сеть"]
+
+    # сбой сети не должен ронять прогон автопилота
+    def _boom():
+        raise RuntimeError("Meta прилегла")
+    monkeypatch.setattr(auth, "valid_token", _boom)
+    run_autopilot._threads_token_keepalive()      # не бросает
