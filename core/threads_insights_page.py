@@ -24,11 +24,32 @@ import re
 import shutil
 from pathlib import Path
 
+import json
+import re
+from datetime import date
+
 from core import config, threads_app_metrics
 
 INCOMING = config.ROOT / "data" / "incoming"
 DONE = INCOMING / "processed"
-PATTERN = "insights-*.html"
+OVERVIEW = "insights-????-??-??.html"      # общая страница: цифры АККАУНТА
+POST_PAGE = "insights-post-*.html"          # страница одного поста: заходы в профиль и подписки
+ACCOUNT_LOG = config.ROOT / "data" / "threads_account_insights.jsonl"
+_POST_CODE = re.compile(r"insights-post-([A-Za-z0-9_-]+)-\d{4}-\d{2}-\d{2}\.html$")
+
+# Цифры аккаунта с общей страницы. Ключ — наше имя, значение — как это называется в интерфейсе.
+_ACCOUNT = (
+    ("views",               r"(Aufrufe|Перегляди|Просмотры|Views)"),
+    ("viewers",             r"(Betrachter|Глядачі|Зрители|Viewers)"),
+    ("net_followers",       r"(Netto-Follower|Чист[а-я]+ (?:приріст|прирост)[а-я ]*|Net followers)"),
+    ("interactions",        r"(Interaktionen|Взаємодії|Взаимодействия|Interactions)"),
+    ("non_follower_viewers", r"(Nicht-Follower|Не підписники|Не подписчики|Non-followers)"),
+)
+# «Подписчики» на странице встречаются ДВАЖДЫ и означают разное: в разделе «типы зрителей» это
+# сколько ваших подписчиков вас увидело (171), а ниже, в разделе профиля, — сколько их всего (619).
+# Отличаем по порядку: первое вхождение — зрители-подписчики, последнее — всего подписчиков.
+# Это надёжнее привязки к заголовку раздела: заголовки переводятся, порядок блоков — нет.
+_FOLLOWER = r"(Follower|Followers|Читачі|Підписники|Подписчики)"
 
 _SCRIPTS = re.compile(r"<(script|style|noscript|svg)[^>]*>.*?</\1>", re.I | re.S)
 _TAGS = re.compile(r"<[^>]+>")
@@ -49,16 +70,79 @@ def to_text(raw_html: str) -> str:
     return _BLANKS.sub("\n\n", s).strip()
 
 
+def parse_account(text: str) -> dict:
+    """Цифры АККАУНТА с общей страницы: просмотры, зрители, чистый прирост, взаимодействия.
+
+    Читаем по подписям, а не по вёрстке. Число на этой странице стоит СТРОКОЙ НИЖЕ подписи, а
+    следом идёт процент изменения — его берём отдельно и в метрики не мешаем: доля изменения это
+    комментарий к числу, а не число."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    def value_after(idx: int):
+        for nxt in lines[idx + 1:idx + 3]:
+            v = threads_app_metrics._num(nxt)
+            if v is not None:
+                return v
+        return None
+
+    out: dict = {}
+    for field, pattern in _ACCOUNT:
+        rx = re.compile(rf"^{pattern}$", re.I)
+        for i, ln in enumerate(lines):
+            if rx.match(ln):
+                v = value_after(i)
+                if v is not None:
+                    out[field] = v
+                    break
+    hits = [value_after(i) for i, ln in enumerate(lines)
+            if re.fullmatch(_FOLLOWER, ln, re.I) and value_after(i) is not None]
+    if hits:
+        out["follower_viewers"] = hits[0]      # первое вхождение — сколько подписчиков увидело
+        out["followers"] = hits[-1]            # последнее — сколько их всего
+    return out
+
+
+def save_account(row: dict) -> None:
+    """Дописать снимок аккаунта в журнал (строка на дату). Журнал только растёт."""
+    if not row:
+        return
+    row = dict(row, date=date.today().isoformat())
+    ACCOUNT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with ACCOUNT_LOG.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def ingest_file(path: Path) -> str:
-    """Разобрать один снимок страницы и записать метрики. Возвращает отчёт."""
-    text = to_text(Path(path).read_text(encoding="utf-8", errors="replace"))
-    report = threads_app_metrics.ingest(text)
-    return f"📄 {Path(path).name}\n{report}"
+    """Разобрать один снимок и записать метрики. Возвращает отчёт.
+
+    Два вида файлов разбираются ПО-РАЗНОМУ, и это не мелочь: общая страница свёрстана списком и
+    цифры постов на ней неполные (заходов в профиль там нет вовсе), а страница поста — карточка
+    одного поста. Смешать их в один разбор значило бы записывать половинчатые цифры поверх полных."""
+    path = Path(path)
+    text = to_text(path.read_text(encoding="utf-8", errors="replace"))
+    m = _POST_CODE.search(path.name)
+    if m:
+        code = m.group(1)
+        post = threads_app_metrics.by_code(code)
+        if not post:
+            return f"📄 {path.name}: пост с кодом {code} не найден в выгрузке"
+        nums = {k: v for k, v in threads_app_metrics.parse_block(text).items() if k != "text"}
+        if not nums:
+            return f"📄 {path.name}: цифр на странице не нашёл (вёрстка или язык изменились)"
+        threads_app_metrics.save(post["id"], nums, post.get("date", ""))
+        head = " ".join((post.get("text") or "").split())[:44]
+        return (f"✅ {(post.get('date') or '')[:10]} «{head}» ← "
+                + " · ".join(f"{k} {v}" for k, v in nums.items()))
+    acc = parse_account(text)
+    save_account(acc)
+    return (f"📄 {path.name}: цифры аккаунта — "
+            + " · ".join(f"{k} {v}" for k, v in acc.items()) if acc
+            else f"📄 {path.name}: цифр аккаунта не нашёл")
 
 
 def intake(move: bool = True) -> str:
     """Забрать все новые снимки из data/incoming. Пусто — молчим (это штатный день без файла)."""
-    files = sorted(INCOMING.glob(PATTERN))
+    files = sorted(INCOMING.glob(OVERVIEW)) + sorted(INCOMING.glob(POST_PAGE))
     if not files:
         return ""
     out = []
@@ -71,6 +155,11 @@ def intake(move: bool = True) -> str:
         except Exception:  # noqa: BLE001 — один битый файл не отменяет остальные
             logging.getLogger(__name__).warning("снимок %s не разобрался", f.name, exc_info=True)
             out.append(f"📄 {f.name}: разобрать не смог (файл оставлен на месте)")
+    try:                       # очередь пересобираем ПОСЛЕ разбора: собранные посты из неё уходят
+        from core import threads_insights_queue
+        out.append(threads_insights_queue.write_queue())
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).warning("очередь снимков не пересобралась", exc_info=True)
     note = threads_app_metrics.coverage_note(days=3)
     if note:
         out.append(note)     # снимок был, но пост в него не попал — это видно сразу, а не через месяц

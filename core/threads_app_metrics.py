@@ -33,25 +33,39 @@ STORE = config.ROOT / "data" / "threads_app_metrics.json"
 THREADS_POSTS = config.ROOT / "data" / "threads_posts.json"
 
 # Метка «конец текста, дальше цифры»: в приложении это заголовок сводки.
-_SUMMARY = re.compile(r"^\s*(Зведення|Сводка|Обзор|Overview|Insights|Статистика)\s*$", re.I | re.M)
+_SUMMARY = re.compile(r"^\s*(Зведення|Сводка|Обзор|Overview|Insights|Статистика|"
+                      r"Zusammenfassung|Übersicht|Summary)\s*$", re.I | re.M)
 
 # Названия метрик на трёх языках интерфейса → наше поле. Порядок важен: «Відвідування профілю»
 # должно проверяться раньше «Перегляди», иначе короткое имя съест длинное.
+# Немецкий здесь не для красоты: свежий профиль headless-Chrome отдал интерфейс по-немецки, и
+# разбор молча вернул ноль цифр. Язык теперь задаётся флагом (--lang=ru), но полагаться на это
+# нельзя — Meta может отдать что угодно по своим настройкам аккаунта.
 _LABELS: tuple[tuple[str, str], ...] = (
-    ("profile_visits", r"(Відвідування профілю|Посещени[яй] профил[яи]|Profile visits)"),
-    ("viewers",        r"(Глядачі|Зрители|Viewers)"),
-    ("new_followers",  r"(Нові читачі|Новые (?:читатели|подписчики)|New followers)"),
-    ("views",          r"(Перегляди|Просмотры|Views)"),
-    ("likes",          r"(Вподобайки|Лайки|Likes)"),
-    ("replies",        r"(Відповіді|Ответы|Replies)"),
+    ("profile_visits", r"(Відвідування профілю|Посещени[яй] профил[яи]|Profilbesuche|Profile visits)"),
+    ("new_followers",  r"(Нові читачі|Новые (?:читатели|подписчики)|Neue Follower|New followers)"),
+    ("viewers",        r"(Глядачі|Зрители|Betrachter|Viewers)"),
+    ("views",          r"(Перегляди|Просмотры|Aufrufe|Views)"),
+    ("likes",          r"(Вподобайки|Лайки|Gefällt mir|Likes)"),
+    ("replies",        r"(Відповіді|Ответы|Antworten|Replies)"),
     ("reposts",        r"(Репости|Репосты|Reposts)"),
 )
 
 
 def _num(s: str) -> int | None:
-    """«1 234» / «1,234» / «309» → int. Иначе None (строка сравнения вроде «Як зазвичай»)."""
-    t = (s or "").strip().replace(" ", "").replace(" ", "").replace(",", "").replace(".", "")
-    return int(t) if t.isdigit() else None
+    """«1 234» / «1,234» / «70.797» / «+3» / «-2» → int. Иначе None (слово, процент, сравнение).
+
+    Точки и запятые срезаем как разделители тысяч: интерфейс отдаёт их по локали, и «70.797» в
+    немецком — это семьдесят тысяч, а не 70. Знак сохраняем: чистый прирост подписчиков бывает
+    отрицательным, и «-2» обязано остаться минус двойкой. Проценты («-33,2%») не проходят из-за
+    знака % — и правильно: доля изменения это комментарий к числу, а не само число.
+    Неразрывный пробел (U+00A0) вычищаем наравне с обычным — интерфейс ставит именно его."""
+    t = (s or "").strip()
+    for ch in (" ", "\u00a0", "\u2009", "\u202f", ",", "."):
+        t = t.replace(ch, "")
+    sign = -1 if t.startswith("-") else 1
+    t = t.lstrip("+-")
+    return sign * int(t) if t.isdigit() else None
 
 
 def parse_block(raw: str) -> dict:
@@ -78,6 +92,13 @@ def parse_block(raw: str) -> dict:
             if v is None:                       # число на следующей строке (как в приложении)
                 for nxt in lines[i + 1:i + 3]:
                     v = _num(nxt)
+                    if v is not None:
+                        break
+            if v is None:
+                # ...либо ПЕРЕД подписью: на веб-странице статистика выводится как «97 Aufrufe».
+                # Порядок зависит от вёрстки, поэтому смотрим в обе стороны, а не гадаем.
+                for prev in reversed(lines[max(0, i - 2):i]):
+                    v = _num(prev)
                     if v is not None:
                         break
             if v is not None:
@@ -133,6 +154,14 @@ def match_post(text: str, min_coverage: float = 0.5) -> dict | None:
         if cov > best_cov:
             best, best_cov = p, cov
     return best if (best and best_cov >= min_coverage) else None
+
+
+def by_code(code: str) -> dict | None:
+    """Пост по коду из постоянной ссылки (он же код в адресе статистики). Точнее сходства текста."""
+    for p in io_safe.load_json(THREADS_POSTS, []):
+        if code and f"/post/{code}" in (p.get("permalink") or ""):
+            return p
+    return None
 
 
 def save(post_id: str, metrics: dict, post_date: str = "") -> None:
