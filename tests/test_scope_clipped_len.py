@@ -89,16 +89,25 @@ def test_accepted_length_no_longer_flagged():
 
 
 def test_real_bloat_still_flagged():
-    post = HEAD + "\n\n" + ("Механика повода объясняется здесь по-человечески. " * 24)
+    # счётчик кругов правок живёт в модуле и переживает соседние тесты: на третьем круге совет по
+    # длине снимается намеренно (19.08), и без сброса этот тест ловил бы чужое состояние
+    ct._LEN_ROUNDS.clear()
+    post = HEAD + "\n\n" + ("Механика повода объясняется здесь по-человечески. " * 34)
     clean, warns = ct._lint(post, "scope")
-    assert ct.SCOPE_TOTAL_CAP < _n(clean) < ct.SCOPE_BLOAT_CAP, f"тест построен неверно: {_n(clean)}"
-    assert _len_warn(warns), "совет по длине выше цели остаётся — он просто перестал быть вечным"
+    assert _n(clean) > ct.SCOPE_TOTAL_CAP, f"тест построен неверно: {_n(clean)}"
+    # v2.1: зазор убран, поэтому выше потолка сразу ⛔, а не мягкое «длинноват». Мягкий совет живёт
+    # ниже потолка (test_post_at_the_cap_is_advised_not_amputated в test_creator_lint).
+    assert _clip_warn(warns) or any("РАЗДУЛСЯ" in w for w in warns), \
+        "выше потолка 1500 линтер обязан сказать прямо, а не намекать"
 
 
-def test_bloat_cap_keeps_gap_above_target():
-    # 10.08: между «длинновато» и АМПУТАЦИЕЙ должен быть зазор, иначе резчик идёт сразу за советом.
-    # И случай-эталон раздувания (1770, урок 24.07) обязан по-прежнему попадать под ⛔.
-    assert ct.SCOPE_BLOAT_CAP - ct.SCOPE_TOTAL_CAP >= 200
+def test_cap_is_a_real_limit_now():
+    """v2.1 (решение владельца 10.09): «для скоупа 1500 максимально». Зазор между советом и
+    ампутацией убран — потолок стал пределом. От ампутации теперь защищает не зазор, а правило
+    «режем структурно»: лишний пример и повтор, а не абзац под нож.
+    Эталон раздувания 1770 (урок 24.07) по-прежнему за пределом."""
+    assert ct.SCOPE_BLOAT_CAP == ct.SCOPE_TOTAL_CAP == 1500
+    assert ct.SCOPE_TOTAL_MIN == 1000
     assert ct.SCOPE_BLOAT_CAP < 1770
 
 
@@ -184,23 +193,23 @@ def _grow_to_rounds_3plus():
 
 def test_fix_round_that_grows_post_above_cap_speaks_up():
     _grow_to_rounds_3plus()
-    warns = ct._len_advice_rounds("scope", "я" * 1382, [ct._LEN_ADVICE_TAG + ": 1382 знака"])
+    warns = ct._len_advice_rounds("scope", "я" * (ct.SCOPE_TOTAL_CAP + 32), [ct._LEN_ADVICE_TAG + ": длинно"])
     assert any(w.startswith("ПРАВКА РАСТИТ ПОСТ") for w in warns), "рост выше потолка обязан быть назван"
     assert not _len_warn(warns), "это ДРУГАЯ претензия, старый совет по длине не возвращаем"
 
 
 def test_growth_warning_names_both_numbers():
     _grow_to_rounds_3plus()
-    warns = ct._len_advice_rounds("scope", "я" * 1382, [ct._LEN_ADVICE_TAG + ": 1382 знака"])
+    warns = ct._len_advice_rounds("scope", "я" * (ct.SCOPE_TOTAL_CAP + 32), [ct._LEN_ADVICE_TAG + ": длинно"])
     w = next(w for w in warns if w.startswith("ПРАВКА РАСТИТ ПОСТ"))
-    assert "1356" in w and "1382" in w, "правка должна видеть, ОТ ЧЕГО и ДО ЧЕГО выросла"
+    assert str(ct.SCOPE_TOTAL_CAP + 32) in w, "правка должна видеть, ДО ЧЕГО выросла"
     assert "вето" in w, "потолок остаётся советом (10.08) — не влезло, выдавай как есть"
 
 
 def test_shrinking_fix_round_stays_silent():
     """Правило 19.08 в силе: пост не растёт — про длину молчим, иначе автор режет служебные слова."""
     _grow_to_rounds_3plus()
-    warns = ct._len_advice_rounds("scope", "я" * 1340, [ct._LEN_ADVICE_TAG + ": 1340 знаков"])
+    warns = ct._len_advice_rounds("scope", "я" * (ct.SCOPE_TOTAL_CAP - 10), [ct._LEN_ADVICE_TAG + ": длинно"])
     assert warns == []
 
 
@@ -209,12 +218,12 @@ def test_growth_below_cap_stays_silent():
     ct._LEN_ROUNDS.clear()
     for ln in (1573, 1400, 1200):
         ct._len_advice_rounds("scope", "я" * ln, [ct._LEN_ADVICE_TAG + f": {ln} знаков"])
-    warns = ct._len_advice_rounds("scope", "я" * 1260, [ct._LEN_ADVICE_TAG + ": 1260 знаков"])
+    warns = ct._len_advice_rounds("scope", "я" * (ct.SCOPE_TOTAL_CAP - 90), [ct._LEN_ADVICE_TAG + ": длинно"])
     assert warns == []
 
 
 def test_growth_check_does_not_touch_other_warns():
     _grow_to_rounds_3plus()
     other = "scope: ФИЛЛЕР-ПОДВОДКА (нашёл «стоит отметить»)"
-    warns = ct._len_advice_rounds("scope", "я" * 1382, [ct._LEN_ADVICE_TAG + ": длинно", other])
+    warns = ct._len_advice_rounds("scope", "я" * (ct.SCOPE_TOTAL_CAP + 32), [ct._LEN_ADVICE_TAG + ": длинно", other])
     assert other in warns and len(warns) == 2

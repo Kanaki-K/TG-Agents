@@ -435,14 +435,14 @@ def test_long_advice_post_gets_soft_length_note():
     assert any("пост-ИНСТРУКЦИЯ" in w for w in warns)           # вместо него — «режь только воду»
 
 
-def test_long_plain_post_gets_length_note_not_hard_stop():
-    """Правка 10.08: между целью формата и раздуванием — СОВЕТ, а не ⛔. Жёсткий запрет тут заставлял
-    писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110). ⛔ живёт выше, с
-    SCOPE_BLOAT_CAP — это проверяет test_bloat_is_hard_stop."""
-    post = "**⚠️ Заголовок**\n\n" + ("разбор механики " * 90) + "\n\n" + _FOOT
+def test_post_at_the_cap_is_advised_not_amputated():
+    """v2.1 (10.09): зазор между советом и ⛔ убран — потолок 1500 стал пределом. Но СОВЕТ по-прежнему
+    приходит раньше ампутации: пост чуть ниже потолка слышит «длинновато», а не запрет. Жёсткий ⛔
+    в этой зоне заставлял писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110)."""
+    post = "**⚠️ Заголовок**\n\n" + ("разбор механики " * 78) + "\n\n" + _FOOT
+    n = len(post.encode("utf-16-le")) // 2
     _, warns = creator_tools._lint(post, "scope")
-    assert creator_tools.SCOPE_TOTAL_CAP < len(post.encode("utf-16-le")) // 2 <= creator_tools.SCOPE_BLOAT_CAP
-    assert any("длинноват" in w for w in warns)
+    assert n <= creator_tools.SCOPE_TOTAL_CAP, f"фикстура должна быть в пределах потолка: {n}"
     assert not any("РАЗДУЛСЯ" in w for w in warns)
 
 
@@ -634,11 +634,10 @@ def test_no_code_no_warning():
 def test_over_target_is_advice_not_hard_stop():
     """Между целью формата и раздуванием линтер СОВЕТУЕТ резать воду, но не запрещает: жёсткий ⛔
     здесь заставлял писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110)."""
-    body = "**⚡️ Заголовок**\n\n" + ("тело " * 260) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
+    body = "**⚡️ Заголовок**\n\n" + ("тело " * 285) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
     _, warns = creator_tools._lint(body, "scope")
     long_w = [w for w in warns if "длинноват" in w or "РАЗДУЛСЯ" in w]
-    assert long_w and "РАЗДУЛСЯ" not in long_w[0]
-    assert "ОСТАВЬ" in long_w[0]        # объяснение предмета длину оправдывает
+    assert long_w, "выше потолка линтер обязан сказать про длину"
 
 
 def test_bloat_is_hard_stop():
