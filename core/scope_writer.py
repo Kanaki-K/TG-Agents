@@ -1017,7 +1017,7 @@ def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
     # дублировать здесь brief-2FA = лишние ~$0.3/прогон (урок стоимости 22.07). Один проход, без замыкания.
     if verify_facts:
         try:
-            verdict = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=key,
+            verdict = verify.verify_post(verify.latest_draft("scope"), verify.latest_brief(), api_key=key,
                                          scope=True, trap=(mode == "ловушка"))  # темп-свежесть: не для ловушки
             if verify.has_issues(verdict):
                 logging.info("scope 2FA: есть замечания — правлю фактами/свежестью")
@@ -1032,7 +1032,7 @@ def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
     _attach_media(media_srcs, post.split("[[SPLIT]]")[0], media_subj, key)
     # БЭКСТОП ДЛИНЫ — последний рубеж, если автор проигнорировал предупреждение линтера. Срабатывает
     # только на настоящем раздувании (мини-флагман); в норме молчит, потому что длину чинит сам автор.
-    saved = verify.latest_draft() or post
+    saved = verify.latest_draft("scope") or post
     trimmed = _enforce_scope_len(saved)
     if trimmed != saved:
         creator_tools.dispatch("save_draft", {"content": trimmed, "kind": "scope"})
@@ -1052,7 +1052,7 @@ def fix_facts(verdict: str, api_key: str | None = None) -> str:
     cfg = config.load_agent(AGENT_NAME)
     key = api_key or config.agent_api_key(cfg)
     model = runmode.resolve(SCOPE_MODEL, ceiling=SCOPE_MODEL)
-    post = verify.latest_draft() or ""
+    post = verify.latest_draft("scope") or ""
     before = _newest_draft_stamp()
     fixed = _turn(FIX.format(post=post.split("[[SPLIT]]")[0], verdict=verdict), model, key, SCOPE_THINKING)
     # ВОЗВРАЩАЕМ ДРАФТ, А НЕ ЧАТ-ОТВЕТ (правка 03.08). Модель регулярно предваряет пост рассуждением

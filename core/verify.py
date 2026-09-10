@@ -625,8 +625,22 @@ def latest_brief() -> str:
     return _latest("briefs")
 
 
-def latest_draft() -> str:
-    return _latest("drafts")
+def latest_draft(kind: str = "") -> str:
+    """Свежий драфт. kind='scope' — только скоуп, kind='flagship' — только НЕ скоуп, '' — любой.
+
+    ЗАЧЕМ ФИЛЬТР (10.09.2026). Драфты всех форматов лежат в одной папке, а выбор шёл по времени
+    файла. При ПАРАЛЛЕЛЬНЫХ прогонах (владелец запустил флагман и скоуп разом) это значит, что 2FA
+    скоупа проверит драфт флагмана, в отложку уйдёт чужой пост, а гейт «появился ли новый драфт»
+    увидит чужой файл и решит, что писатель отработал, хотя тот отказался. Формат зашит в имя файла
+    (`...-scope.md` у скоупа) — фильтруем по нему, а не по времени."""
+    from core import creator_tools
+    files = creator_tools._md_files(creator_tools.DRAFTS_DIR)
+    k = (kind or "").strip().lower()
+    if k in ("scope", "short"):
+        files = [f for f in files if f.stem.endswith("-scope") or f.stem.endswith("-short")]
+    elif k:
+        files = [f for f in files if not (f.stem.endswith("-scope") or f.stem.endswith("-short"))]
+    return files[0].read_text(encoding="utf-8") if files else ""
 
 
 def _web_context(scope: bool, web: bool) -> tuple[str, dict]:

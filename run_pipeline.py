@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 
 from connectors.telegram_publish import publish
+from core import run_lock  # noqa: E402  замок прогона
 from core import (analytics, config, cost, creator_bot, creator_tools, dedup, edit_delta,
                   published_journal, llm, logging_setup, market_tools, runmode, scope_writer,
                   scout_bot, scout_tools, self_learn, text_match, topic_category, topic_gate, verify)
@@ -573,7 +574,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             # АВТОРИТЕТНАЯ ВЕБ-СВЕРКА (web=True, баг 22.07): герой-цифры сверяем с РЕАЛЬНОСТЬЮ (Тир-1), а не
             # с брифом — Скаут тащит Тир-3 X-выдумки («900 часов»/«$957M за 6 дней»), а брифовый 2FA их
             # штамповал ✅ ЧИСТО. Теперь: веб противоречит → правим по ВЕБ-значению → перепроверяем.
-            sv = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=fkey,
+            sv = verify.verify_post(verify.latest_draft("scope"), verify.latest_brief(), api_key=fkey,
                                     scope=True, web=True, trap=(scope_mode == "ловушка"))
             out("🔎 [2FA scope · ВЕБ-сверка с Тир-1] Проверка опубликуемого драфта:\n" + str(sv) + "\n")
             # ПОЛНОТА РЯДА — ВЛАДЕЛЬЦУ, НЕ В АВТО-ПРАВКУ (вред 05.08). Это единственный класс замечаний,
@@ -595,7 +596,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 out("🛠 2FA: цифры расходятся с реальными источниками — правлю по ВЕБ-проверенным значениям "
                     "(бриф мог врать):")
                 post = _threaded(scope_writer.fix_facts, verify.strip_completeness(sv), fkey) or post
-                sv2 = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=fkey,
+                sv2 = verify.verify_post(verify.latest_draft("scope"), verify.latest_brief(), api_key=fkey,
                                          # тот же режим, что и в первом проходе: ловушке темп-свежесть не судья
                                          scope=True, web=True, trap=(scope_mode == "ловушка"))
                 _gaps += verify.completeness_notes(sv2)
@@ -928,10 +929,19 @@ def main() -> None:
     # МОДЕЛЬ А: флагман ВСЕГДА берёт тему из банка (польза) + якорит свежим (актуальность) — новость
     # как ТЕМА это scope, не флагман. Значит любой флагман-прогон = evergreen (Скаута не гоняем → дешевле).
     scope = "--scope" in sys.argv
-    run_cycle(scope=scope, skip_scout="--skip-scout" in sys.argv,
-              draft_only="--draft-only" in sys.argv, evergreen=not scope,
-              no_image="--no-image" in sys.argv,
-              force_scout="--force-scout" in sys.argv)
+    # ЗАМОК: два пайплайна разом делят драфты, аутбокс обложки и файл последнего формата (живой
+    # случай 10.09). --force — осознанный обход, когда владелец знает, что делает.
+    if "--force" not in sys.argv:
+        if not run_lock.acquire("скоуп" if scope else "флагман"):
+            print(run_lock.busy_message())
+            return
+    try:
+        run_cycle(scope=scope, skip_scout="--skip-scout" in sys.argv,
+                  draft_only="--draft-only" in sys.argv, evergreen=not scope,
+                  no_image="--no-image" in sys.argv,
+                  force_scout="--force-scout" in sys.argv)
+    finally:
+        run_lock.release()
 
 
 if __name__ == "__main__":
