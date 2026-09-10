@@ -204,7 +204,7 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: 
     return text or ""
 
 
-def _run_scope(avoid: str = "", recommend: str = "", weak: str = "") -> str:
+def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", mode: str = "сдвиг") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
     гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится.
@@ -216,7 +216,7 @@ def _run_scope(avoid: str = "", recommend: str = "", weak: str = "") -> str:
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
-    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False)  # verify_facts=False: факты в ре-гейте
+    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, mode)  # verify_facts=False: факты в ре-гейте
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
 
@@ -438,6 +438,9 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     #  • ФЛАГМАН — Криейтор САМ видит покрытие канала (topics_digest в его контексте) и берёт тему из банка;
     #    выбор темы scope ему не нужен, avoid/hint пустые.
     avoid = hint = scope_rec = scope_weak = ""
+    # Режим входа v2 по умолчанию — «сдвиг» (поведение v1). Инициализируем ДО гейта: если гейт упадёт
+    # или его ветка не выполнится, прогон не имеет права рухнуть на неопределённой переменной.
+    scope_mode = "сдвиг"
     if scope:
         gkey = config.agent_api_key(config.load_agent("creator"))
         tg_verdict = ""
@@ -445,7 +448,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         if _recent:
             out(f"🧠 Недавно уже сделано (не повторяем) — {'; '.join(t[:40] for t in _recent[:4])}")
         try:
-            out("🎯 [Выбор темы] один суд: свежесть ДЕЙСТВИЯ → повтор → польза инвестору → тип и бренд...")
+            out("🎯 [Выбор темы] один суд: драма → свежесть ДЕЙСТВИЯ → повтор → польза → тип и бренд...")
             scope_rec, scope_weak, tg_verdict = topic_gate.select(
                 verify.latest_brief(), api_key=gkey, recent=_recent)
             out(str(tg_verdict) + "\n")
@@ -484,6 +487,9 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         avoid = "; ".join(_recent[:6])
         if scope_rec:
             panel["🎯 тема"] = _clip(scope_rec, 52) + (f"  ⚠{_clip(scope_weak, 34)}" if scope_weak else "")
+            scope_mode = topic_gate.parse_mode(tg_verdict)      # v2: сдвиг или ловушка
+            if scope_mode == "ловушка":
+                print("🪤 Гейт: повода со сдвигом сегодня нет — пишем ЛОВУШКУ (вход 2, штатный исход).")
             _use = topic_gate.parse_usefulness(tg_verdict)
             if _use:
                 panel["💡 польза"] = _use[:60]
@@ -517,7 +523,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid, scope_rec, scope_weak) if scope else _run_creator("post", avoid, hint,
+        post = _run_scope(avoid, scope_rec, scope_weak, scope_mode) if scope else _run_creator("post", avoid, hint,
                                                 theme, evergreen=evergreen, no_image=no_image)
     except Exception as e:
         out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
@@ -540,7 +546,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             # с брифом — Скаут тащит Тир-3 X-выдумки («900 часов»/«$957M за 6 дней»), а брифовый 2FA их
             # штамповал ✅ ЧИСТО. Теперь: веб противоречит → правим по ВЕБ-значению → перепроверяем.
             sv = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=fkey,
-                                    scope=True, web=True)
+                                    scope=True, web=True, trap=(scope_mode == "ловушка"))
             out("🔎 [2FA scope · ВЕБ-сверка с Тир-1] Проверка опубликуемого драфта:\n" + str(sv) + "\n")
             # ПОЛНОТА РЯДА — ВЛАДЕЛЬЦУ, НЕ В АВТО-ПРАВКУ (вред 05.08). Это единственный класс замечаний,
             # который просит ДОПИСАТЬ участника, и цена его ошибки обратная всем прочим: неполный ряд
@@ -562,7 +568,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                     "(бриф мог врать):")
                 post = _threaded(scope_writer.fix_facts, verify.strip_completeness(sv), fkey) or post
                 sv2 = verify.verify_post(verify.latest_draft(), verify.latest_brief(), api_key=fkey,
-                                         scope=True, web=True)
+                                         # тот же режим, что и в первом проходе: ловушке темп-свежесть не судья
+                                         scope=True, web=True, trap=(scope_mode == "ловушка"))
                 _gaps += verify.completeness_notes(sv2)
                 _unver = verify.unverified_notes(sv2)     # после правки — заново: часть ❓ могла закрыться
                 # КРАСНАЯ ЛИНИЯ (владелец 29.07: выдумывание фактов = абсолютный стоп). Непроверённый
