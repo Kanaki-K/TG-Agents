@@ -135,6 +135,7 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
     prev_cache_block: dict | None = None
 
     steps = 0
+    force_no_think = False      # включается на повторе, когда мышление съело весь потолок вывода
     while True:
         steps += 1
         params = dict(
@@ -153,9 +154,17 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
         )
         # мышление прикладываем ТОЛЬКО в том виде, какой модель принимает (Haiku в /test-режиме не
         # умеет adaptive, модели новее 4.6 не умеют budget_tokens — и то и другое = 400 на весь прогон)
-        _th = _thinking_for(model, thinking)
+        _th = None if force_no_think else _thinking_for(model, thinking)
         if _th:
             params["thinking"] = _th
+        elif _supports_thinking(model):
+            # «БЕЗ МЫШЛЕНИЯ» НАДО ГОВОРИТЬ ВСЛУХ (10.09.2026). Модели новее 4.6 думают ПО УМОЛЧАНИЮ:
+            # не прислать параметр — это не «мышление выключено», это «решай сам». Конфиг роли при
+            # этом говорит off, и расхождение стоит целого прогона: мини-флагман Threads на Sonnet 5
+            # выдал ровно 16384 токена вывода (весь потолок) и НИ ОДНОГО блока текста — всё ушло в
+            # мышление, серия пришла пустой, $0.20 в никуда. Тот же корень уже ловили 07.09 у судьи
+            # обложек и лечили точечно в scope_writer; лечим в одном месте для всех ролей.
+            params["thinking"] = {"type": "disabled"}
         resp = client.messages.create(**params)
         cost.record(model, resp.usage)  # учёт расхода: лог в консоль + копим для итога (run_pipeline)
         # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю
@@ -170,6 +179,23 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
             if resp.stop_reason == "pause_turn" and steps < MAX_STEPS:
                 continue
             text = "".join(b.text for b in resp.content if b.type == "text")
+            if not text.strip():
+                # ПУСТОЙ ОТВЕТ — НЕ «модель отказалась». Называем причину: стоп-код и типы блоков.
+                # Без этой строки вызывающий печатает «модель ничего не выдала», и диагностика
+                # начинается с догадок вместо факта (урок 07.09).
+                logging.warning("модель %s вернула ПУСТОЙ текст: stop_reason=%s, блоки=%s, "
+                                "выход %s ток (потолок %s)", model, resp.stop_reason,
+                                [b.type for b in resp.content] or "нет", resp.usage.output_tokens,
+                                MAX_TOKENS)
+                if (resp.stop_reason == "max_tokens" and not force_no_think
+                        and _supports_thinking(model) and steps < MAX_STEPS):
+                    # Мышление съело весь потолок вывода. Один повтор с ЯВНО выключенным мышлением:
+                    # ответ без мышления хуже ответа с ним, но несравнимо лучше пустого прогона.
+                    logging.warning("повторяю вызов с выключенным мышлением — весь потолок вывода "
+                                    "ушёл в размышление, текста не осталось")
+                    messages.pop()          # ответ без текста в историю не кладём
+                    force_no_think = True
+                    continue
             return text.strip(), messages
 
         if steps >= MAX_STEPS:  # предохранитель от зацикливания на инструментах
