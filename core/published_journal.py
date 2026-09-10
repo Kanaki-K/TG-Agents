@@ -18,6 +18,7 @@ draft-only/тест), его ПОЛНЫЙ текст + формат + тема +
 """
 import json
 import logging
+import re
 from datetime import date
 
 from core import config, content_plan
@@ -53,6 +54,25 @@ def _migrate() -> None:
         logging.exception("published_journal: миграция старого журнала не удалась (иду дальше)")
 
 
+_NODE = re.compile(r"^\s*\[\[УЗЕЛ\]\]\s*(.+)$", re.M | re.I)
+
+
+def nodes_of(text: str) -> list[str]:
+    """Узлы, помеченные автором поста в МЕТЕ (после [[SPLIT]]): «что здесь живёт само».
+
+    ЗАЧЕМ (v2, 10.09.2026). Прямая просьба автора Threads-дистилляций: «думающий и знающий слой были
+    сплавлены в один абзац, и мне приходилось их растаскивать; если бы завод сам помечал — вот это
+    мысль, вот это цифры — дистилляция шла бы вдвое быстрее». Помеченный узел избавляет деривацию от
+    поиска вслепую, а расхождение «что автор считал узлом» против «что реально сработало» становится
+    отдельным замером через месяц.
+
+    Ищем ТОЛЬКО в мете: в теле такая строка была бы служебным мусором в опубликованном посте."""
+    meta = (text or "").split("[[SPLIT]]")
+    if len(meta) < 2:
+        return []
+    return [m.group(1).strip() for m in _NODE.finditer(meta[1]) if m.group(1).strip()]
+
+
 def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "") -> None:
     """Дописать вышедший пост (текст + формат + тема + дата + путь к обложке) в журнал.
 
@@ -66,7 +86,8 @@ def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "") 
         _migrate()
         JOURNAL.parent.mkdir(parents=True, exist_ok=True)
         entry = {"date": date.today().isoformat(), "kind": content_plan.norm_kind(kind),
-                 "theme": (theme or "").strip(), "text": body, "cover": (cover or "").strip()}
+                 "theme": (theme or "").strip(), "text": body, "cover": (cover or "").strip(),
+                 "nodes": nodes_of(text)}
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
