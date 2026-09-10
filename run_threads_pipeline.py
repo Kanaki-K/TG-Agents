@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from connectors.telegram_publish import publish as tg_publish
-from core import (config, content_plan, cost, logging_setup, runmode, threads_creator,
+from core import (config, content_plan, cost, llm, logging_setup, runmode, threads_creator,
                   threads_lint, threads_source)
 
 logging_setup.setup()
@@ -127,7 +127,10 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
 
     posts, guide = threads_creator.split_output(series)
     if not posts:
-        out("⚠️ Серия пустая — модель ничего не выдала. Сырой вывод:")
+        # ПРИЧИНА, А НЕ КОНСТАТАЦИЯ (10.09): «модель ничего не выдала» отправляло чинить наугад.
+        why = llm.empty_reason() or "модель ответила, но разбор не нашёл в тексте ни одного поста"
+        out(f"⚠️ Серия пустая — {why}. Повтори прогон; если повторится — смотри лог вызова.")
+        out("Сырой вывод:")
         out(series)
         out("\n" + cost.summary())
         return "\n".join(report)

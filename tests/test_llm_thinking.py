@@ -112,3 +112,21 @@ def test_thinking_ate_the_ceiling_is_retried_without_it(monkeypatch):
     assert text == "серия", "после повтора текст обязан прийти"
     assert seen[0].get("thinking") == {"type": "adaptive"}
     assert seen[1].get("thinking") == {"type": "disabled"}
+
+
+def test_no_think_helper_matches_model_ability():
+    """Помощник для ПРЯМЫХ вызовов: думающим моделям — явное off, Haiku — ничего."""
+    assert llm.no_think("claude-sonnet-5") == {"thinking": {"type": "disabled"}}
+    assert llm.no_think("claude-opus-5") == {"thinking": {"type": "disabled"}}
+    assert llm.no_think("claude-haiku-4-5") == {}
+
+
+def test_empty_reason_names_the_ceiling(monkeypatch):
+    """Причина пустого ответа доезжает до ПАНЕЛИ прогона, а не только в лог."""
+    llm.LAST_EMPTY.clear()
+    assert llm.empty_reason() == ""
+    seen = _fake_client(monkeypatch, [_Resp("", stop="max_tokens", out=16384), _Resp("серия")])
+    llm.reply("claude-sonnet-5", "sys", [], "задача", [], lambda *_: "", "key", {"type": "adaptive"})
+    why = llm.empty_reason()
+    assert "потолок вывода" in why and "16384" in why
+    assert len(seen) == 2

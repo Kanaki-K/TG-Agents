@@ -36,6 +36,32 @@ def _supports_thinking(model: str) -> bool:
     return any(tag in model for tag in _ADAPTIVE_OK)
 
 
+# ПОСЛЕДНИЙ ПУСТОЙ ОТВЕТ — для панели прогона. Лог видит разработчик, а владелец смотрит вывод
+# команды: «модель ничего не выдала» без причины отправляет чинить наугад (случай 10.09).
+LAST_EMPTY: dict = {}
+
+
+def empty_reason() -> str:
+    """Человеческая причина последнего пустого ответа ('' — пустых ответов не было)."""
+    e = LAST_EMPTY
+    if not e:
+        return ""
+    if e.get("stop") == "max_tokens":
+        return (f"модель {e.get('model')} упёрлась в потолок вывода ({e.get('out')} из "
+                f"{e.get('cap')} токенов) и не оставила текста — весь бюджет ушёл в размышление")
+    return (f"модель {e.get('model')} вернула ответ без текста (stop={e.get('stop')}, "
+            f"блоки: {', '.join(e.get('blocks') or []) or 'нет'})")
+
+
+def no_think(model: str) -> dict:
+    """Параметры вызова для роли, которой мышление НЕ нужно (готово к `**no_think(model)`).
+
+    Нужен ПРЯМЫМ вызовам мимо llm.reply: у них нет предохранителя, а «не прислать параметр» на
+    моделях новее 4.6 означает «думай сколько хочешь» — и весь max_tokens уходит в размышление.
+    Так уже дважды терялся результат (судья обложек 07.09, мини-флагман Threads 10.09)."""
+    return {"thinking": {"type": "disabled"}} if _supports_thinking(model) else {}
+
+
 def _thinking_for(model: str, thinking: dict | None) -> dict | None:
     """Конфиг мышления, приведённый к тому, что МОДЕЛЬ реально принимает (иначе 400)."""
     if not thinking or not _supports_thinking(model):
@@ -183,6 +209,10 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
                 # ПУСТОЙ ОТВЕТ — НЕ «модель отказалась». Называем причину: стоп-код и типы блоков.
                 # Без этой строки вызывающий печатает «модель ничего не выдала», и диагностика
                 # начинается с догадок вместо факта (урок 07.09).
+                LAST_EMPTY.clear()
+                LAST_EMPTY.update({"model": model, "stop": resp.stop_reason, "cap": MAX_TOKENS,
+                                   "out": resp.usage.output_tokens,
+                                   "blocks": [b.type for b in resp.content]})
                 logging.warning("модель %s вернула ПУСТОЙ текст: stop_reason=%s, блоки=%s, "
                                 "выход %s ток (потолок %s)", model, resp.stop_reason,
                                 [b.type for b in resp.content] or "нет", resp.usage.output_tokens,

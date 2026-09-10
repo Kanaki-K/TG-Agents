@@ -267,12 +267,15 @@ def describe(image_path, api_key: str = "") -> list[str]:
         key = api_key or _api_key()
         if not key:
             return []
-        from core import cost, runmode
+        from core import cost, llm, runmode
         media_type = _IMG_MEDIA_TYPE.get(p.suffix.lower(), "image/png")
         b64 = base64.standard_b64encode(p.read_bytes()).decode()
         model = runmode.resolve(VISION_MODEL, ceiling=VISION_MODEL)
+        # Мышление гасим ЯВНО: сегодня тут Haiku (по умолчанию не думает), но роли переезжают на
+        # модели новее регулярно, а 200 токенов размышление съедает целиком — метки вернулись бы
+        # пустыми и молча (тот же корень, что 07.09 и 10.09).
         resp = Anthropic(api_key=key).messages.create(
-            model=model, max_tokens=200,
+            model=model, max_tokens=200, **llm.no_think(model),
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
                 {"type": "text", "text":
