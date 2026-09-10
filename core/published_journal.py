@@ -55,6 +55,40 @@ def _migrate() -> None:
 
 
 _NODE = re.compile(r"^\s*\[\[УЗЕЛ\]\]\s*(.+)$", re.M | re.I)
+_TYPE = re.compile(r"^\s*\[\[ТИП\]\]\s*(.+)$", re.M | re.I)
+_EXIT = re.compile(r"^\s*\[\[ВЫХОД\]\]\s*(.+)$", re.M | re.I)
+
+# Пять типов услуги читателю (v2.1, 10.09.2026). Ротация по ним — защита не от скуки, а от того,
+# что канал начнёт оказывать ОДНУ услугу: владелец 10.09 — «читатель не умнеет по-новому, он
+# получает ту же эмоцию заново».
+SERVICE_TYPES = ("механизм", "личная ставка", "инструмент", "переворот", "линза")
+
+
+def _meta(text: str, rx) -> str:
+    """Значение однострочной пометки из МЕТЫ (после [[SPLIT]]). В теле не ищем — там это мусор."""
+    parts = (text or "").split("[[SPLIT]]")
+    if len(parts) < 2:
+        return ""
+    m = rx.search(parts[1])
+    return m.group(1).strip() if m else ""
+
+
+def service_of(text: str) -> str:
+    """Ведущий тип услуги, помеченный автором. Нераспознанное имя → '' (лучше пусто, чем ложь)."""
+    raw = _meta(text, _TYPE).lower()
+    return next((t for t in SERVICE_TYPES if t in raw), "")
+
+
+def recent_services(limit: int = 3) -> list[str]:
+    """Типы услуги последних постов (свежие первыми) — для ротации в пикере темы."""
+    out = []
+    for e in reversed(entries()):
+        s_ = (e.get("service") or "").strip()
+        if s_:
+            out.append(s_)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def nodes_of(text: str) -> list[str]:
@@ -87,7 +121,8 @@ def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "") 
         JOURNAL.parent.mkdir(parents=True, exist_ok=True)
         entry = {"date": date.today().isoformat(), "kind": content_plan.norm_kind(kind),
                  "theme": (theme or "").strip(), "text": body, "cover": (cover or "").strip(),
-                 "nodes": nodes_of(text)}
+                 "nodes": nodes_of(text), "service": service_of(text),
+                 "exit": _meta(text, _EXIT)}
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
