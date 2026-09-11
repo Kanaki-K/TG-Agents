@@ -118,9 +118,34 @@ def test_small_edit_is_still_recognised(tmp_path, monkeypatch):
 def test_message_id_finds_post_whatever_the_edit(tmp_path, monkeypatch):
     tg = {"msg_id": 77, "scheduled_at": "2026-09-11T14:00:00+00:00", "channel": "канал", "text": ETF_NEW}
     _journal(tmp_path, monkeypatch, (ETF_OLD, None), (ETF_NEW, tg))
-    _snap(monkeypatch, scheduled=[{"id": 77, "text": "Админ переписал пост целиком, ни одного прежнего слова"}])
+    _snap(monkeypatch, scheduled=[{"id": 77, "date": "2026-09-11T14:00:00+00:00",
+                                   "text": "Админ переписал пост целиком, ни одного прежнего слова"}])
     src = ts.resolve("scope")
     assert src["text"] == ETF_NEW and "номеру сообщения" in src["origin"]
+
+
+def test_message_id_alone_is_not_trusted(tmp_path, monkeypatch):
+    # Номера отложки живут внутри канала. Совпал номер, но другой канал или другое время и чужой текст —
+    # это не наш пост, а совпадение чисел.
+    other = {"msg_id": 77, "scheduled_at": "2026-09-11T14:00:00+00:00", "channel": "старый канал", "text": ETF_NEW}
+    _journal(tmp_path, monkeypatch, (ETF_NEW, other))
+    _snap(monkeypatch, scheduled=[{"id": 77, "date": "2026-09-11T14:00:00+00:00", "text": "Чужой пост про погоду"}])
+    assert ts.resolve("scope")["text"] == ""                                   # канал сменился — номер не в счёт
+
+    same = dict(other, channel="канал")
+    _journal(tmp_path, monkeypatch, (ETF_NEW, same))
+    _snap(monkeypatch, scheduled=[{"id": 77, "date": "2026-09-20T14:00:00+00:00", "text": "Чужой пост про погоду"}])
+    assert ts.resolve("scope")["text"] == ""                                   # и время, и текст чужие
+
+
+def test_model_remark_before_headline_is_cut_from_old_entries(tmp_path, monkeypatch):
+    # Запись 11.09 (до фикса журнала) начиналась с реплики модели. В Threads она уйти не должна.
+    _journal(tmp_path, monkeypatch, ("Линтер чистый. Выдаю.\n\n" + ETF_NEW, None))
+    _snap(monkeypatch, scheduled=[{"id": 3, "text": _plain(ETF_NEW)}])
+    src = ts.resolve("scope")
+    assert src["text"] == ETF_NEW and "Линтер" not in src["text"]
+    assert ts._clean("Абзац без жирного заголовка\nвторая строка") == "Абзац без жирного заголовка\nвторая строка"
+    assert ts._clean(ETF_NEW) == ETF_NEW                                       # нормальный пост не трогаем
 
 
 ETF_NEW_HEAVY = ("📊 Фонды упёрлись в собственный вход\n\n"

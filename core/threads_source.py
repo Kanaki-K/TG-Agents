@@ -13,7 +13,9 @@
 Раньше Threads брал просто последнюю запись, и удалённый пост уехал бы в Threads. Теперь запись идёт в
 работу, только если её пост ЕСТЬ в канале (в отложке или уже в ленте); удалённый пропускается с
 объяснением, берётся следующий. Узнаём пост тремя способами:
-  • по НОМЕРУ сообщения в отложке — он сохраняется при постановке, правка текста его не меняет;
+  • по НОМЕРУ сообщения в отложке — он сохраняется при постановке, правка текста его не меняет. Но номер
+    засчитываем не вслепую: канал должен быть тот же, а пост — стоять на назначенном времени ИЛИ совпадать
+    по тексту хотя бы на TIME_MATCH (номера живут внутри канала; сменил PUBLISH_CHANNEL — №12 уже чужой);
   • по ТЕКСТУ — доля слов записи, найденных в сообщении. Замер 11.09 на двух скоупах про ETF: правка
     пяти слов даёт 97%, близнец на ту же тему — 25-27%. Каждое сообщение отдаём ОДНОЙ, самой похожей
     записи, иначе удалённый пост «узнал бы себя» в оставшемся близнеце;
@@ -113,29 +115,58 @@ def _title(entry: dict) -> str:
     return f"«{head[:70]}»" if head else "«(без заголовка)»"
 
 
-def pick_live(entries: list[dict], snap: dict) -> tuple[dict | None, str, list[dict]]:
+def _clean(text: str) -> str:
+    """Срезать реплику модели перед заголовком поста. Запись 11.09 начинается с «Линтер чистый. Выдаю.»:
+    журнал тогда писал ответ модели, а не отправленный текст. С 11.09 пишется отправленный, но старые
+    записи остаются — чистим при чтении. Режем ТОЛЬКО короткий кусок перед первой строкой-заголовком
+    **…** в начале: остальные 21 запись журнала с такой строки и начинаются, так что пост не пострадает."""
+    lines = (text or "").splitlines()
+    for i, ln in enumerate(lines[:6]):
+        if ln.strip().startswith("**"):
+            head = "\n".join(lines[:i]).strip()
+            return "\n".join(lines[i:]).strip() if head and len(head) <= 200 else (text or "")
+    return text or ""
+
+
+def _id_trusted(entry: dict, msg: dict, score: float, channel: str) -> bool:
+    """Засчитать совпадение номера сообщения? Номера отложки живут внутри канала, поэтому канал обязан
+    совпасть, а пост — подтвердиться ещё чем-то: стоит на назначенном времени (правили текст, но не
+    переносили) или текст совпал хотя бы на TIME_MATCH (перенесли, но правили умеренно)."""
+    ch = (entry.get("tg_channel") or "").strip()
+    if ch and channel and ch != channel:
+        return False
+    at, t = _moment(entry.get("tg_scheduled_at") or ""), _moment(msg.get("date") or "")
+    return bool(at and t and abs(t - at) <= TIME_WINDOW) or score >= TIME_MATCH
+
+
+def pick_live(entries: list[dict], snap: dict, channel: str = "") -> tuple[dict | None, str, list[dict]]:
     """Первая (самая свежая) запись журнала, чей пост есть в канале.
 
-    entries — свежие первыми; snap — {'scheduled': [...], 'recent': [...]} из channel_snapshot.
+    entries — свежие первыми; snap — {'scheduled': [...], 'recent': [...]} из channel_snapshot; channel —
+    канал, из которого снят snap (для сверки с tg_channel записи).
     Возвращает (запись или None, как её узнали, пропущенные записи — те, что свежее найденной)."""
     msgs = ([dict(m, where="в отложке") for m in snap.get("scheduled") or []]
             + [dict(m, where="в ленте") for m in snap.get("recent") or []])
     ew = [_words(e.get("text")) for e in entries]
-    by_id = {e.get("tg_msg_id"): j for j, e in enumerate(entries) if e.get("tg_msg_id") is not None}
-    owner: dict[int, tuple[int, float]] = {}
+    by_id: dict = {}
+    for j, e in enumerate(entries):
+        if e.get("tg_msg_id") is not None:
+            by_id.setdefault(e["tg_msg_id"], j)       # номер повторился — он у самой свежей записи
+    owner: dict[int, tuple[int, float, bool]] = {}    # сообщение → (запись, сходство, узнано по номеру)
     for i, m in enumerate(msgs):
-        if m["where"] == "в отложке" and m.get("id") in by_id:
-            owner[i] = (by_id[m["id"]], 1.0)          # номер сообщения сильнее любого сходства слов
-            continue
         mw = _words(m.get("text"))
         scores = [_overlap(w, mw) for w in ew]
+        j = by_id.get(m.get("id")) if m["where"] == "в отложке" else None
+        if j is not None and _id_trusted(entries[j], m, scores[j], channel):
+            owner[i] = (j, scores[j], True)           # подтверждённый номер сильнее любого сходства слов
+            continue
         if scores:
             best = max(range(len(scores)), key=scores.__getitem__)
-            owner[i] = (best, scores[best])
+            owner[i] = (best, scores[best], False)
     skipped: list[dict] = []
     for j, e in enumerate(entries):
-        mine = [(msgs[i], s) for i, (k, s) in owner.items() if k == j]
-        if any(m["where"] == "в отложке" and m.get("id") == e.get("tg_msg_id") for m, _ in mine):
+        mine = [(msgs[i], s) for i, (k, s, _) in owner.items() if k == j]
+        if any(k == j and by_num for k, _, by_num in owner.values()):
             return e, "в отложке канала, узнал по номеру сообщения", skipped
         best = max(mine, key=lambda x: x[1], default=None)
         if best and best[1] >= TEXT_MATCH:
@@ -167,7 +198,7 @@ def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
     if back and back > 0:
         return from_channel(kind, back)
     k = content_plan.norm_kind(kind)
-    rows = published_journal.entries(k)[-LOOKBACK:][::-1]
+    rows = [dict(e, text=_clean(e.get("text") or "")) for e in published_journal.entries(k)[-LOOKBACK:][::-1]]
     if not rows:
         return None
     channel = (config.get_optional("PUBLISH_CHANNEL") or "").strip()
@@ -177,7 +208,7 @@ def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
         entry["origin"] = (f"журнал вышедших постов — ⚠️ канал не проверил ({snap.get('error') or '?'}), "
                            "взял последний пост журнала")
         return entry
-    picked, how, skipped = pick_live(rows, snap)
+    picked, how, skipped = pick_live(rows, snap, channel)
     notes = [f"{_title(e)} от {e.get('date', '?')} — в канале нет (удалён или переписан до неузнаваемости)"
              for e in skipped]
     if not picked:
