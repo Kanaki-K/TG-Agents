@@ -78,6 +78,12 @@ def env(tmp_path, monkeypatch):
     # этого файла записали тестовые цифры в боевой data/threads_account_insights.jsonl. Дымовой
     # прогон обязан уводить ВСЕ пути записи модуля, а не те, о которых вспомнил автор теста.
     monkeypatch.setattr(P, "ACCOUNT_LOG", tmp_path / "account.jsonl")
+    # Очередь сбора — тоже путь записи: разбор страницы в конце пересчитывает её (write_queue). 11.09.2026
+    # тест переписал боевой data/threads_insights_queue.txt: 81 пост вместо 5 (замеры подменены пустыми →
+    # «не мерян никто»), и браузер пошёл бы по Meta за 76 лишними страницами.
+    from core import threads_insights_queue as Q
+    monkeypatch.setattr(Q, "THREADS_POSTS", tmp_path / "posts.json")
+    monkeypatch.setattr(Q, "QUEUE", tmp_path / "queue.txt")
     return tmp_path
 
 

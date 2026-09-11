@@ -95,6 +95,9 @@ def test_attach_media_stops_at_pool_cap(monkeypatch, tmp_path):
 def test_attach_media_survives_dead_page(monkeypatch, tmp_path):
     """Одна страница упала — обложку всё равно ищем по остальным (пост не блокируем)."""
     _cover_to_tmp(monkeypatch, tmp_path)
+    # Без этой заглушки тест ходил в Wikidata и СКАЧИВАЛ настоящие кадры в боевой data/source_media
+    # (scope_subj_*.jpg перезаписывались каждым прогоном pytest — найдено 11.09.2026).
+    _no_subject_search(monkeypatch)
 
     def flaky(url, name="scope"):
         if "bad" in url:
@@ -315,6 +318,7 @@ def test_zero_with_label_names_the_reason_but_keeps_a_cover(monkeypatch, tmp_pat
 def test_attach_media_writes_cover_log(monkeypatch, tmp_path):
     from core import scope_cover_log
     _cover_to_tmp(monkeypatch, tmp_path)
+    _no_subject_search(monkeypatch)       # иначе ищет «Solana» в Wikidata и пишет кадры в боевой data/
     monkeypatch.setattr(sw.source_media, "fetch_source_images",
                         lambda url, name="scope": [tmp_path / f"{name}_0.jpg"])
     monkeypatch.setattr(sw, "_vision_pick", lambda imgs, *a: (imgs[0], "лого Solana"))
