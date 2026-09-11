@@ -189,3 +189,12 @@ def test_writer_can_leave_the_journal_to_the_pipeline(monkeypatch):
     assert calls == []
     threads_creator.write("scope", src=src)
     assert len(calls) == 1
+
+
+def test_length_round_strips_its_own_marks(monkeypatch):
+    """Аудит 11.09: модель возвращала эхом «❌ [480 знаков]», и пометка уезжала в пост."""
+    monkeypatch.setattr(threads_creator.llm, "reply", lambda *a, **kw: ("❌ [480 знаков] сжатый пост", None))
+    monkeypatch.setattr(threads_creator, "_system", lambda _k: "sys")
+    out = threads_creator._enforce_length(["я" * (threads_creator.MAX_LEN + 10)], "flagship", "key", "model")
+    assert out == ["сжатый пост"]
+    assert threads_creator._unmark("[не пометка] обычный текст") == "[не пометка] обычный текст"

@@ -228,6 +228,7 @@ def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
     if not snap.get("ok"):
         entry = dict(rows[0])
         entry["unverified"] = snap.get("error") or "?"
+        entry["repeat"] = _distilled_on(entry)     # повтор и без канала узнаётся по журналу переработок
         entry["origin"] = (f"журнал вышедших постов — ⚠️ канал не проверил ({entry['unverified']}), "
                            "взял последний пост журнала")
         return entry

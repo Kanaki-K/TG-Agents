@@ -180,6 +180,20 @@ def split_output(text: str) -> tuple[list[str], str]:
     return posts, guide
 
 
+def _unmark(post: str) -> str:
+    """Снять служебную пометку «❌ [480 знаков]», если модель вернула её эхом в сжатом посте.
+
+    Круг сжатия отдаёт модели посты с такой приставкой (по ней она видит, что резать). Эхо никто не срезал:
+    пометка уезжала в ревью-копию, а оттуда в Threads (аудит 11.09.2026)."""
+    s = (post or "").lstrip()
+    if s.startswith("❌"):
+        s = s[1:].lstrip()
+    head = s[:24]
+    if s.startswith("[") and "]" in head and "знак" in head:
+        s = s[s.index("]") + 1:].lstrip()
+    return s
+
+
 def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[str]:
     """Метод владельца, Шаг «считаю знаки реально»: перебор ≤MAX_LEN лечим ОДНИМ кругом сжатия.
 
@@ -197,6 +211,7 @@ def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[s
         text, _ = llm.reply(model, _system(kind), [], FIX_LENGTH.format(max=MAX_LEN, posts=marked),
                             [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
         fixed, _ = split_output(text)
+        fixed = [_unmark(p) for p in fixed]
     except Exception:
         logging.exception("threads_creator: круг сжатия по длине упал — отдаю посты как есть")
         fixed = []

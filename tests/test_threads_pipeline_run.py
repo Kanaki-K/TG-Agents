@@ -45,21 +45,78 @@ def test_cover_overwritten_by_later_run_is_not_used(tmp_path):
 
 
 def test_journal_cover_copy_is_trusted(tmp_path):
-    copy = _image(tmp_path / "published_covers", "2026-09-10_scope_77.jpg", (2026, 9, 12))
+    copy = _image(tmp_path / "journal_covers", "2026-09-10_scope_77.jpg", (2026, 9, 12))
     assert rtp._cover_for({"cover": str(copy), "date": "2026-09-10"})[0] == str(copy)
 
 
 def test_journal_keeps_its_own_copy_of_the_cover(tmp_path, monkeypatch):
     monkeypatch.setattr(published_journal, "JOURNAL", tmp_path / "journal.jsonl")
     monkeypatch.setattr(published_journal, "LEGACY_JOURNAL", tmp_path / "legacy.jsonl")
-    monkeypatch.setattr(published_journal, "COVERS_DIR", tmp_path / "published_covers")
+    monkeypatch.setattr(published_journal, "COVERS_DIR", tmp_path / "journal_covers")
     frame = tmp_path / "source_media" / "scope_1_0.jpg"
     frame.parent.mkdir()
     frame.write_bytes(b"ORIGINAL")
     published_journal.record("**Пост**\nтело", kind="scope", cover=str(frame),
                              tg={"msg_id": 77, "text": "**Пост**\nтело"})
     kept = published_journal.latest("scope")["cover"]
-    assert "published_covers" in kept and kept.endswith("_scope_77.jpg")
+    assert "journal_covers" in kept and kept.endswith("_scope_77.jpg")
     frame.write_bytes(b"NEXT RUN")                                # следующий ТГ-прогон пишет поверх
     with open(kept, "rb") as f:
         assert f.read() == b"ORIGINAL"
+
+
+# --- ПОСТАНОВКА СЕРИИ (аудит 11.09.2026): время своего формата, частичный провал, неопознанный канал ---
+
+def _cycle_env(monkeypatch, publish_results, check=None):
+    """Прогон мини-флагмана без сети и модели. Формат — флагман: у скоупа прогон ставит метку для сбора
+    аналитики в data/, а тест в боевой data/ писать не должен."""
+    calls = {"publish": [], "record": [], "notify": []}
+    sep = rtp.threads_creator.POST_SEP
+    monkeypatch.setattr(rtp.threads_creator, "manual_missing", lambda k: False)
+    monkeypatch.setattr(rtp.threads_source, "resolve",
+                        lambda k, b: {"text": "ТГ-флагман", "date": "2026-09-15", "theme": "т", "origin": "журнал"})
+    monkeypatch.setattr(rtp.threads_creator, "write", lambda *a, **kw: f"пост один\n{sep}\nпост два")
+    monkeypatch.setattr(rtp.threads_lint, "check_series", lambda posts: "")
+    monkeypatch.setattr(rtp.runmode, "get", lambda: {"mode": "main", "model": "m"})
+    monkeypatch.setattr(rtp, "_review_channel", lambda: "ревью")
+    monkeypatch.setattr(rtp.config, "get_optional", lambda k: "@мейн" if k == "PUBLISH_NOTIFY" else None)
+    monkeypatch.setattr(rtp.tg_publish, "check", lambda ch: check or {"ok": True, "channel": "test_treds"})
+    results = iter(publish_results)
+    monkeypatch.setattr(rtp.tg_publish, "publish",
+                        lambda ch, text, cover, when: calls["publish"].append((text, when)) or next(results))
+    monkeypatch.setattr(rtp.tg_publish, "scheduled_times", lambda ch: [])
+    monkeypatch.setattr(rtp.tg_publish, "notify", lambda to, msg: calls["notify"].append(msg) or {"ok": True})
+    monkeypatch.setattr(rtp.threads_distill_journal, "record", lambda src, body, sep_: calls["record"].append(body))
+    return calls
+
+
+def test_series_uses_its_own_format_slot_and_two_hour_step(monkeypatch):
+    asked = []
+    monkeypatch.setattr(rtp.content_plan, "next_slot",
+                        lambda k, **kw: asked.append(k) or datetime(2026, 9, 15, 16, 0))
+    assert [t.hour for t in rtp._series_times("flagship", 3)] == [16, 18, 20]
+    rtp._series_times("scope", 1)
+    assert asked == ["flagship", "short"]          # раньше флагман брал слот скоупа (день не тот)
+
+
+def test_partial_series_records_and_reports_only_what_landed(monkeypatch):
+    monkeypatch.setattr(rtp.content_plan, "next_slot", lambda k, **kw: datetime(2026, 9, 15, 16, 0))
+    calls = _cycle_env(monkeypatch, [{"ok": True, "mode": "текст"}, {"ok": False, "error": "сеть"}])
+    rtp.run_threads_cycle(emit=lambda *_: None, kind="flagship")
+    assert [w.hour for _, w in calls["publish"]] == [16, 18]
+    assert calls["record"] == ["пост один"]        # упавший №2 в журнал переработок не идёт
+    assert "№2" in calls["notify"][0]
+
+
+def test_nothing_landed_still_notifies(monkeypatch):
+    monkeypatch.setattr(rtp.content_plan, "next_slot", lambda k, **kw: datetime(2026, 9, 15, 16, 0))
+    calls = _cycle_env(monkeypatch, [{"ok": False, "error": "сеть"}, {"ok": False, "error": "сеть"}])
+    rtp.run_threads_cycle(emit=lambda *_: None, kind="flagship")
+    assert calls["record"] == [] and calls["notify"][0].startswith("❌")
+
+
+def test_unrecognised_review_channel_stops_before_posting(monkeypatch):
+    monkeypatch.setattr(rtp.content_plan, "next_slot", lambda k, **kw: datetime(2026, 9, 15, 16, 0))
+    calls = _cycle_env(monkeypatch, [], check={"ok": True, "channel": None, "channel_error": "не найден"})
+    out = rtp.run_threads_cycle(emit=lambda *_: None, kind="flagship")
+    assert calls["publish"] == [] and "не ставлю" in out

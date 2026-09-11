@@ -26,7 +26,9 @@ from pathlib import Path
 from core import config, content_plan
 
 JOURNAL = config.ROOT / "data" / "published_posts.jsonl"
-COVERS_DIR = config.ROOT / "data" / "published_covers"   # копии обложек вышедших постов под своими именами
+# Копии обложек постов журнала под своими именами. НЕ data/published_covers: там эталон ОБЛОЖЕК БОЕВОГО
+# КАНАЛА (dump_covers + index.json), по нему tools/probe_covers сравнивает качество — копии завода его засоряли бы.
+COVERS_DIR = config.ROOT / "data" / "journal_covers"
 LEGACY_JOURNAL = config.ROOT / "data" / "published_flagships.jsonl"   # флагман-только, до 09.09.2026
 
 

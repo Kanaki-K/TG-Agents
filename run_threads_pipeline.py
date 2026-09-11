@@ -35,7 +35,9 @@ from core import (config, content_plan, cost, llm, logging_setup, runmode, threa
 
 logging_setup.setup()
 
-THREADS_SERIES_GAP_MIN = 10   # разнос постов серии по времени, чтобы легли ОТДЕЛЬНЫМИ отложенными
+# Разнос постов серии (серия бывает только у мини-флагмана). Решение владельца 09.09 (THREADS_AUTONOMY §4):
+# «первый тред в то же время, каждый следующий — через 2 часа». До 11.09.2026 стояло 10 минут.
+THREADS_SERIES_GAP_MIN = 120
 
 
 def _review_channel() -> str:
@@ -63,17 +65,27 @@ def _cover_on_disk(path: str) -> str:
     if Path(path).exists():
         return path
     name = Path(path.replace("\\", "/")).name
-    for folder in ("published_covers", "source_media"):
+    for folder in ("journal_covers", "source_media"):
         local = config.ROOT / "data" / folder / name
         if local.exists():
             return str(local)
     return ""
 
 
+def _series_times(kind: str, n: int) -> list[datetime]:
+    """Время ревью-копий: слот СВОЕГО формата + шаг серии.
+
+    До 11.09.2026 брался слот короткого формата для обоих: мини-флагман вторника вставал на среду (день
+    скоупа), рядом с мини-скоупом и раньше самого ТГ-флагмана. content_plan знает форматы как 'flagship'
+    и 'short' (скоуп — исторически короткий), поэтому имя переводим здесь."""
+    base = content_plan.next_slot("flagship" if kind == "flagship" else "short")
+    return [base + timedelta(minutes=THREADS_SERIES_GAP_MIN * i) for i in range(n)]
+
+
 def _cover_for(src: dict) -> tuple[str, str]:
     """Обложка исходного ТГ-поста для мини-скоупа: (путь или "", строка для отчёта).
 
-    Записи журнала с 11.09.2026 ссылаются на КОПИЮ обложки в data/published_covers — ей верим. Старые
+    Записи журнала с 11.09.2026 ссылаются на КОПИЮ обложки в data/journal_covers — ей верим. Старые
     ссылаются прямо на кадр в data/source_media, а его имя (scope_1_0.jpg) переиспользует каждый ТГ-прогон:
     к 11.09 обложки записей 09.09 и 10.09 уже были картинками другого поста. Файл изменён позже дня записи —
     не берём: ревью текстом честнее, чем чужая картинка под подписью «обложка ТГ-поста»."""
@@ -233,33 +245,42 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         if pre.get("channel"):
             out(f"   Канал опознан: «{pre['channel']}» (аккаунт-публикатор {pre.get('account', '?')})")
         elif pre.get("channel_error"):
-            out(f"   ⚠️ Канал НЕ опознан: {pre['channel_error']}")
+            # Стоп, а не «посмотрим по факту»: неопознанный адрес Telegram может разрешить в чужой канал с
+            # похожим именем — серия уехала бы не туда (аудит 11.09.2026). Серия выше остаётся на ревью.
+            out(f"   ⛔ Канал НЕ опознан: {pre['channel_error']} — не ставлю, серия выше осталась на ревью.")
+            out("\n" + cost.summary())
+            return "\n".join(report)
     except Exception:
         out("   (предполётную проверку канала сделать не вышло — смотрю по факту публикации)")
-    # Время в отложке — ПЛЕЙСХОЛДЕР: якорь-слот короткого формата, посты разнесены по 10 минут. Своего
-    # времени выхода у Threads пока нет (открытый вопрос владельца) — когда будет, слот станет реальным
-    # временем публикации в Threads, а отложка ревью-канала — пультом «оставить / поправить / удалить».
-    base = content_plan.next_slot("short")
+    # Время в отложке: слот своего формата, серия флагмана — через 2 часа (_series_times). Когда появится
+    # авто-публикация в Threads, это станет реальным временем выхода, а отложка ревью — пультом.
+    times = _series_times(kind, len(posts))
     # ОБЛОЖКА (решение владельца 09.09): мини-скоуп идёт с ТОЙ ЖЕ картинкой, что уже вышла с ТГ-постом
     # — искать и судить кадр заново незачем, он одобрен. Мини-флагману картинка не нужна вовсе.
     cover, cover_note = _cover_for(src) if kind == "scope" else ("", "")
     if cover_note:
         out(cover_note)
     ok = 0
+    landed: list[str] = []      # что реально легло — только это идёт в журнал переработок
+    failed: list[int] = []      # номера упавших — владелец узнаёт о них из уведомления
     for i, p in enumerate(posts):
-        when = base + timedelta(minutes=THREADS_SERIES_GAP_MIN * i)
+        when = times[i]
         # Копия — РОВНО текст для Threads, без служебной шапки «🧵 [THREADS · …]»: владелец копирует пост
         # целиком, а уведомление обещает «уйдёт та версия, что в отложке» — шапка ушла бы в Threads (аудит
         # 11.09.2026). Порядок серии и так виден: посты стоят через THREADS_SERIES_GAP_MIN минут.
         res = tg_publish.publish(channel, p, cover if i == 0 else None, when)
         if res.get("ok"):
             ok += 1
+            landed.append(p)
             out(f"  ✅ пост {i + 1}/{len(posts)} → {content_plan.human(when)} ({res.get('mode', '?')})")
         else:
+            failed.append(i + 1)
             out(f"  ❌ пост {i + 1}/{len(posts)}: {res.get('error', '?')}")
     out(f"🗓 В отложке канала: {ok}/{len(posts)} постов. Проверь/поправь в нативных «Отложенных».")
-    if ok:   # связь «ТГ-пост → Threads-версия» — только для реально поставленного (см. threads_creator.write)
-        threads_distill_journal.record(src, ("\n" + threads_creator.POST_SEP + "\n").join(posts),
+    # Связь «ТГ-пост → Threads-версия» — только для легших постов: сверщик потом ищет их в Threads, а
+    # упавший №2 серии там не появится никогда (аудит 11.09.2026). См. threads_creator.write(record=False).
+    if landed:
+        threads_distill_journal.record(src, ("\n" + threads_creator.POST_SEP + "\n").join(landed),
                                        threads_creator.POST_SEP)
     # ПРОВЕРКА: читаем отложенные обратно — подтвердить, что посты реально легли (а не «ok» вхолостую).
     # Тот же приём, что у ТГ-публикатора: «ok» от API ещё не значит, что сообщение видно в канале.
@@ -271,8 +292,8 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     # УВЕДОМЛЕНИЕ НА МЕЙН — как после флагмана/скоупа: завод не имеет права молчать о том, что сделал.
     # Тот же ключ PUBLISH_NOTIFY и тот же аккаунт-публикатор, второй настройки не заводим.
     target = config.get_optional("PUBLISH_NOTIFY")
-    if target and ok:
-        first = content_plan.human(base)
+    if target and (ok or failed):
+        first = content_plan.human(times[0])
         msg = (f"🧵 Threads · {fmt['label']}: {ok} пост(а) готовы и лежат в «Отложенных» канала "
                f"«{channel}» (первый на {first}).\n"
                f"Источник — {fmt['source_label']} от {src.get('date', '?')} ({src.get('origin', 'журнал')}).\n"
@@ -282,6 +303,12 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
             msg += "\n⚠️ Канал не прочитан: не проверил, что ТГ-пост остался в отложке."
         if src.get("repeat"):
             msg += f"\n⚠️ Повтор: этот ТГ-пост уже перерабатывали в Threads {src['repeat']}."
+        # Провал постановки — тоже повод написать: без человека у терминала молчание = «всё хорошо».
+        if failed:
+            msg += f"\n❌ Не легли в отложку: №{', №'.join(map(str, failed))} — причина в отчёте прогона."
+        if not ok:
+            msg = (f"❌ Threads · {fmt['label']}: ни один из {len(posts)} пост(ов) не лёг в отложку канала "
+                   f"«{channel}». Причина в отчёте прогона, серия там же.")
         # Претензии линтера идут В УВЕДОМЛЕНИЕ, а не в ревью-копию: копия — это ровно тот текст,
         # который уйдёт в Threads, и служебные строки в ней стали бы частью поста.
         if lint_report:

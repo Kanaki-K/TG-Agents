@@ -945,7 +945,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         published_journal.record(post, scope_rec, kind="scope", cover=cover_path, tg=receipt)
         out("🧵 Скоуп записан в журнал вышедших — доступен мини-скоупу Threads "
             "(run_threads_pipeline.py --scope).")
-    out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")
+    out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===" if receipt else
+        "\n=== Прогон завершён, но пост в отложку НЕ поставлен — причина в строке ⛔ выше. ===")
     out(_panel_block())
     # Вопрос про повторяющуюся правку печатаем ЕЩЁ РАЗ, последним: в начале прогона он уползает за
     # 10-20 минут вывода, а последнее, что владелец видит в терминале, — вот это.

@@ -50,7 +50,7 @@ def _journal(tmp_path, monkeypatch, *rows):
     Уводим ВСЕ пути, которых касается выбор: журнал, копии обложек, журнал переработок."""
     monkeypatch.setattr(published_journal, "JOURNAL", tmp_path / "journal.jsonl")
     monkeypatch.setattr(published_journal, "LEGACY_JOURNAL", tmp_path / "legacy.jsonl")
-    monkeypatch.setattr(published_journal, "COVERS_DIR", tmp_path / "published_covers")
+    monkeypatch.setattr(published_journal, "COVERS_DIR", tmp_path / "journal_covers")
     monkeypatch.setattr(ts.threads_distill_journal, "JOURNAL", tmp_path / "distill_none.jsonl")
     monkeypatch.setattr(ts.config, "get_optional", lambda k: "канал" if k == "PUBLISH_CHANNEL" else None)
     for row in rows:
@@ -234,3 +234,12 @@ def test_entry_older_than_the_checked_feed_is_not_called_deleted(tmp_path, monke
     _snap(monkeypatch, recent=[{"id": 1, "date": later, "text": "про погоду"}, {"id": 2, "date": later, "text": "про кино"}])
     src = ts.resolve("scope")
     assert src["text"] == "" and "проверить не могу" in src["skipped"][0]
+
+
+def test_repeat_is_flagged_even_when_channel_is_unreadable(tmp_path, monkeypatch):
+    today = published_journal.date.today().isoformat()
+    _journal(tmp_path, monkeypatch, (ETF_NEW, None, "новая тема"))
+    _distilled(tmp_path, monkeypatch, {"created": "2026-09-11", "flagship_date": today, "theme": "новая тема"})
+    _snap(monkeypatch, ok=False)
+    src = ts.resolve("scope")
+    assert src["unverified"] and src["repeat"] == "2026-09-11"
