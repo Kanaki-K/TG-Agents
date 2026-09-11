@@ -34,7 +34,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
-from core import config, content_plan, io_safe, published_journal
+from core import config, content_plan, io_safe, published_journal, threads_distill_journal
 
 POSTS_JSON = config.ROOT / "data" / "channel_posts.json"
 FORMATS_JSON = config.ROOT / "data" / "post_formats.json"
@@ -48,7 +48,10 @@ MIN_CHARS = 300      # короче — футер-сообщение, анон�
 
 LOOKBACK = 10                        # сколько последних записей формата сверяем с каналом
 TEXT_MATCH = 0.6                     # доля слов записи в сообщении, чтобы узнать пост по тексту
-TIME_MATCH = 0.35                    # порог мягче, когда сообщение вышло ровно в назначенное время
+# Порог мягче, когда сообщение вышло ровно в назначенное время. Не ниже 0.5: слот фиксирован (16:00 дня
+# плана), и в освободившийся слот встаёт ЗАМЕНА удалённого поста на ту же тему — совпадение 35-55%
+# (ревью 11.09.2026). Разные посты журнала между собой — не выше 28%.
+TIME_MATCH = 0.5
 TIME_WINDOW = timedelta(minutes=15)
 RECENT_POSTS = 60                    # сколько вышедших постов ленты смотрим
 _LABEL = {"scope": "скоуп", "flagship": "флагман"}
@@ -180,6 +183,25 @@ def pick_live(entries: list[dict], snap: dict, channel: str = "") -> tuple[dict 
     return None, "", skipped
 
 
+def _absent_reason(entry: dict, snap: dict) -> str:
+    """Почему запись пропущена. Лента читается не вся (RECENT_POSTS): пост старше окна мог выйти и лежать
+    глубже — называть его «удалённым» было бы враньём (ревью 11.09.2026)."""
+    recent = snap.get("recent") or []
+    dates = sorted((m.get("date") or "")[:10] for m in recent if m.get("date"))
+    if len(recent) >= RECENT_POSTS and dates and (entry.get("date") or "") < dates[0]:
+        return f"старше последних {RECENT_POSTS} сообщений канала, проверить не могу"
+    return "в канале нет (удалён или переписан до неузнаваемости)"
+
+
+def _distilled_on(entry: dict) -> str:
+    """Когда этот ТГ-пост уже перерабатывали в Threads ('' — не перерабатывали). Ключ — дата и тема записи,
+    так их пишет threads_distill_journal (с 11.09.2026 — только серии, поставленные в отложку)."""
+    for d in reversed(threads_distill_journal.entries()):
+        if d.get("flagship_date") == entry.get("date") and (d.get("theme") or "") == (entry.get("theme") or ""):
+            return d.get("created") or "?"
+    return ""
+
+
 def _snapshot(channel: str) -> dict:
     """Отложка + лента канала. Импорт внутри: модулю не нужен Telethon, пока в канал не идём."""
     try:
@@ -205,14 +227,22 @@ def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
     snap = _snapshot(channel) if channel else {"ok": False, "error": "PUBLISH_CHANNEL не задан"}
     if not snap.get("ok"):
         entry = dict(rows[0])
-        entry["origin"] = (f"журнал вышедших постов — ⚠️ канал не проверил ({snap.get('error') or '?'}), "
+        entry["unverified"] = snap.get("error") or "?"
+        entry["origin"] = (f"журнал вышедших постов — ⚠️ канал не проверил ({entry['unverified']}), "
                            "взял последний пост журнала")
         return entry
     picked, how, skipped = pick_live(rows, snap, channel)
-    notes = [f"{_title(e)} от {e.get('date', '?')} — в канале нет (удалён или переписан до неузнаваемости)"
-             for e in skipped]
+    notes = [f"{_title(e)} от {e.get('date', '?')} — {_absent_reason(e, snap)}" for e in skipped]
+    label = _LABEL.get(k, k)
+    done = _distilled_on(picked) if picked else ""
+    if done and skipped:
+        # Свежие удалены, а следующий по старшинству уже переработан: взять его — выпустить в Threads второй
+        # тред на старую тему. Откат по журналу существует ради «админ удалил лишний», а не ради повторов.
+        return {"text": "", "skipped": notes,
+                "why": (f"свежих постов формата «{label}» в канале нет, а оставшийся {_title(picked)} от "
+                        f"{picked.get('date', '?')} уже перерабатывали в Threads {done}. Повтор не делаю: "
+                        f"прогони ТГ-{label} заново за новым постом.")}
     if not picked:
-        label = _LABEL.get(k, k)
         return {"text": "", "skipped": notes,
                 "why": (f"ни один из последних {len(rows)} постов формата «{label}» из журнала не нашёлся в "
                         f"ТГ-канале — перерабатывать нечего. Это вне завода: сделай Threads-версию руками "
@@ -220,4 +250,5 @@ def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
     entry = dict(picked)
     entry["origin"] = f"журнал вышедших постов, {how}"
     entry["skipped"] = notes
+    entry["repeat"] = done          # непусто — этот пост уже перерабатывали: пайплайн предупредит
     return entry

@@ -210,13 +210,17 @@ def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[s
     return fixed
 
 
-def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | None = None) -> str:
+def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | None = None,
+          record: bool = True) -> str:
     """Переработать вышедший ТГ-пост своего формата в пост(ы) Threads.
 
     src — готовый исходник от вызывающего (пайплайн уже его достал и показал владельцу). Передавать
     ЕГО, а не доставать заново: 09.09 пайплайн печатал один пост, а писатель молча брал из журнала
     другой — в отчёте был скоуп про SEC, а на выходе тред про Дорси. Один источник на прогон.
     back — если src не передан: 0 = последний из журнала, N≥1 = N-й с конца пост канала (обкатка).
+    record — писать ли серию в журнал переработок здесь же. Пайплайн передаёт False и пишет сам ПОСЛЕ
+    постановки в отложку: иначе --review-only и упавшая постановка копили в журнале версии, которые никуда
+    не вышли, и сверщик потом связывал посты Threads с ними (аудит 11.09.2026).
     Возвращает текст (посты через POST_SEP) или сообщение об отказе (нет материала / нет свода правил)."""
     k = content_plan.norm_kind(kind)
     fmt = spec(k)
@@ -256,7 +260,8 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
     _save(body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else ""), src, k)
     # Журнал переработок: связь «ТГ-пост → его Threads-версия» + категория (вход петли само-обучения).
     # Пишем ТОЛЬКО посты: блок для владельца в Threads не выходит и связь бы только зашумил.
-    threads_distill_journal.record(src, body, POST_SEP)
+    if record:
+        threads_distill_journal.record(src, body, POST_SEP)
     return body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else "")
 
 

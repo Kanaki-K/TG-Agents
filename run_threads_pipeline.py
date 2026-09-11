@@ -24,13 +24,14 @@ Threads-серии лягут в общую отложку рядом с нас�
 уже прошедший 2FA ТГ-пост (вход — core.published_journal). Анти-повтор/домен/ориентир — не нужны (пост
 выверен до создания), это машинерия Формата 2. Изоляция от ТГ-мира: общий только нейтральный слой.
 """
+import argparse
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from connectors.telegram_publish import publish as tg_publish
 from core import (config, content_plan, cost, llm, logging_setup, runmode, threads_creator,
-                  threads_lint, threads_source)
+                  threads_distill_journal, threads_lint, threads_source)
 
 logging_setup.setup()
 
@@ -61,8 +62,37 @@ def _cover_on_disk(path: str) -> str:
         return ""
     if Path(path).exists():
         return path
-    local = config.ROOT / "data" / "source_media" / Path(path.replace("\\", "/")).name
-    return str(local) if local.exists() else ""
+    name = Path(path.replace("\\", "/")).name
+    for folder in ("published_covers", "source_media"):
+        local = config.ROOT / "data" / folder / name
+        if local.exists():
+            return str(local)
+    return ""
+
+
+def _cover_for(src: dict) -> tuple[str, str]:
+    """Обложка исходного ТГ-поста для мини-скоупа: (путь или "", строка для отчёта).
+
+    Записи журнала с 11.09.2026 ссылаются на КОПИЮ обложки в data/published_covers — ей верим. Старые
+    ссылаются прямо на кадр в data/source_media, а его имя (scope_1_0.jpg) переиспользует каждый ТГ-прогон:
+    к 11.09 обложки записей 09.09 и 10.09 уже были картинками другого поста. Файл изменён позже дня записи —
+    не берём: ревью текстом честнее, чем чужая картинка под подписью «обложка ТГ-поста»."""
+    raw = (src.get("cover") or "").strip()
+    if not raw:
+        return "", "🖼 У исходного поста обложки в журнале нет (старый пост из выгрузки) — ревью текстом."
+    path = _cover_on_disk(raw)
+    if not path:
+        return "", f"🖼 Обложка ТГ-поста не найдена на диске ({raw}) — ревью уйдёт текстом."
+    if Path(path).parent.name == "source_media":
+        try:
+            changed = datetime.fromtimestamp(Path(path).stat().st_mtime).date()
+            posted = date.fromisoformat((src.get("date") or "")[:10])
+        except (OSError, ValueError):
+            changed = posted = None
+        if changed and posted and changed > posted:
+            return "", (f"🖼 ⚠️ Обложку НЕ беру: {Path(path).name} перезаписан ТГ-прогоном {changed:%d.%m}, "
+                        "это уже картинка другого поста. Ревью уйдёт текстом — поставь картинку ТГ-поста руками.")
+    return path, f"🖼 Беру обложку ТГ-поста: {Path(path).name}"
 
 
 def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: str = "flagship",
@@ -116,12 +146,20 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     out(f"🧵 Источник: {fmt['source_label']} от {src.get('date', '?')} — "
         f"«{src.get('theme') or '(без темы)'}» [{src.get('origin', 'журнал')}], "
         f"{len(src['text'])} знаков")
+    # Два предупреждения отдельными строками, а не в скобках «Источника» (ревью 11.09.2026): оба значат, что
+    # в Threads может уйти не то, и оба же повторяются в уведомлении на мейн.
+    if src.get("unverified"):
+        out("⚠️ КАНАЛ НЕ ПРОЧИТАН — не проверил, остался ли этот пост в ТГ-отложке. Если ты его удалил, "
+            "удали и Threads-версию из ревью.")
+    if src.get("repeat"):
+        out(f"⚠️ ПОВТОР: этот пост уже перерабатывали в Threads {src['repeat']}. Нужна ли вторая версия — реши в ревью.")
     # Анти-повтор/домен/ориентир на мини-флагмане НЕ нужны: флагман уже прошёл все гейты (Скаут,
     # антиповтор темы, пикер, 2FA) ДО создания — мы его лишь дистиллируем. Эта машинерия — для Формата 2
     # (он originates контент), модули threads_dedup/orientation_digest ждут его, к мини-флагману не привязаны.
     out(f"✍️ Делаю {fmt['label']} (Sonnet, свой свод правил — без Скаута/2FA/обложки)...\n")
     try:
-        series = threads_creator.write(kind, hint, src=src)   # ровно тот источник, что показан выше
+        # ровно тот источник, что показан выше; в журнал переработок пишем ниже — только поставленное в отложку
+        series = threads_creator.write(kind, hint, src=src, record=False)
     except Exception as e:
         out(f"❌ Дистилляция не удалась: {e}")
         out("\n" + cost.summary())
@@ -204,25 +242,25 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     base = content_plan.next_slot("short")
     # ОБЛОЖКА (решение владельца 09.09): мини-скоуп идёт с ТОЙ ЖЕ картинкой, что уже вышла с ТГ-постом
     # — искать и судить кадр заново незачем, он одобрен. Мини-флагману картинка не нужна вовсе.
-    cover = _cover_on_disk(src.get("cover")) if kind == "scope" else ""
-    if kind == "scope":
-        if cover:
-            out(f"🖼 Беру обложку ТГ-поста: {Path(cover).name}")
-        elif src.get("cover"):
-            out(f"🖼 Обложка ТГ-поста не найдена на диске ({src['cover']}) — ревью уйдёт текстом.")
-        else:
-            out("🖼 У исходного поста обложки в журнале нет (старый пост из выгрузки) — ревью текстом.")
+    cover, cover_note = _cover_for(src) if kind == "scope" else ("", "")
+    if cover_note:
+        out(cover_note)
     ok = 0
     for i, p in enumerate(posts):
         when = base + timedelta(minutes=THREADS_SERIES_GAP_MIN * i)
-        body = f"🧵 [THREADS · {fmt['label']} {i + 1}/{len(posts)}]\n\n{p}"
-        res = tg_publish.publish(channel, body, cover if i == 0 else None, when)
+        # Копия — РОВНО текст для Threads, без служебной шапки «🧵 [THREADS · …]»: владелец копирует пост
+        # целиком, а уведомление обещает «уйдёт та версия, что в отложке» — шапка ушла бы в Threads (аудит
+        # 11.09.2026). Порядок серии и так виден: посты стоят через THREADS_SERIES_GAP_MIN минут.
+        res = tg_publish.publish(channel, p, cover if i == 0 else None, when)
         if res.get("ok"):
             ok += 1
             out(f"  ✅ пост {i + 1}/{len(posts)} → {content_plan.human(when)} ({res.get('mode', '?')})")
         else:
             out(f"  ❌ пост {i + 1}/{len(posts)}: {res.get('error', '?')}")
     out(f"🗓 В отложке канала: {ok}/{len(posts)} постов. Проверь/поправь в нативных «Отложенных».")
+    if ok:   # связь «ТГ-пост → Threads-версия» — только для реально поставленного (см. threads_creator.write)
+        threads_distill_journal.record(src, ("\n" + threads_creator.POST_SEP + "\n").join(posts),
+                                       threads_creator.POST_SEP)
     # ПРОВЕРКА: читаем отложенные обратно — подтвердить, что посты реально легли (а не «ok» вхолостую).
     # Тот же приём, что у ТГ-публикатора: «ok» от API ещё не значит, что сообщение видно в канале.
     try:
@@ -240,6 +278,10 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
                f"Источник — {fmt['source_label']} от {src.get('date', '?')} ({src.get('origin', 'журнал')}).\n"
                "Проверь и поправь ПРЯМО В ОТЛОЖКЕ: в Threads уйдёт та версия, что там останется. "
                "Не годится — удали сообщение, и в Threads ничего не уйдёт.")
+        if src.get("unverified"):
+            msg += "\n⚠️ Канал не прочитан: не проверил, что ТГ-пост остался в отложке."
+        if src.get("repeat"):
+            msg += f"\n⚠️ Повтор: этот ТГ-пост уже перерабатывали в Threads {src['repeat']}."
         # Претензии линтера идут В УВЕДОМЛЕНИЕ, а не в ревью-копию: копия — это ровно тот текст,
         # который уйдёт в Threads, и служебные строки в ней стали бы частью поста.
         if lint_report:
@@ -265,20 +307,36 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     return "\n".join(report)
 
 
-def _arg_old() -> int:
-    """--old N → N (какой с конца пост канала брать). Без флага 0 = штатный путь через журнал."""
-    if "--old" not in sys.argv:
-        return 0
-    i = sys.argv.index("--old")
-    raw = sys.argv[i + 1] if len(sys.argv) > i + 1 else "1"
-    return int(raw) if raw.isdigit() and int(raw) > 0 else 1
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Строгий разбор командной строки: опечатка — ошибка, а не молчаливый другой режим.
+
+    Аудит 11.09.2026: разбор по `in sys.argv` запускал на `-scope` мини-ФЛАГМАН и ставил его в отложку,
+    `--old=3` молча игнорировал (шёл журнальный путь), а `--old 0` превращал в 1 (выгрузка вместо журнала)."""
+    ap = argparse.ArgumentParser(prog="run_threads_pipeline.py",
+                                 description="Threads-пайплайн: вышедший ТГ-пост → пост(ы) Threads.")
+    ap.add_argument("--scope", action="store_true", help="мини-скоуп (без флага — мини-флагман)")
+    ap.add_argument("--review-only", action="store_true", help="только показать, в отложку не ставить")
+    ap.add_argument("--old", nargs="?", const=1, type=int, metavar="N",
+                    help="обкатка: N-й с конца пост формата из выгрузки канала (1 = самый свежий)")
+    args = ap.parse_args(argv)
+    if args.old is not None and args.old < 1:
+        ap.error("--old N: N начинается с 1 (1 = самый свежий пост канала)")
+    return args
 
 
 def main() -> None:
+    # Эмодзи в выводе: консоль русского Windows (cp1251) или перенаправление в файл падали бы на первой же
+    # строке «=== 🧵». Тот же приём, что в run_autopilot.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — нет reconfigure (перехваченный поток): не повод падать
+            pass
+    args = _parse_args()
     logging_setup.set_agent("threads-pipeline")
     logging_setup.new_request()
-    kind = "scope" if "--scope" in sys.argv else "flagship"
-    run_threads_cycle(publish="--review-only" not in sys.argv, kind=kind, back=_arg_old())
+    run_threads_cycle(publish=not args.review_only, kind="scope" if args.scope else "flagship",
+                      back=args.old or 0)
 
 
 if __name__ == "__main__":

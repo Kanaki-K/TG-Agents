@@ -171,3 +171,21 @@ def test_writer_uses_the_source_it_was_given(monkeypatch):
     out = threads_creator.write("scope", src={"text": "ПЕРЕДАННЫЙ ИСХОДНИК", "date": "2026-09-02"})
     assert out == "Готовый тред"
     assert "ПЕРЕДАННЫЙ ИСХОДНИК" in seen["task"] and "ЧУЖОЙ" not in seen["task"]
+
+
+def test_writer_can_leave_the_journal_to_the_pipeline(monkeypatch):
+    """Аудит 11.09: --review-only и упавшая постановка писали в журнал переработок версии, которые никуда
+    не вышли. Пайплайн теперь зовёт write(record=False) и пишет сам — после постановки в отложку."""
+    calls = []
+    monkeypatch.setattr(threads_creator.llm, "reply", lambda *a, **kw: ("Готовый тред", None))
+    monkeypatch.setattr(threads_creator, "_system", lambda _k: "sys")
+    monkeypatch.setattr(threads_creator, "manual_missing", lambda _k: False)
+    monkeypatch.setattr(threads_creator, "_save", lambda *a, **kw: None)
+    monkeypatch.setattr(threads_creator.threads_distill_journal, "record", lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr(threads_creator.config, "load_agent", lambda _n: {"persona": "p"})
+    monkeypatch.setattr(threads_creator.config, "agent_api_key", lambda _c: "key")
+    src = {"text": "ИСХОДНИК", "date": "2026-09-02"}
+    threads_creator.write("scope", src=src, record=False)
+    assert calls == []
+    threads_creator.write("scope", src=src)
+    assert len(calls) == 1

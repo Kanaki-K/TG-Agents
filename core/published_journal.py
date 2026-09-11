@@ -19,11 +19,14 @@ draft-only/тест), его ПОЛНЫЙ текст + формат + тема +
 import json
 import logging
 import re
-from datetime import date
+import shutil
+from datetime import date, datetime
+from pathlib import Path
 
 from core import config, content_plan
 
 JOURNAL = config.ROOT / "data" / "published_posts.jsonl"
+COVERS_DIR = config.ROOT / "data" / "published_covers"   # копии обложек вышедших постов под своими именами
 LEGACY_JOURNAL = config.ROOT / "data" / "published_flagships.jsonl"   # флагман-только, до 09.09.2026
 
 
@@ -107,6 +110,27 @@ def nodes_of(text: str) -> list[str]:
     return [m.group(1).strip() for m in _NODE.finditer(meta[1]) if m.group(1).strip()]
 
 
+def _keep_cover(path: str, kind: str, tg: dict) -> str:
+    """Скопировать обложку под НЕПОВТОРЯЮЩИМСЯ именем и вернуть путь копии — журнал ссылается на неё.
+
+    ЗАЧЕМ (аудит 11.09.2026): ТГ-скоуп называет кадры scope_<страница>_<кадр>.jpg, и каждый прогон пишет
+    поверх. Журнал хранил путь к такому кадру — к 11.09 обложки записей 09.09 и 10.09 уже были картинками
+    другого прогона, и мини-скоуп уехал бы в Threads с чужой обложкой. Не скопировалось — оставляем
+    исходный путь: журнал вторичен к посту, а пайплайн Threads сам проверит, не перезаписан ли файл."""
+    raw = (path or "").strip()
+    if not raw or not Path(raw).is_file():
+        return raw
+    stamp = tg.get("msg_id") if tg.get("msg_id") is not None else datetime.now().strftime("%H%M%S")
+    dst = COVERS_DIR / f"{date.today().isoformat()}_{kind}_{stamp}{Path(raw).suffix or '.jpg'}"
+    try:
+        COVERS_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(raw, dst)
+        return str(dst)
+    except Exception:
+        logging.exception("published_journal: обложку не скопировал — оставляю исходный путь")
+        return raw
+
+
 def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "",
            tg: dict | None = None) -> None:
     """Дописать вышедший пост (текст + формат + тема + дата + путь к обложке) в журнал.
@@ -128,7 +152,8 @@ def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "",
         _migrate()
         JOURNAL.parent.mkdir(parents=True, exist_ok=True)
         entry = {"date": date.today().isoformat(), "kind": content_plan.norm_kind(kind),
-                 "theme": (theme or "").strip(), "text": body, "cover": (cover or "").strip(),
+                 "theme": (theme or "").strip(), "text": body,
+                 "cover": _keep_cover(cover, content_plan.norm_kind(kind), tg),
                  "nodes": nodes_of(text), "service": service_of(text),
                  "exit": _meta(text, _EXIT)}
         if tg.get("msg_id") is not None:
