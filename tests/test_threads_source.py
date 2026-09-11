@@ -45,12 +45,125 @@ def test_service_messages_and_foreign_formats_are_skipped(tmp_path, monkeypatch)
     assert ts.from_channel("scope", 2) is None                                   # больше кандидатов нет
 
 
-def test_resolve_switches_between_journal_and_channel(tmp_path, monkeypatch):
+def _journal(tmp_path, monkeypatch, *rows):
+    """Журнал в tmp + фиктивный канал. rows — (текст, квитанция постановки или None), старые первыми."""
     monkeypatch.setattr(published_journal, "JOURNAL", tmp_path / "journal.jsonl")
     monkeypatch.setattr(published_journal, "LEGACY_JOURNAL", tmp_path / "legacy.jsonl")
-    published_journal.record("Свежий из журнала", theme="из журнала", kind="scope")
+    monkeypatch.setattr(ts.config, "get_optional", lambda k: "канал" if k == "PUBLISH_CHANNEL" else None)
+    for text, tg in rows:
+        published_journal.record(text, theme="ETF", kind="scope", tg=tg)
+
+
+def _snap(monkeypatch, scheduled=(), recent=(), ok=True):
+    """Подменяем чтение канала: в тестах в Telegram не ходим."""
+    monkeypatch.setattr(ts, "_snapshot", lambda channel: {"ok": ok, "error": "нет сети",
+                                                          "scheduled": list(scheduled), "recent": list(recent)})
+
+
+def test_resolve_switches_between_journal_and_channel(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, ("Свежий пост из журнала", None))
+    _snap(monkeypatch, scheduled=[{"id": 1, "text": "Свежий пост из журнала"}])
     _channel(tmp_path, monkeypatch, [{"id": 5, "date": "2026-08-01T16:00:00", "text": "к" * 1000}])
 
-    assert ts.resolve("scope")["text"] == "Свежий из журнала"        # 0 = боевой путь
-    assert ts.resolve("scope")["origin"] == "журнал вышедших постов"
+    assert ts.resolve("scope")["text"] == "Свежий пост из журнала"   # 0 = боевой путь
+    assert ts.resolve("scope")["origin"].startswith("журнал вышедших постов")
     assert ts.resolve("scope", 1)["text"].startswith("к")            # ≥1 = обкатка по истории канала
+
+
+# --- СВЕРКА ЖУРНАЛА С КАНАЛОМ (11.09.2026). Живой случай: ТГ-скоуп прогнали дважды на одну тему, в журнале
+# два поста, админ оставил в отложке один. Threads обязан взять оставшийся, а не последний записанный.
+ETF_OLD = ("**📉 Институции 228 дней в минусе, а держат стену те, кто дешевле**\n\n"
+           "Спот биткоина сейчас около 77 000$. Над рынком висит потолок 83-86 тысяч, и это не случайное "
+           "число. В этой зоне сходятся сразу три независимых уровня: средняя цена входа долгосрочных "
+           "держателей, краткосрочных спекулянтов и спотовых фондов. Каждый из них продаёт в ноль")
+ETF_NEW = ("**📊 Институции сами поставили крышу над рынком**\n\n"
+           "Спотовые ETF на биткоин отыграли всю просадку и вернулись к безубытку. По данным Glassnode, "
+           "средняя цена входа всех фондов около 83 000$. Рынок только что подполз к ней снизу, отыграв "
+           "падение на 18 млрд$. Тот, кто заходил в фонд на просадке и досидел до минуса, у отметки "
+           "безубытка делает ровно одно: выходит, лишь бы не свалиться в красное снова")
+
+
+def _plain(text):
+    """Так текст выглядит в Telegram: без звёздочек разметки."""
+    return text.replace("**", "")
+
+
+def test_deleted_newest_falls_back_to_the_one_left_in_queue(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, (ETF_OLD, None), (ETF_NEW, None))     # старые записи — без номера
+    _snap(monkeypatch, scheduled=[{"id": 9, "text": _plain(ETF_OLD)}])      # свежий админ удалил
+
+    src = ts.resolve("scope")
+    assert src["text"] == ETF_OLD                                           # взял оставшийся
+    assert "по тексту" in src["origin"]
+    assert len(src["skipped"]) == 1 and "поставили крышу" in src["skipped"][0]   # удалённый назван
+
+
+def test_twin_on_same_topic_does_not_claim_the_remaining_post(tmp_path, monkeypatch):
+    # Обратный случай: удалён СТАРЫЙ. Свежий на ту же тему не должен «узнать себя» в чужом посте, а старый —
+    # в свежем. Каждое сообщение отдаётся одной, самой похожей записи.
+    _journal(tmp_path, monkeypatch, (ETF_OLD, None), (ETF_NEW, None))
+    _snap(monkeypatch, scheduled=[{"id": 9, "text": _plain(ETF_NEW)}])
+    src = ts.resolve("scope")
+    assert src["text"] == ETF_NEW and src["skipped"] == []
+
+
+def test_small_edit_is_still_recognised(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, (ETF_NEW, None))
+    edited = (_plain(ETF_NEW).replace("отыграли", "вернули").replace("подполз", "дошёл")
+              .replace("снизу", "сейчас").replace("ровно", "только").replace("свалиться", "упасть"))
+    _snap(monkeypatch, scheduled=[{"id": 3, "text": edited}])                # админ поменял пять слов
+    assert ts.resolve("scope")["text"] == ETF_NEW
+
+
+def test_message_id_finds_post_whatever_the_edit(tmp_path, monkeypatch):
+    tg = {"msg_id": 77, "scheduled_at": "2026-09-11T14:00:00+00:00", "channel": "канал", "text": ETF_NEW}
+    _journal(tmp_path, monkeypatch, (ETF_OLD, None), (ETF_NEW, tg))
+    _snap(monkeypatch, scheduled=[{"id": 77, "text": "Админ переписал пост целиком, ни одного прежнего слова"}])
+    src = ts.resolve("scope")
+    assert src["text"] == ETF_NEW and "номеру сообщения" in src["origin"]
+
+
+ETF_NEW_HEAVY = ("📊 Фонды упёрлись в собственный вход\n\n"
+                 "Спотовые ETF на биткоин отыграли всю просадку и вернулись к безубытку. По данным Glassnode, "
+                 "средняя цена входа всех фондов около 83 000$. Дальше начинается другая история: крыша, "
+                 "продажи в ноль, давление сверху, осторожность, терпение")
+
+
+def test_published_post_found_by_scheduled_time(tmp_path, monkeypatch):
+    # Пост уже вышел: из отложки ушёл, в ленте у него новый номер. Держимся за назначенное время.
+    tg = {"msg_id": 77, "scheduled_at": "2026-09-11T14:00:00+00:00", "channel": "канал", "text": ETF_NEW}
+    _journal(tmp_path, monkeypatch, (ETF_NEW, tg))
+    assert 0.35 <= ts._overlap(ts._words(ETF_NEW), ts._words(ETF_NEW_HEAVY)) < 0.6   # только время спасает
+    _snap(monkeypatch, recent=[{"id": 501, "date": "2026-09-11T14:00:04+00:00", "text": ETF_NEW_HEAVY}])
+    src = ts.resolve("scope")
+    assert src["text"] == ETF_NEW and "назначенное время" in src["origin"]
+
+    _snap(monkeypatch, recent=[{"id": 501, "date": "2026-09-12T09:00:00+00:00", "text": ETF_NEW_HEAVY}])
+    assert ts.resolve("scope")["text"] == ""                                  # то же, но в чужое время — не он
+
+
+def test_nothing_left_in_channel_stops_with_reason(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, (ETF_OLD, None), (ETF_NEW, None))
+    _snap(monkeypatch, scheduled=[{"id": 1, "text": "Совсем другой пост про погоду и выходные"}])
+    src = ts.resolve("scope")
+    assert src["text"] == "" and len(src["skipped"]) == 2
+    assert "руками" in src["why"] and "заново" in src["why"]                  # вне завода: руками или новый прогон
+
+
+def test_channel_unreachable_takes_latest_with_warning(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, (ETF_OLD, None), (ETF_NEW, None))
+    _snap(monkeypatch, ok=False)
+    src = ts.resolve("scope")
+    assert src["text"] == ETF_NEW and "не проверил" in src["origin"]
+
+
+def test_journal_keeps_sent_text_and_message_id(tmp_path, monkeypatch):
+    # Реплика модели перед постом (11.09: «Линтер чистый. Выдаю.») в канал не ушла — и в журнал не идёт.
+    _journal(tmp_path, monkeypatch)
+    answer = "Линтер чистый. Выдаю.\n\n**Пост**\nтело\n[[SPLIT]]\n[[УЗЕЛ]] мысль"
+    tg = {"msg_id": 5, "scheduled_at": "2026-09-11T14:00:00+00:00", "channel": "канал", "text": "**Пост**\nтело"}
+    published_journal.record(answer, theme="т", kind="scope", tg=tg)
+    last = published_journal.latest("scope")
+    assert last["text"] == "**Пост**\nтело"
+    assert last["tg_msg_id"] == 5 and last["tg_scheduled_at"].startswith("2026-09-11")
+    assert last["nodes"] == ["мысль"]                                          # мета читается по-прежнему

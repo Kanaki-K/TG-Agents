@@ -913,8 +913,11 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             panel["🔍 пул обложки"] = _clip(pool, 46)
             out(f"   Пул кандидатов: {pool}")
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
-    out(str(_threaded(creator_tools.dispatch, "publish_now",
-                      {"kind": "short" if scope else "", "cover": cover_path})))
+    # receipt — опознаватель поставленного поста (номер сообщения, время, отправленный текст). Зовём
+    # _publish_now напрямую, а не через dispatch: dispatch отдаёт только строку отчёта, номер терялся.
+    receipt: dict = {}
+    out(str(_threaded(creator_tools._publish_now,
+                      {"kind": "short" if scope else "", "cover": cover_path}, receipt)))
     panel["публикация"] = "✅ в отложке канала (проверь и одобри)"
     # РЕЦИКЛИНГ: тема флагмана ушла в канал → метим [вышло ДАТА], пикер не даст её ~полгода, потом вернёт.
     # Только на РЕАЛЬНОЙ публикации (draft-only сюда не доходит — вышел выше), чтобы тест не «съедал» темы.
@@ -922,7 +925,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # МОСТ В THREADS: вышедший флагман (полный текст + тема) → журнал вышедших. Отсюда мини-флагман
         # (run_threads_pipeline) берёт его и дистиллирует в Threads-серию. Только боевая публикация —
         # draft-only/тест сюда не доходят (вышли выше), журнал тестами не засоряется.
-        published_journal.record(post, theme)
+        published_journal.record(post, theme, tg=receipt)
         out("🧵 Флагман записан в журнал вышедших — доступен мини-флагману Threads (run_threads_pipeline).")
         if dedup.mark_theme_used(theme):
             out(f"🧭 Тема помечена [вышло] в банке — вернётся в ротацию через ~{dedup.BANK_REUSE_DAYS//30} мес.")
@@ -931,7 +934,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # На сам пост и публикацию это не влияет — только запись строки в журнал (сбой её проглатывается).
     if scope:
         # Обложку кладём В ЖУРНАЛ: мини-скоуп для Threads берёт ту же картинку, что уже вышла в ТГ.
-        published_journal.record(post, scope_rec, kind="scope", cover=cover_path)
+        published_journal.record(post, scope_rec, kind="scope", cover=cover_path, tg=receipt)
         out("🧵 Скоуп записан в журнал вышедших — доступен мини-скоупу Threads "
             "(run_threads_pipeline.py --scope).")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===")

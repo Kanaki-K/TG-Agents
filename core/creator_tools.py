@@ -2167,11 +2167,16 @@ def _apply_standard() -> str:
             "Предложение очищено.")
 
 
-def _publish_now(args: dict | None = None) -> str:
+def _publish_now(args: dict | None = None, receipt: dict | None = None) -> str:
     """Поставить ПОСЛЕДНИЙ готовый пост (последний драфт + обложка) в отложенные канала на слот
     контент-плана и уведомить мейн владельца. Детерминированно: текст берётся ДОСЛОВНО из сохранённого
     драфта, не переписывается. Формат берём из сохранённого kind драфта (или явного args['kind']), НЕ
-    угадываем по длине. Обложку цепляем ТОЛЬКО флагману — короткий/scope уходит ТЕКСТОМ. /schedule."""
+    угадываем по длине. Обложку цепляем ТОЛЬКО флагману — короткий/scope уходит ТЕКСТОМ. /schedule.
+
+    receipt — словарь, который заполняется при УСПЕШНОЙ постановке: channel / msg_id / scheduled_at / text
+    (ровно тот текст, что ушёл в канал). Пайплайн передаёт его в журнал вышедших постов: так Threads-ветка
+    потом находит пост в отложке по номеру сообщения. Отдаём параметром, а не через файл на диске:
+    кто поставил пост, тот и передаёт его опознаватель (урок 09.09 «показанное ≠ использованное»)."""
     args = args or {}
     channel = config.get_optional("PUBLISH_CHANNEL")
     if not channel:
@@ -2235,6 +2240,9 @@ def _publish_now(args: dict | None = None) -> str:
     res = publish.publish(channel, text, cover or None, slot)
     if not res.get("ok"):
         return f"❌ Не поставил в отложенные: {res.get('error', '?')}. Драфт цел — поправь причину и снова /schedule."
+    if receipt is not None:
+        receipt.update({"channel": channel, "msg_id": res.get("msg_id"),
+                        "scheduled_at": res.get("scheduled_at") or "", "text": text})
     when = content_plan.human(slot)
     note = ""
     target = config.get_optional("PUBLISH_NOTIFY")

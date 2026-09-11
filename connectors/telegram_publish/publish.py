@@ -125,6 +125,14 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
 
         def done(mode: str, msg) -> dict:
             out = {"ok": True, "mode": mode}
+            # ОПОЗНАВАТЕЛЬ ПОСТА (11.09.2026): номер сообщения с ТЕКСТОМ (во всех ветках ниже в done
+            # приходит именно оно) + назначенное время. По ним Threads-ветка находит пост в отложке, даже
+            # если админ его поправил: номер от правки текста не меняется. Вышедший пост Telegram
+            # перенумеровывает, но выходит он ровно в назначенное время — это второй якорь.
+            if getattr(msg, "id", None) is not None:
+                out["msg_id"] = msg.id
+            if getattr(msg, "date", None):
+                out["scheduled_at"] = msg.date.isoformat()
             if when is None:  # у отложенного публичной ссылки ещё нет
                 out["link"] = _post_link(entity, msg)
             return out
@@ -272,6 +280,40 @@ def scheduled_texts(channel: str) -> list:
     except Exception:
         logging.exception("[публикатор] чтение отложенных упало — анти-повтор пойдёт по черновикам")
         return []
+
+
+async def _channel_snapshot_async(channel: str, recent: int) -> dict:
+    """Отложка и свежая лента канала за ОДНО подключение: [{id, date, text}] в каждой."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return {"ok": False, "error": "MTProto-сессия не авторизована (TELEGRAM_SESSION)"}
+        entity = await _resolve_entity(client, channel)
+
+        def rows(msgs) -> list:
+            return [{"id": m.id, "date": m.date.isoformat() if getattr(m, "date", None) else "",
+                     "text": m.message} for m in msgs if getattr(m, "message", None)]
+
+        scheduled = await client.get_messages(entity, scheduled=True, limit=100)
+        feed = await client.get_messages(entity, limit=recent)
+        return {"ok": True, "scheduled": rows(scheduled), "recent": rows(feed)}
+    finally:
+        await client.disconnect()
+
+
+def channel_snapshot(channel: str, recent: int = 60) -> dict:
+    """Синхронно: что сейчас лежит в отложке канала и что недавно вышло.
+
+    Зачем (11.09.2026): Threads-ветка берёт из журнала только тот пост, который админ ОСТАВИЛ в канале.
+    Лента нужна потому, что в 16:00 пост уходит из отложки в ленту — он не удалён, он вышел.
+    ok=False отличает «канал не прочитался» от «в канале пусто»: при первом Threads берёт последний пост
+    журнала с предупреждением, при втором — честно говорит, что брать нечего. Никогда не бросает."""
+    try:
+        return asyncio.run(_channel_snapshot_async((channel or "").strip(), recent))
+    except Exception as e:
+        logging.exception("[публикатор] не смог прочитать отложку и ленту канала")
+        return {"ok": False, "error": f"канал не прочитан: {e}"}
 
 
 async def _notify_async(user: str, text: str) -> dict:

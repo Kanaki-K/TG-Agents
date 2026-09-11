@@ -96,13 +96,20 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         return "\n".join(report)
 
     src = threads_source.resolve(kind, back)
+    # Записи журнала, отброшенные сверкой с каналом, показываем ДО источника: владелец должен видеть, что
+    # удалённый из отложки пост заметили, а не проигнорировали молча.
+    for note in (src or {}).get("skipped") or []:
+        out(f"⏭ Пропустил {fmt['source_label']} {note}")
     if not src or not src.get("text"):
-        where = (f"в выгрузке канала нет {back}-го с конца поста формата «{fmt['source_label']}»"
-                 if back else
-                 f"в журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}»")
-        out(f"⛔ {where} — перерабатывать нечего.\n"
-            f"   Боевой путь: опубликуй {fmt['source_label']} в ТГ (он запишется в журнал).\n"
-            f"   Обкатка: возьми пост из истории канала — флаг --old N (1 = самый свежий).")
+        if src and src.get("why"):
+            out(f"⛔ {src['why']}")
+        else:
+            where = (f"в выгрузке канала нет {back}-го с конца поста формата «{fmt['source_label']}»"
+                     if back else
+                     f"в журнале вышедших ТГ-постов нет ни одного формата «{fmt['source_label']}»")
+            out(f"⛔ {where} — перерабатывать нечего.\n"
+                f"   Боевой путь: опубликуй {fmt['source_label']} в ТГ (он запишется в журнал).\n"
+                f"   Обкатка: возьми пост из истории канала — флаг --old N (1 = самый свежий).")
         out("\n" + cost.summary())
         return "\n".join(report)
 

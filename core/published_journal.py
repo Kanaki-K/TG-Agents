@@ -107,13 +107,21 @@ def nodes_of(text: str) -> list[str]:
     return [m.group(1).strip() for m in _NODE.finditer(meta[1]) if m.group(1).strip()]
 
 
-def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "") -> None:
+def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "",
+           tg: dict | None = None) -> None:
     """Дописать вышедший пост (текст + формат + тема + дата + путь к обложке) в журнал.
 
     Мету после [[SPLIT]] отбрасываем (в Threads уходит только тело). cover — файл обложки, с которой
     пост вышел в ТГ: мини-скоуп берёт ЕЁ же (решение владельца 09.09 — картинку для Threads не ищем
-    заново, она уже опубликована и одобрена). Сбой записи НЕ роняет публикацию — журнал вторичен."""
-    body = (text or "").split("[[SPLIT]]")[0].strip()
+    заново, она уже опубликована и одобрена). Сбой записи НЕ роняет публикацию — журнал вторичен.
+
+    tg — квитанция постановки из creator_tools._publish_now (channel / msg_id / scheduled_at / text).
+    Номер сообщения и время сохраняем: по ним Threads-ветка сверяет журнал с каналом (threads_source)."""
+    tg = tg or {}
+    # Тело — ТО, ЧТО РЕАЛЬНО УШЛО В КАНАЛ, если квитанция есть. `text` пайплайна — ответ модели: 11.09 в
+    # журнал вместе с постом записалась её реплика «Линтер чистый. Выдаю.» — в канал она не попала, а в
+    # Threads уехала бы. Мету (узлы/тип/выход) по-прежнему читаем из `text`: в канал она не уходит.
+    body = (tg.get("text") or text or "").split("[[SPLIT]]")[0].strip()
     if not body:
         return
     try:
@@ -123,6 +131,9 @@ def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "") 
                  "theme": (theme or "").strip(), "text": body, "cover": (cover or "").strip(),
                  "nodes": nodes_of(text), "service": service_of(text),
                  "exit": _meta(text, _EXIT)}
+        if tg.get("msg_id") is not None:
+            entry.update({"tg_channel": tg.get("channel") or "", "tg_msg_id": tg["msg_id"],
+                          "tg_scheduled_at": tg.get("scheduled_at") or ""})
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:

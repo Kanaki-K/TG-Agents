@@ -8,12 +8,29 @@
    путь ОБКАТКИ: взять СТАРЫЙ пост, который вышел до того, как журнал завели. Ради него и
    сделан модуль: прогнать Threads-ветку на живом материале канала, не дожидаясь новых постов.
 
+ЖУРНАЛ СВЕРЯЕТСЯ С КАНАЛОМ (решение владельца 11.09.2026). Журнал пишется при постановке в отложку и
+о дальнейшем не знает: ТГ-скоуп прогнали дважды — в журнале два поста, а в отложке админ оставил один.
+Раньше Threads брал просто последнюю запись, и удалённый пост уехал бы в Threads. Теперь запись идёт в
+работу, только если её пост ЕСТЬ в канале (в отложке или уже в ленте); удалённый пропускается с
+объяснением, берётся следующий. Узнаём пост тремя способами:
+  • по НОМЕРУ сообщения в отложке — он сохраняется при постановке, правка текста его не меняет;
+  • по ТЕКСТУ — доля слов записи, найденных в сообщении. Замер 11.09 на двух скоупах про ETF: правка
+    пяти слов даёт 97%, близнец на ту же тему — 25-27%. Каждое сообщение отдаём ОДНОЙ, самой похожей
+    записи, иначе удалённый пост «узнал бы себя» в оставшемся близнеце;
+  • по ВРЕМЕНИ — вышедшему посту Telegram даёт новый номер, но выходит он в назначенное время.
+Пост, переписанный до неузнаваемости, не угадываем: это уже вне завода — админ делает Threads-версию
+руками или прогоняет ТГ-формат заново. Канал не прочитался (нет сети/сессии) — берём последнюю запись,
+как раньше, и прямо об этом говорим.
+
 Формат поста в выгрузке размечен Аналитиком («флагман» / «короткий» / «личный»…). Если разметки
 для поста нет — падаем на длину (флагман длинный), это та же грубая эвристика, что в content_plan.
 Наружу оба источника отдают ОДИНАКОВЫЙ словарь: date / kind / theme / text / origin — чтобы
 дистиллятору было всё равно, откуда пришёл материал.
 """
 from __future__ import annotations
+
+import re
+from datetime import datetime, timedelta, timezone
 
 from core import config, content_plan, io_safe, published_journal
 
@@ -26,6 +43,13 @@ TOPICS_JSON = config.ROOT / "data" / "post_topics.json"
 # контент», а формат определяем ДЛИНОЙ — тем же порогом, что и весь завод (content_plan.infer_kind).
 NOT_OUR_CONTENT = {"служебное", "медиа", "личный", "психология", "обучающий"}
 MIN_CHARS = 300      # короче — футер-сообщение, анонс, реплика; исходником для треда быть не может
+
+LOOKBACK = 10                        # сколько последних записей формата сверяем с каналом
+TEXT_MATCH = 0.6                     # доля слов записи в сообщении, чтобы узнать пост по тексту
+TIME_MATCH = 0.35                    # порог мягче, когда сообщение вышло ровно в назначенное время
+TIME_WINDOW = timedelta(minutes=15)
+RECENT_POSTS = 60                    # сколько вышедших постов ленты смотрим
+_LABEL = {"scope": "скоуп", "flagship": "флагман"}
 
 
 def _matches(post: dict, kind: str, tag_of: dict) -> bool:
@@ -60,15 +84,109 @@ def from_channel(kind: str = "flagship", back: int = 1) -> dict | None:
             "origin": f"пост канала #{post.get('id')} (выгрузка, {back}-й с конца)"}
 
 
+def _words(text: str) -> set[str]:
+    """Слова для сравнения журнала с каналом. В Telegram нет ни **жирного**, ни [подписи](ссылки) — только
+    видимый текст, поэтому разметку снимаем, а короткие служебные слова не считаем."""
+    t = (text or "").lower().replace("ё", "е")
+    t = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", t)
+    t = re.sub(r"https?://\S+", " ", t)
+    return {w for w in re.findall(r"[a-zа-я0-9]+", t) if len(w) >= 4 or w.isdigit()}
+
+
+def _overlap(entry_words: set[str], msg_words: set[str]) -> float:
+    return len(entry_words & msg_words) / len(entry_words) if entry_words else 0.0
+
+
+def _moment(iso: str) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _title(entry: dict) -> str:
+    """Имя записи для отчёта — строка заголовка. Тема не годится: у близнецов она одна и та же."""
+    lines = [ln.strip() for ln in (entry.get("text") or "").splitlines() if ln.strip()]
+    head = next((ln for ln in lines if ln.startswith("**")), lines[0] if lines else "")
+    head = head.strip("*").strip()
+    return f"«{head[:70]}»" if head else "«(без заголовка)»"
+
+
+def pick_live(entries: list[dict], snap: dict) -> tuple[dict | None, str, list[dict]]:
+    """Первая (самая свежая) запись журнала, чей пост есть в канале.
+
+    entries — свежие первыми; snap — {'scheduled': [...], 'recent': [...]} из channel_snapshot.
+    Возвращает (запись или None, как её узнали, пропущенные записи — те, что свежее найденной)."""
+    msgs = ([dict(m, where="в отложке") for m in snap.get("scheduled") or []]
+            + [dict(m, where="в ленте") for m in snap.get("recent") or []])
+    ew = [_words(e.get("text")) for e in entries]
+    by_id = {e.get("tg_msg_id"): j for j, e in enumerate(entries) if e.get("tg_msg_id") is not None}
+    owner: dict[int, tuple[int, float]] = {}
+    for i, m in enumerate(msgs):
+        if m["where"] == "в отложке" and m.get("id") in by_id:
+            owner[i] = (by_id[m["id"]], 1.0)          # номер сообщения сильнее любого сходства слов
+            continue
+        mw = _words(m.get("text"))
+        scores = [_overlap(w, mw) for w in ew]
+        if scores:
+            best = max(range(len(scores)), key=scores.__getitem__)
+            owner[i] = (best, scores[best])
+    skipped: list[dict] = []
+    for j, e in enumerate(entries):
+        mine = [(msgs[i], s) for i, (k, s) in owner.items() if k == j]
+        if any(m["where"] == "в отложке" and m.get("id") == e.get("tg_msg_id") for m, _ in mine):
+            return e, "в отложке канала, узнал по номеру сообщения", skipped
+        best = max(mine, key=lambda x: x[1], default=None)
+        if best and best[1] >= TEXT_MATCH:
+            return e, f"{best[0]['where']} канала, узнал по тексту (совпало {best[1]:.0%} слов)", skipped
+        at = _moment(e.get("tg_scheduled_at") or "")
+        for m, s in mine:
+            t = _moment(m.get("date") or "")
+            if at and t and m["where"] == "в ленте" and abs(t - at) <= TIME_WINDOW and s >= TIME_MATCH:
+                return e, f"вышел в канал в назначенное время (текст совпал на {s:.0%})", skipped
+        skipped.append(e)
+    return None, "", skipped
+
+
+def _snapshot(channel: str) -> dict:
+    """Отложка + лента канала. Импорт внутри: модулю не нужен Telethon, пока в канал не идём."""
+    try:
+        from connectors.telegram_publish import publish as tg_publish
+    except Exception as e:  # noqa: BLE001 — нет Telethon = канал не прочитан, а не падение прогона
+        return {"ok": False, "error": f"коннектор публикации не загрузился: {e}"}
+    return tg_publish.channel_snapshot(channel, recent=RECENT_POSTS)
+
+
 def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
-    """Материал для Threads-ветки: back=0 — последний из журнала вышедших; back≥1 — из выгрузки канала.
+    """Материал для Threads-ветки: back=0 — журнал вышедших, сверенный с каналом; back≥1 — из выгрузки канала.
 
     Разделение намеренное: боевой прогон работает с журналом (он пишется тем же прогоном, что
-    поставил пост в отложку), а обкатка — с историей канала, где лежат сотни живых постов."""
+    поставил пост в отложку), а обкатка — с историей канала, где лежат сотни живых постов.
+    Пустой text + why — брать нечего и почему; skipped — какие записи отброшены сверкой (для отчёта)."""
     if back and back > 0:
         return from_channel(kind, back)
-    entry = published_journal.latest(kind)
-    if entry:
-        entry = dict(entry)
-        entry.setdefault("origin", "журнал вышедших постов")
+    k = content_plan.norm_kind(kind)
+    rows = published_journal.entries(k)[-LOOKBACK:][::-1]
+    if not rows:
+        return None
+    channel = (config.get_optional("PUBLISH_CHANNEL") or "").strip()
+    snap = _snapshot(channel) if channel else {"ok": False, "error": "PUBLISH_CHANNEL не задан"}
+    if not snap.get("ok"):
+        entry = dict(rows[0])
+        entry["origin"] = (f"журнал вышедших постов — ⚠️ канал не проверил ({snap.get('error') or '?'}), "
+                           "взял последний пост журнала")
+        return entry
+    picked, how, skipped = pick_live(rows, snap)
+    notes = [f"{_title(e)} от {e.get('date', '?')} — в канале нет (удалён или переписан до неузнаваемости)"
+             for e in skipped]
+    if not picked:
+        label = _LABEL.get(k, k)
+        return {"text": "", "skipped": notes,
+                "why": (f"ни один из последних {len(rows)} постов формата «{label}» из журнала не нашёлся в "
+                        f"ТГ-канале — перерабатывать нечего. Это вне завода: сделай Threads-версию руками "
+                        f"или прогони ТГ-{label} заново за новым постом.")}
+    entry = dict(picked)
+    entry["origin"] = f"журнал вышедших постов, {how}"
+    entry["skipped"] = notes
     return entry

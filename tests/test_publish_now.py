@@ -60,6 +60,23 @@ def test_md_files_only_dated_newest_first(tmp_path):
     assert [p.name for p in creator_tools._md_files(d)] == ["2026-07-22-b.md", "2026-07-20-a.md"]
 
 
+def test_publish_fills_receipt_for_threads_journal(monkeypatch, tmp_path):
+    # Квитанция: номер сообщения и отправленный текст уходят в журнал — по ним Threads сверяет отложку.
+    d, pub = _setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(pub, "publish", lambda channel, text, cover, slot: {
+        "ok": True, "mode": "тест", "msg_id": 42, "scheduled_at": "2026-07-22T13:00:00+00:00"})
+    _draft(d, "**Пост**\nтело\n[[SPLIT]]\nмета")
+    receipt: dict = {}
+    creator_tools._publish_now({}, receipt)
+    assert receipt == {"channel": "test_channel", "msg_id": 42,
+                       "scheduled_at": "2026-07-22T13:00:00+00:00", "text": "**Пост**\nтело"}
+
+    monkeypatch.setattr(pub, "publish", lambda *a: {"ok": False, "error": "сеть"})
+    failed: dict = {}
+    creator_tools._publish_now({}, failed)
+    assert failed == {}                                          # не поставилось — квитанции нет
+
+
 def test_publish_cuts_split_and_proveryay(monkeypatch, tmp_path):
     d, pub = _setup(monkeypatch, tmp_path)
     _draft(d, "**Пост**\nтело поста\n[ПРОВЕРИТЬ: цифра]\n[[SPLIT]]\nМЕТА владельцу")
