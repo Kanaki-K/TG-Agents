@@ -798,3 +798,10 @@ def test_yavlyaetsya_not_caught_inside_other_words():
     # настоящее «является» по-прежнему ловим
     w = creator_tools._lint("**Заголовок**\n\nЭто является проблемой рынка\n\n🖥 Канал", "scope")[1]
     assert any("является" in x for x in w)
+
+
+def test_announce_phrase_variant_from_the_run_is_caught():
+    """«Но дальше начинается интересное» (прогон 12.09) — та же фраза-анонс важности, что «самое
+    интересное» из §5, только другими словами. Замер канала: 0 вхождений, то есть язык завода."""
+    w = creator_tools._lint("**Заголовок**\n\nНо дальше начинается интересное\n\n🖥 Канал", "scope")[1]
+    assert any("фраза-анонс" in x for x in w)
