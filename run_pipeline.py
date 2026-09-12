@@ -427,6 +427,15 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         if _q:
             out(_q + "\n")
             panel["🙋 спрошу"] = _q.splitlines()[0].replace("🙋 Спрашиваю, потому что это НЕ разовая правка: ", "")
+        # РАЗМЕР СВОДА УРОКОВ (12.09). Перебор бюджета раньше уходил в logging.warning, то есть
+        # никуда: файл scope дорос до 44к знаков, каждый пост платил ими и тонул в правилах, а
+        # владелец об этом не знал. Теперь цифра стоит рядом с процентом правок — там, где он и так
+        # смотрит, как прошёл прогон.
+        _lp = creator_tools.lessons_panel_line(
+            creator_tools.SCOPE_LESSONS if scope else creator_tools.LESSONS)
+        if _lp and not _lp.startswith("✅"):
+            out(_lp + "\n")
+            panel["📚 уроки"] = _lp
     except Exception:                       # замер — справка, а не гейт: молчит и не роняет прогон
         logging.exception("замер правок владельца не удался — продолжаю без него")
     age = _latest_brief_age_hours()
