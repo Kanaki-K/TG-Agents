@@ -126,3 +126,83 @@ def test_advice_post_is_never_blindly_trimmed():
     out = sw._enforce_scope_len(t)
     assert out == t                                   # не тронут
     assert "Кого касается" in out and "не спасает" in out
+
+
+# ── ПЕРЕРАБОТКА 12.09.2026: допуск + запрет резать несущее ───────────────────────────────────────
+# Живой провал: пост вышел на 1501 знак при потолке 1500, и резчик за ОДИН лишний знак снёс абзац на
+# 187 знаков — единственный, который связывал повод с читателем и подводил к кикеру. Владелец
+# забраковал пост целиком («финал дерьмище, пользы 0, не ясно про что пересказать»). Ниже — тесты на
+# оба класса: арифметику допуска и неприкосновенность несущих костей.
+TOL = creator_tools.SCOPE_LEN_TOLERANCE
+
+
+def _post_over(over: int) -> str:
+    """Пост ровно на `over` знаков выше потолка — размер добора считаем от порогов, не магией."""
+    base = ["**Заголовок поста один**", "ЛИД " + "L" * 200]
+    mids = ["СЕРЕДИНА%d " % i + "M" * 200 for i in range(4)]
+    kicker = "ФИНАЛ, который стоит сам"
+    t = "\n\n".join(base + mids + [kicker, FOOTER])
+    pad = BLOAT + over - _n(t)
+    assert pad > 0, "фикстура: добор должен быть положительным"
+    mids[-1] += "X" * pad
+    return "\n\n".join(base + mids + [kicker, FOOTER])
+
+
+def test_one_char_over_is_not_amputated():
+    """Случай 12.09 дословно: 1 знак перебора не стоит абзаца. Абзац канала — 80-270 знаков, то есть
+    ампутация платит смыслом в сотню знаков за недобор в один."""
+    t = _post_over(1)
+    assert _n(t) == BLOAT + 1
+    assert sw._enforce_scope_len(t) == t
+    assert "не резал" in sw.LAST_LEN_ACTION
+
+
+def test_tolerance_edge_is_exact():
+    assert sw._enforce_scope_len(_post_over(TOL)) == _post_over(TOL)     # в допуске — не трогаем
+    over = _post_over(TOL + 1)
+    assert sw._enforce_scope_len(over) != over                            # за допуском — режем
+    assert "срезал" in sw.LAST_LEN_ACTION                                 # и говорим об этом в панель
+
+
+def test_payoff_paragraph_is_never_cut():
+    """Кость 6 «что это значит для читателя» — то, ради чего пост существует (§1, §7.45). Резчик
+    12.09 снёс именно её, потому что она стоит перед финалом."""
+    head, lead = "**Заголовок поста один**", "ЛИД " + "L" * 200
+    mids = ["СЕРЕДИНА%d " % i + "M" * 220 for i in range(5)]
+    payoff = "И вот что это значит для холдера: " + "P" * 200
+    kicker = "ФИНАЛ, который стоит сам"
+    t = "\n\n".join([head, lead] + mids + [payoff, kicker, FOOTER])
+    assert _n(t) > BLOAT + TOL
+    out = sw._enforce_scope_len(t)
+    assert payoff in out                                  # пейофф цел
+    assert kicker in out and lead in out and out.split("\n\n")[0] == head
+    assert sum(1 for x in out.split("\n\n") if x.startswith("СЕРЕДИНА")) < len(mids)
+
+
+def test_finale_setup_survives():
+    """Абзац ПРЯМО над кикером — его подводка. Снеси её, и финал повиснет: ровно этим и развалился
+    пост 12.09 («одолженное лицо» без предыдущего абзаца читается как обрубок)."""
+    head, lead = "**Заголовок поста один**", "ЛИД " + "L" * 200
+    mids = ["СЕРЕДИНА%d " % i + "M" * 220 for i in range(5)]
+    setup = "ПОДВОДКА к финалу, на ней он и держится " + "S" * 180
+    kicker = "ФИНАЛ, который стоит сам"
+    t = "\n\n".join([head, lead] + mids + [setup, kicker, FOOTER])
+    assert _n(t) > BLOAT + TOL
+    out = sw._enforce_scope_len(t)
+    assert setup in out and kicker in out
+
+
+def test_nothing_safe_to_cut_keeps_post_long():
+    """Резать нечего без потери несущего → пост остаётся длинным, а не калечится. «Пост обязан быть»
+    сильнее потолка, но владелец об этом узнаёт из панели."""
+    head, lead = "**Заголовок поста один**", "ЛИД " + "L" * 300
+    kicker = "ФИНАЛ сам по себе"
+    # размер добираем ОТ ПОРОГА, а не магическим числом (те же грабли, что у _post_between 20.08)
+    pad = (BLOAT + TOL + 60 - _n("\n\n".join([head, lead, "", "", kicker, FOOTER]))) // 2
+    payoff = "Что это значит для держателя: " + "P" * pad
+    setup = "ПОДВОДКА " + "S" * pad
+    t = "\n\n".join([head, lead, payoff, setup, kicker, FOOTER])
+    assert _n(t) > BLOAT + TOL
+    out = sw._enforce_scope_len(t)
+    assert out == t
+    assert "резать нечего" in sw.LAST_LEN_ACTION
