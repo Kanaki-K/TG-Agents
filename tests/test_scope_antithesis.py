@@ -85,7 +85,8 @@ def test_title_warn_but_not_cut():
 def test_word_currency_fixed():
     clean, warns = ct._lint("**🌐 Заголовок**\n\nвся машинная экономика - десятки миллионов$ оборота\n",
                             "scope")
-    assert "десятки миллионов дол." in clean
+    # 12.09: форма — по замеру канала («долларов» 70 раз, «дол.» ровно один, в том самом посте)
+    assert "десятки миллионов долларов" in clean
     assert any("приклеена к СЛОВУ" in w for w in warns)
 
 

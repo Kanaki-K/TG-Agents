@@ -51,9 +51,13 @@ def test_normalizes_dashes_and_quotes():
     assert "—" not in clean and "«" not in clean and "»" not in clean
 
 
-def test_warns_currency_before_number():
+def test_currency_before_number_is_not_a_defect():
+    """ЗАМЕР 12.09 по 339 постам канала: «$» перед числом — 193 случая (+50 при разряде, «$25 млн»),
+    после числа — 187 (+91, «25 млн$»). Обе формы живые, а 04.09 владелец своей рукой переписал
+    машинное «25 млн$» в «$25 млн». Чек ругался на половину нормальных постов и гонял писателя
+    переписывать то, что владелец переписывал обратно, — снят."""
     _, warns = creator_tools._lint("**Тест**\n\nцена $73 млн тут", "flagship")
-    assert any("валюта" in w.lower() for w in warns)
+    assert not any("валюта ПЕРЕД числом" in w for w in warns)
 
 
 # --- авто-болд ПОДЗАГОЛОВКОВ-разделов флагмана (§5: ВСЕ заголовки жирные); тело и футер — нет ---
