@@ -282,6 +282,69 @@ def scheduled_texts(channel: str) -> list:
         return []
 
 
+async def _cancel_scheduled_async(channel: str, msg_id: int = 0) -> dict:
+    """Снять отложенный пост канала: по id, либо САМЫЙ СВЕЖИЙ из добавленных (максимальный id)."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return {"ok": False, "error": "MTProto-сессия не авторизована (TELEGRAM_SESSION)"}
+        entity = await _resolve_entity(client, channel)
+        msgs = await client.get_messages(entity, scheduled=True, limit=100)
+        if not msgs:
+            return {"ok": False, "error": "в отложке канала ничего нет"}
+        target = next((m for m in msgs if m.id == msg_id), None) if msg_id else max(msgs, key=lambda m: m.id)
+        if target is None:
+            return {"ok": False, "error": f"в отложке нет сообщения id={msg_id}"}
+        await client(functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=[target.id]))
+        left = await client.get_messages(entity, scheduled=True, limit=100)
+        gone = all(m.id != target.id for m in left)
+        return {"ok": gone, "id": target.id, "date": getattr(target, "date", None),
+                "text": (getattr(target, "message", "") or "")[:120], "left": len(left),
+                "error": "" if gone else "Telegram не подтвердил удаление — глянь «Отложенные» руками"}
+    finally:
+        await client.disconnect()
+
+
+def cancel_scheduled(channel: str, msg_id: int = 0) -> dict:
+    """Снять пост из нативных «Отложенных» канала. ОПАСНАЯ операция — зовётся ТОЛЬКО руками.
+
+    ЗАЧЕМ. 12.09.2026 завод поставил в отложку пост, который владелец забраковал целиком («заголовок
+    дерьмище, финал дерьмище, пользы 0»), и снимать его пришлось бы вручную в клиенте. Завод умеет
+    ставить, но не умел убирать — а ошибку надо уметь отменять там же, где её сделал.
+    ⚠️ Пайплайн это НЕ вызывает и вызывать не должен: удаление чужого решения — дело человека.
+    Снимает по id или самый свежий (максимальный id — это и есть «то, что я только что поставил»)."""
+    try:
+        return asyncio.run(_cancel_scheduled_async((channel or "").strip(), int(msg_id or 0)))
+    except Exception as e:
+        logging.exception("[публикатор] снятие отложки упало")
+        return {"ok": False, "error": f"снять не удалось: {e}"}
+
+
+async def _scheduled_list_async(channel: str) -> list:
+    """[{id, date, text}] всей отложки канала — для показа человеку перед снятием."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return []
+        entity = await _resolve_entity(client, channel)
+        msgs = await client.get_messages(entity, scheduled=True, limit=100)
+        return [{"id": m.id, "date": getattr(m, "date", None),
+                 "text": (getattr(m, "message", "") or "").strip()} for m in msgs]
+    finally:
+        await client.disconnect()
+
+
+def scheduled_list(channel: str) -> list:
+    """Синхронно: вся отложка канала с id и текстом (для CLI-снятия)."""
+    try:
+        return asyncio.run(_scheduled_list_async((channel or "").strip()))
+    except Exception:
+        logging.exception("[публикатор] чтение отложки для снятия упало")
+        return []
+
+
 async def _channel_snapshot_async(channel: str, recent: int) -> dict:
     """Отложка и свежая лента канала за ОДНО подключение: [{id, date, text}] в каждой."""
     client = _client()
