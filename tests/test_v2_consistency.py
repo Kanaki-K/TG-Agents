@@ -5,14 +5,18 @@
 from core import creator_tools, threads_creator, topic_gate, verify
 
 
-def test_gate_ranks_by_drama_first():
-    """Гейт — единственный орган выбора темы скоупа. Нет драмы в нём — нет её нигде."""
+def test_gate_keeps_drama_but_as_ranking():
+    """Гейт — единственный орган выбора темы скоупа. Драма в нём осталась, но с 14.09 она ранжирует
+    поводы про деньги криптана, а не отменяет их (v3: драма-вето выбросило свежие поводы и довело до
+    склеенной «ловушки»)."""
     assert "ДРАМА" in topic_gate._SYSTEM
-    assert "минимум ДВА" in topic_gate._SYSTEM or "МИНИМУМ ДВА" in topic_gate._SYSTEM
+    assert "НЕ ВЕТО" in topic_gate._SYSTEM
 
 
-def test_gate_knows_the_second_entry():
-    assert "ЛОВУШКА" in topic_gate._SYSTEM and "ВХОД: <сдвиг|ловушка>" in topic_gate._SYSTEM
+def test_gate_has_no_second_entry_anymore():
+    """Вход 2 «ловушка» снят 14.09: тема всегда реальное событие одного направления брифа."""
+    assert "ЛОВУШКА" not in topic_gate._SYSTEM and "ВХОД:" not in topic_gate._SYSTEM
+    assert "НАПРАВЛЕНИЕ:" in topic_gate._SYSTEM
 
 
 def test_dead_genre_is_not_the_gate_standard_anymore():
@@ -21,11 +25,10 @@ def test_dead_genre_is_not_the_gate_standard_anymore():
     assert "КОРПОРАТИВНАЯ НОВОСТЬ" in topic_gate._SYSTEM
 
 
-def test_trap_post_is_exempt_from_the_freshness_check():
-    """У ловушки нет новостного повода по замыслу: 2FA не должен требовать свежесть."""
+def test_every_scope_post_gets_the_freshness_check():
+    """Исключение для ловушки снято вместе с ней (14.09): у каждого scope-поста есть событие."""
     import inspect
-    src = inspect.getsource(verify.verify_post)
-    assert "trap" in src and "not trap" in src
+    assert "trap" not in inspect.signature(verify.verify_post).parameters
 
 
 def test_linter_no_longer_recommends_a_question_headline():

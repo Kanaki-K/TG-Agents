@@ -769,6 +769,52 @@ def _subject_from_post(post_body: str) -> str:
     return ", ".join(out)
 
 
+# Пометки _vision_pick, означающие «судья не выбрал — кадр поставлен вслепую». По ним включается
+# второй круг поиска обложки.
+_BLIND_FALLBACK = ("⚠️ судья забраковал", "⚠️ судья не ответил")
+# Сколько кадров добирает второй круг: вдвое больше первого, но в пределах капа пула.
+SECOND_ROUND_FRAMES = 6
+
+
+def _second_cover_round(subject: str, post_body: str, source_urls: list, prints: list,
+                        routes: dict) -> list:
+    """Второй круг поиска обложки: шире по сущностям и числу кадров, только НОВЫЕ горизонтали.
+
+    Шире = сущности из [[MEDIA_SUBJECT]] плюс имена из самого поста, главная сущность в конце (её
+    кадры первый круг уже видел), и вдвое больше кадров. Уже виденные кадры (по отпечатку) и не формат
+    канала (вертикаль, квадрат, панорама) сюда не попадают: второй круг из тех же полей ничего не даст."""
+    from connectors.source_media.subject_media import split_subject
+    names: list[str] = []
+    for n in split_subject(subject) + split_subject(_subject_from_post(post_body)):
+        if n.lower() not in {x.lower() for x in names}:
+            names.append(n)
+    if not names:
+        return []
+    wider = ", ".join(names[1:] + names[:1])
+    try:
+        found = source_media.subject_image_urls(wider, limit=SECOND_ROUND_FRAMES, page_urls=source_urls or [])
+    except Exception:
+        logging.exception("scope: второй круг поиска обложки не отработал")
+        return []
+    out: list = []
+    for j, url in enumerate(found):
+        try:
+            p = source_media.download(url, name=f"scope_subj2_{j}", min_side=source_media.MIN_LOGO_SIDE)
+        except Exception:
+            logging.exception("scope: кадр второго круга не скачался (%s)", url)
+            p = None
+        if not p or not source_media.is_landscape(p):
+            continue
+        fp = source_media.frame_fingerprint(p)
+        if any(source_media.looks_same(fp, seen) for seen in prints):
+            continue
+        prints.append(fp)
+        routes[str(p)] = source_media.kind_of(url)
+        out.append(p)
+    logging.info("scope: второй круг поиска обложки по «%s» — новых горизонталей %d", wider[:80], len(out))
+    return out[:MEDIA_POOL_CAP]
+
+
 def _pool_note(src: str, n: int, why: str = "") -> str:
     """Строка отчёта по одному источнику пула. Раньше в лог уходило только ИТОГОВОЕ число кадров, и
     31.08 это стоило обложки: две статьи-первоисточника не отдали ничего (429/403), никто не узнал,
@@ -794,7 +840,7 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     Возвращает путь-строку обложки или '' (кадров не скачалось вовсе)."""
     creator_tools.SCOPE_COVER.parent.mkdir(parents=True, exist_ok=True)
     creator_tools.SCOPE_COVER.write_text("", encoding="utf-8")
-    global LAST_POOL_NOTE
+    global LAST_POOL_NOTE, LAST_COVER_NOTE
     LAST_POOL_NOTE = ""
     imgs: list = []
     prints: list = []
@@ -949,6 +995,22 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
         logging.info("scope: vision не выбрал подходящую по смыслу картинку (%d кандидат.) — уйдём текстом",
                      len(imgs))
         return ""
+    # ══ СУДЬЯ ЗАБРАКОВАЛ ВСЁ → ВТОРОЙ КРУГ ПОИСКА, А НЕ ПЕРВЫЙ ПОПАВШИЙСЯ КАДР (14.09) ══
+    # 14.09 пул был из трёх кадров поиска по объекту (лого Bitcoin Cash, вагон электрички, печать ФРС),
+    # судья честно отказал всем, и правило «обложка есть всегда» поставило первый — вагон в серых
+    # полях. Владелец: «он блять не видит, что это хуйня полная?». Судья видел; не хватало второго
+    # шанса найти другое. Обложка по-прежнему есть всегда: не нашлось лучше — остаётся прежний фолбэк.
+    if LAST_COVER_NOTE.startswith(_BLIND_FALLBACK):
+        first_note = LAST_COVER_NOTE
+        extra = _second_cover_round(subject, post_body, source_urls, prints, routes)
+        again = _vision_pick(extra, post_body, subject, key, routes) if extra else None
+        if again and not LAST_COVER_NOTE.startswith(_BLIND_FALLBACK):
+            picked = again
+            LAST_POOL_NOTE += f"; второй круг поиска: {len(extra)} кадр(а) → выбран"
+            logging.info("scope: второй круг поиска дал обложку (%s)", LAST_COVER_NOTE)
+        else:
+            LAST_COVER_NOTE = first_note.replace("весь пул", "весь пул и второй круг поиска")
+            LAST_POOL_NOTE += f"; второй круг поиска: {len(extra)} кадр(а), не годятся"
     chosen, label = picked
     creator_tools.SCOPE_COVER.write_text(str(chosen), encoding="utf-8")
     scope_cover_log.record(label, _first_line(post_body))
@@ -964,7 +1026,7 @@ def _newest_draft_stamp() -> tuple[str, float]:
 
 
 def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
-          verify_facts: bool = True, mode: str = "сдвиг") -> str:
+          verify_facts: bool = True) -> str:
     """Сгенерировать 🔭-пост (своя модель/контекст) + обязательный 2FA-фактчек с правкой. Возвращает
     финальный пост (его текст уже в драфте через save_draft; публикует владелец /schedule или пайплайн).
     recommend — повод, ОТОБРАННЫЙ гейтом темы (topic_gate: свежесть+польза, ранжирован ДО письма): ведём
@@ -980,22 +1042,12 @@ def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
     if avoid:  # запрет на уже вышедшие темы — scope повод выбирает сам, но не из повторов
         task += ("\n\nАНТИ-ПОВТОР (сверено со свежей выгрузкой канала): НЕ бери эти направления — они уже "
                  f"выходили на канале: {avoid}. Возьми ДРУГОЙ свежий повод по своему гейту важности+свежести.")
-    if mode == "ловушка":
-        # ВХОД 2 (v2, 10.09.2026). Гейт не нашёл повода с драмой — и это ШТАТНЫЙ исход дня, а не сбой.
-        # Без этой ветки писатель получил бы тему-механизм и написал по новостному скелету: «дата +
-        # событие», которого нет. Замер: посты-ловушки стоят вверху корпуса и новости не требуют.
-        task += ("\n\n⚠️ СЕГОДНЯ ВХОД 2 — ЛОВУШКА (гейт не нашёл повода с драмой, это штатно).\n"
-                 "Пиши по СКЕЛЕТУ ВХОДА 2 из свода (§6): заголовок-приговор механизму → сцена "
-                 "узнавания (конкретное поведение инвестора, а не «многие склонны») → как это "
-                 "устроено ПРОТИВ него и кто на этом зарабатывает → ОБЯЗАТЕЛЬНАЯ привязка к "
-                 "сегодняшнему рынку → что с этим делать конкретно → финал-кикер.\n"
-                 "НЕ выдумывай новостной повод и НЕ ищи дату события: её нет и не нужно. "
-                 "Свежесть здесь не проверяется — механизм не протухает.")
     if recommend:  # повод отобран гейтом темы (свежесть+польза) — ведём письмо по нему, не блуждаем
         task += (f"\n\nПОВОД ОТОБРАН ГЕЙТОМ ТЕМЫ (отранжирован по свежести+пользе ДО тебя): «{recommend}».\n"
                  "Пиши ИМЕННО про него — §2 гейт повода можешь НЕ перепроверять на свежесть/важность (уже "
-                 "сделано). НЕ переключайся на другой повод из брифа и НЕ отказывайся: пост обязан быть."
-                 + (" Это МЕХАНИЗМ-ловушка, а не событие: даты действия у него нет." if mode == "ловушка" else ""))
+                 "сделано). НЕ переключайся на другой повод из брифа и НЕ отказывайся: пост обязан быть.\n"
+                 "ОДИН ПОВОД = ОДНО СОБЫТИЕ: не подклеивай к нему другие новости недели, заседания "
+                 "центробанков и макро-календарь — ни в лид, ни «для контекста».")
         if weak:
             task += (f"\nГЕЙТ ОТМЕТИЛ СЛАБОСТЬ повода: {weak}. Учти — ЗАОСТРИ угол / подай через долговечный "
                      "механизм-урок, а не как свежую новость. Но пост выдай.")
@@ -1018,7 +1070,7 @@ def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
     if verify_facts:
         try:
             verdict = verify.verify_post(verify.latest_draft("scope"), verify.latest_brief(), api_key=key,
-                                         scope=True, trap=(mode == "ловушка"))  # темп-свежесть: не для ловушки
+                                         scope=True)
             if verify.has_issues(verdict):
                 logging.info("scope 2FA: есть замечания — правлю фактами/свежестью")
                 fixed = _turn(FIX.format(post=post.split("[[SPLIT]]")[0], verdict=verdict), model, key,

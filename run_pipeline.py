@@ -144,7 +144,9 @@ def _agent(name: str):
     return cfg, runmode.resolve(cfg["model"]), config.agent_api_key(cfg), thinking
 
 
-def _run_scout() -> None:
+def _run_scout(extra: str = "") -> None:
+    """extra — дописка к заданию разведки. Нужна второму кругу (v3, 14.09): Скаут идёт шире и не
+    приносит то, что суд темы уже отклонил."""
     cfg, model, key, thinking = _agent("scout")
     tools = list(scout_tools.TOOLS)
     if cfg.get("web_search"):
@@ -154,7 +156,7 @@ def _run_scout() -> None:
     print("🔍 [1/3] Скаут: разведка трендов...")
     # coverage-зрение Скаута — для ОБЕИХ веток (хорошее универсальное решение: не тащить повтор у
     # истока ни во флагман, ни в scope). Это РАЗВЕДКА, не письмо — тут scope/флагман не разделяем.
-    text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"],
+    text, _ = _threaded(llm.reply, model, scout_bot._system(), [], scout_bot.COMMANDS["scan"] + extra,
                         tools, scout_tools.dispatch, key, thinking)
     print((text or "(пусто)").strip()[:700], "\n")
     # Структурный детект деградации (аудит 20.07): баннер «источник недоступен» полагался на то, что
@@ -218,7 +220,7 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: 
     return text or ""
 
 
-def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", mode: str = "сдвиг") -> str:
+def _run_scope(avoid: str = "", recommend: str = "", weak: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
     гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится.
@@ -230,9 +232,68 @@ def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", mode: str =
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
-    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, mode)  # verify_facts=False: факты в ре-гейте
+    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False)  # verify_facts=False: факты в ре-гейте
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
+
+
+def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str, str, str]:
+    """Суд темы scope + два кодовых предохранителя, каждый с ОДНИМ пере-выбором под запретом.
+
+    1) СКЛЕЙКА (14.09): тема собрана из нескольких событий или не привязана к одному направлению брифа.
+    2) АВТОРСКИЙ МОСТ (12.09): гейт сам признал в СЛАБО, что связь повода с каналом придумана.
+    Что не починилось пере-выбором, увидит _topic_shortfall и отправит Скаута на второй круг."""
+    brief = verify.latest_brief()
+    rec, weak, verdict = topic_gate.select(brief, api_key=gkey, recent=recent)
+    out(str(verdict) + "\n")
+    splice = topic_gate.splice_problem(verdict, brief)
+    if splice:
+        out(f"🧵 Выбор отклонён кодом: {splice}. Один пост = одно событие — пере-выбираю направление.")
+        rec, weak, verdict = topic_gate.select(brief, api_key=gkey, recent=recent,
+                                               forbid=(rec or splice), forbid_why=splice)
+        out("🎯 [Выбор темы] после запрета склейки:\n" + str(verdict) + "\n")
+        panel["🧵 склейка"] = "тема была склеена из нескольких событий → пере-выбор одного"
+    bridge = topic_gate.is_forced_bridge(verdict)
+    if bridge:
+        out(f"🚫 Гейт сам признал выдуманную связку: «{bridge}». Повод не берём — "
+            "пере-выбираю с запретом (правило 29.07: связку не пришиваем насильно).")
+        rec, weak, verdict = topic_gate.select(brief, api_key=gkey, recent=recent, forbid=(rec or bridge))
+        out("🎯 [Выбор темы] после запрета:\n" + str(verdict) + "\n")
+        panel["🚫 мост"] = "повод с выдуманной связкой отклонён → взят другой"
+    return rec, weak, verdict
+
+
+def _topic_shortfall(verdict: str, rec: str, brief: str) -> str:
+    """Почему выбранная тема не годится — причина для второго круга разведки, или '' если годится.
+
+    Сбой самого суда (вердикт в скобках: сеть/API) — не повод гонять Скаута: он не починит модель, а
+    деньги сожжёт. Там работает фейл-открыто — писатель возьмёт повод из брифа сам."""
+    if not rec:
+        return "" if (verdict or "").startswith("(") else "суд темы не выбрал повод"
+    if topic_gate.is_offbrand(verdict):
+        return "остался только чужой жанр"
+    if topic_gate.is_exhausted(verdict):
+        return "годного повода в брифе нет"
+    if topic_gate.splice_problem(verdict, brief):
+        return "тема всё ещё склеена из нескольких событий"
+    if topic_gate.is_forced_bridge(verdict):
+        return "связка с каналом всё ещё придумана"
+    return ""
+
+
+def _wider_scan_note(verdict: str, why: str) -> str:
+    """Дописка к заданию Скаута на второй круг: шире, и без того, что суд темы уже отклонил."""
+    chosen, weak = topic_gate.parse_choice(verdict)
+    gone = [f"«{chosen}» — {weak or why}"] if chosen else []
+    gone += topic_gate.parse_rejected(verdict)
+    listed = "\n".join(f"  • {g}" for g in gone[:10]) or "  • (суд темы не назвал)"
+    return ("\n\n♻️ ВТОРОЙ КРУГ РАЗВЕДКИ — суд темы не нашёл годного повода в первом брифе "
+            f"({why}).\nРАСШИРЬ ВЫБОРКУ: до 8 направлений вместо 5, другие источники и запросы, чем в "
+            "первом круге. Каждое направление — ОДНО реальное событие, которое касается денег, рисков или "
+            "решений человека, держащего крипту (BTC, ETH, стейблкоины, биржи, кошельки). НЕ приноси: "
+            "рутинное макро (заседания ФРС/ЦБ, ставка, макро-календарь), токенизированные акции и права "
+            "акционеров, чистый AI, склейку нескольких событий в одно направление.\n"
+            f"УЖЕ ОТКЛОНЕНО — не приноси снова:\n{listed}")
 
 
 def _run_creator_fix(post: str, verdict: str) -> str:
@@ -492,9 +553,6 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     #  • ФЛАГМАН — Криейтор САМ видит покрытие канала (topics_digest в его контексте) и берёт тему из банка;
     #    выбор темы scope ему не нужен, avoid/hint пустые.
     avoid = hint = scope_rec = scope_weak = ""
-    # Режим входа v2 по умолчанию — «сдвиг» (поведение v1). Инициализируем ДО гейта: если гейт упадёт
-    # или его ветка не выполнится, прогон не имеет права рухнуть на неопределённой переменной.
-    scope_mode = "сдвиг"
     if scope:
         gkey = config.agent_api_key(config.load_agent("creator"))
         tg_verdict = ""
@@ -502,57 +560,36 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         if _recent:
             out(f"🧠 Недавно уже сделано (не повторяем) — {'; '.join(t[:40] for t in _recent[:4])}")
         try:
-            out("🎯 [Выбор темы] один суд: драма → свежесть ДЕЙСТВИЯ → повтор → польза → тип и бренд...")
-            scope_rec, scope_weak, tg_verdict = topic_gate.select(
-                verify.latest_brief(), api_key=gkey, recent=_recent)
-            out(str(tg_verdict) + "\n")
+            out("🎯 [Выбор темы] один суд: деньги криптана → свежесть ДЕЙСТВИЯ → повтор → польза и драма "
+                "→ тип и бренд...")
+            scope_rec, scope_weak, tg_verdict = _choose_scope_topic(gkey, _recent, panel, out)
         except Exception:
             # ФЕЙЛ-ОТКРЫТО (22.07): сбой выбора НЕ стопает прогон — писатель возьмёт повод из брифа сам,
             # слабую тему поймает владелец в «Отложенных». Пост обязан быть.
             logging.exception("Выбор темы упал — фейл-ОТКРЫТО: писатель возьмёт повод из брифа сам")
             panel["🎯 тема"] = "⚠️ выбор сорвался — писатель берёт повод сам (проверь в Отложенных)"
-        # БРИФ ИСЧЕРПАН / ОФФ-БРЕНД → НЕ скребём дно: гоним Скаута за свежими темами (если ещё не бегал)
-        # и пере-выбираем ОДИН раз. Резолвит «пост обязан быть» × «не публикуй слабьё»: пост будет, но на
-        # свежей теме (баг 22.07: 6 прогонов одного брифа → скребли Raoul-Pal-повтор).
+        # ГОДНОГО ПОВОДА НЕТ → РАЗВЕДКА ШИРЕ, А НЕ ВЫДУМКА (v3, 14.09). Раньше второй круг Скаута шёл,
+        # только если Скаут в этом прогоне ещё не бегал, — 14.09 он уже сходил, поэтому гейт не искал
+        # шире, а ушёл во «вход 2» и склеил «три макро-триггера недели». Владелец: «не может быть, чтобы
+        # темы не было вообще — делай больше выборку». Теперь один второй круг на прогон есть всегда:
+        # Скаут получает отклонённое с причинами и приносит новые направления. Тема после него —
+        # всё равно реальное событие, лучшее из найденного (баг 22.07 «скребли дно одного брифа» закрыт
+        # тем же кругом).
         try:
-            if ((topic_gate.is_exhausted(tg_verdict) or topic_gate.is_offbrand(tg_verdict))
-                    and not scout_ran and not skip_scout):
-                _why = "офф-бренд (чужой жанр)" if topic_gate.is_offbrand(tg_verdict) else "бриф исчерпан"
-                out(f"♻️ {_why.capitalize()} — гоню Скаута за свежими он-бренд темами, не скребу дно...")
-                _run_scout()
+            _why = _topic_shortfall(tg_verdict, scope_rec, verify.latest_brief())
+            if _why and not skip_scout:
+                out(f"♻️ {_why} — гоню Скаута на второй круг шире (отклонённое не приносить), тему не "
+                    "выдумываю...")
+                _run_scout(_wider_scan_note(tg_verdict, _why))
                 scout_ran = True
-                scope_rec, scope_weak, tg_verdict = topic_gate.select(
-                    verify.latest_brief(), api_key=gkey, recent=_recent_scope_titles())
-                out("🎯 [Выбор темы] после свежей разведки:\n" + str(tg_verdict) + "\n")
-                panel["♻️ исчерпан"] = "бриф был выжат → свежая разведка → новый повод"
+                scope_rec, scope_weak, tg_verdict = _choose_scope_topic(
+                    gkey, _recent_scope_titles(), panel, out)
+                panel["♻️ второй круг"] = f"{_clip(_why, 40)} → разведка шире → новый повод"
+                _still = _topic_shortfall(tg_verdict, scope_rec, verify.latest_brief())
+                if _still and scope_rec:
+                    panel["⚠️ тема"] = f"и после второго круга: {_clip(_still, 40)} — взят лучший, проверь"
         except Exception:
-            logging.exception("Пере-разведка при исчерпании брифа упала — пишу лучшее из имеющегося")
-        # АВТОРСКИЙ МОСТ = СТОП (12.09). Гейт сам пишет в СЛАБО, когда связь повода с каналом придумана
-        # («крипто-мост в отчёте прямо не прописан — это авторский вывод»), и 12.09 всё равно выбрал
-        # такой повод: пост вышел и был забракован владельцем целиком. Активный урок 29.07 «не пришивай
-        # BTC-связку насильно» лежал в контексте и не помог — значит нужен код. Даём ОДИН пере-выбор с
-        # запретом; связки без выдумки в брифе нет → уходим на ВХОД 2 (ловушку), как велит свод.
-        try:
-            _bridge = topic_gate.is_forced_bridge(tg_verdict)
-            if _bridge:
-                out(f"🚫 Гейт сам признал выдуманную связку: «{_bridge}». Повод не берём — "
-                    "пере-выбираю с запретом (правило 29.07: связку не пришиваем насильно).")
-                scope_rec, scope_weak, tg_verdict = topic_gate.select(
-                    verify.latest_brief(), api_key=gkey, recent=_recent,
-                    forbid=(scope_rec or _bridge))
-                out("🎯 [Выбор темы] после запрета:\n" + str(tg_verdict) + "\n")
-                _bridge2 = topic_gate.is_forced_bridge(tg_verdict)
-                if _bridge2 or not scope_rec:
-                    # сдвига без выдуманной связки в брифе нет — штатный исход, а не провал дня
-                    scope_mode, scope_rec, scope_weak = "ловушка", "", ""
-                    panel["🚫 мост"] = "связка придумана дважды → ушёл на ловушку (вход 2)"
-                    panel["🎯 тема"] = "ловушка (вход 2) — механизм выбирает писатель"
-                    out("🪤 Сдвига без придуманной связки в брифе нет → пишем ЛОВУШКУ (вход 2). "
-                        "Это штатный исход по своду, а не провал дня.")
-                else:
-                    panel["🚫 мост"] = "повод с выдуманной связкой отклонён → взят другой"
-        except Exception:
-            logging.exception("Проверка авторского моста упала — продолжаю с тем, что выбрал гейт")
+            logging.exception("Второй круг разведки упал — пишу лучшее из имеющегося")
         # БРЕНД-ВЕТО (владелец 24.07): и после разведки остался только чужой жанр → ПРОПУСКАЕМ прогон.
         # Бренд СИЛЬНЕЕ «пост обязан быть»: лучше нет поста, чем мемкоины (как красные линии).
         if topic_gate.is_offbrand(tg_verdict):
@@ -567,9 +604,6 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         avoid = "; ".join(_recent[:6])
         if scope_rec:
             panel["🎯 тема"] = _clip(scope_rec, 52) + (f"  ⚠{_clip(scope_weak, 34)}" if scope_weak else "")
-            scope_mode = topic_gate.parse_mode(tg_verdict)      # v2: сдвиг или ловушка
-            if scope_mode == "ловушка":
-                print("🪤 Гейт: повода со сдвигом сегодня нет — пишем ЛОВУШКУ (вход 2, штатный исход).")
             _use = topic_gate.parse_usefulness(tg_verdict)
             if _use:
                 panel["💡 польза"] = _use[:60]
@@ -607,7 +641,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid, scope_rec, scope_weak, scope_mode) if scope else _run_creator("post", avoid, hint,
+        post = _run_scope(avoid, scope_rec, scope_weak) if scope else _run_creator("post", avoid, hint,
                                                 theme, evergreen=evergreen, no_image=no_image,
                                                 angle=theme_angle)
     except Exception as e:
@@ -631,7 +665,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             # с брифом — Скаут тащит Тир-3 X-выдумки («900 часов»/«$957M за 6 дней»), а брифовый 2FA их
             # штамповал ✅ ЧИСТО. Теперь: веб противоречит → правим по ВЕБ-значению → перепроверяем.
             sv = verify.verify_post(verify.latest_draft("scope"), verify.latest_brief(), api_key=fkey,
-                                    scope=True, web=True, trap=(scope_mode == "ловушка"))
+                                    scope=True, web=True)
             out("🔎 [2FA scope · ВЕБ-сверка с Тир-1] Проверка опубликуемого драфта:\n" + str(sv) + "\n")
             # ПОЛНОТА РЯДА — ВЛАДЕЛЬЦУ, НЕ В АВТО-ПРАВКУ (вред 05.08). Это единственный класс замечаний,
             # который просит ДОПИСАТЬ участника, и цена его ошибки обратная всем прочим: неполный ряд
@@ -653,8 +687,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                     "(бриф мог врать):")
                 post = _threaded(scope_writer.fix_facts, verify.strip_completeness(sv), fkey) or post
                 sv2 = verify.verify_post(verify.latest_draft("scope"), verify.latest_brief(), api_key=fkey,
-                                         # тот же режим, что и в первом проходе: ловушке темп-свежесть не судья
-                                         scope=True, web=True, trap=(scope_mode == "ловушка"))
+                                         scope=True, web=True)
                 _gaps += verify.completeness_notes(sv2)
                 _unver = verify.unverified_notes(sv2)     # после правки — заново: часть ❓ могла закрыться
                 # КРАСНАЯ ЛИНИЯ (владелец 29.07: выдумывание фактов = абсолютный стоп). Непроверённый

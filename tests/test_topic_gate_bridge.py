@@ -51,5 +51,6 @@ def test_select_accepts_the_ban_and_says_what_to_do_instead():
     import inspect
     assert "forbid" in inspect.signature(tg.select).parameters
     src = inspect.getsource(tg.select)
-    assert "ВХОД: ловушка" in src          # запрет обязан предлагать вход 2, а не тупик
+    assert "ДРУГОЕ направление брифа" in src   # запрет ведёт к другому реальному поводу, а не в тупик
+    assert "ловушка" not in src                 # вход 2 снят 14.09 — выдумывать механизм нельзя
     assert "НЕ бери его" in src
