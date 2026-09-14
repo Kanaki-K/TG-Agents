@@ -142,6 +142,25 @@ def test_shortfall_reasons():
     assert rp._topic_shortfall("ВЫБРАН:\nСЛАБО: нет", "", BRIEF)
 
 
+def test_stale_best_topic_triggers_the_second_round():
+    """14.09 суд взял Индию с действием 09.09 как «лучший из оставшихся» — пост встал на 16.09."""
+    import datetime
+    today = datetime.date(2026, 9, 14)
+    stale = "НАПРАВЛЕНИЕ: 1\nВЫБРАН: «Индия Demat 2.0»\nДАТА ДЕЙСТВИЯ: 09.09.2026\nИСЧЕРПАНО: нет"
+    fresh = stale.replace("09.09.2026", "13.09.2026")
+    assert tg.action_age_days(stale, today) == 5
+    assert "старше 3 дней" in rp._topic_shortfall(stale, "Индия Demat 2.0", BRIEF, today)
+    assert rp._topic_shortfall(fresh, "Индия Demat 2.0", BRIEF, today) == ""
+
+
+def test_action_age_reads_the_end_of_a_range_and_survives_no_date():
+    import datetime
+    today = datetime.date(2026, 9, 14)
+    assert tg.action_age_days("ДАТА ДЕЙСТВИЯ: 07.09.2026–12.09.2026", today) == 2
+    assert tg.action_age_days("ДАТА ДЕЙСТВИЯ: не определена", today) is None
+    assert tg.action_age_days("ВЫБРАН: «x»", today) is None
+
+
 def test_wider_scan_note_carries_rejected_and_the_bans():
     v = (_v("Три события недели", "3", tail="ОТКЛОНЕНО: «Индия Demat 2.0» — нет драмы; «Kaiko» — корпоративная "
                                           "новость\nИСЧЕРПАНО: да\nОФФ-БРЕНД: нет"))

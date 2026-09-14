@@ -373,6 +373,23 @@ def parse_action_date(verdict: str) -> str:
     return ""
 
 
+def action_age_days(verdict: str, today: datetime.date | None = None) -> int | None:
+    """Возраст ДЕЙСТВИЯ выбранного повода в днях по полю ДАТА ДЕЙСТВИЯ. None — даты нет/не читается.
+
+    Берём ПОСЛЕДНЮЮ дату из поля: у диапазона «07–09.09.2026» это конец действия, и возраст не
+    завышаем. 14.09 суд выбрал Индию с датой 09.09 и сам же считал её «на грани» — пост ушёл в отложку
+    на 16.09, то есть через неделю после события."""
+    raw = parse_action_date(verdict)
+    dates = re.findall(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", raw)
+    if not dates:
+        return None
+    d, m, y = (int(x) for x in dates[-1])
+    try:
+        return ((today or datetime.date.today()) - datetime.date(y, m, d)).days
+    except ValueError:
+        return None
+
+
 def _flag(verdict: str, word: str) -> bool:
     """Булев флаг контракта («ИСЧЕРПАНО: да»). Markdown-обёртку терпим: модель пишет `**ИСЧЕРПАНО: да**`."""
     for ln in (verdict or "").splitlines():

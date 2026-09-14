@@ -263,7 +263,7 @@ def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str,
     return rec, weak, verdict
 
 
-def _topic_shortfall(verdict: str, rec: str, brief: str) -> str:
+def _topic_shortfall(verdict: str, rec: str, brief: str, today=None) -> str:
     """Почему выбранная тема не годится — причина для второго круга разведки, или '' если годится.
 
     Сбой самого суда (вердикт в скобках: сеть/API) — не повод гонять Скаута: он не починит модель, а
@@ -278,6 +278,12 @@ def _topic_shortfall(verdict: str, rec: str, brief: str) -> str:
         return "тема всё ещё склеена из нескольких событий"
     if topic_gate.is_forced_bridge(verdict):
         return "связка с каналом всё ещё придумана"
+    # ПРОТУХШИЙ «ЛУЧШИЙ ИЗ ОСТАВШИХСЯ» (14.09): суд взял Индию с действием 09.09 — свежесть у него
+    # ранжирует, а не режет, и без свежих соседей протухший повод выигрывает. Тема всё равно будет,
+    # но сперва второй круг разведки поищет свежее.
+    age = topic_gate.action_age_days(verdict, today)
+    if age is not None and age > topic_gate.FRESH_EVENT_DAYS:
+        return f"лучший повод старше {topic_gate.FRESH_EVENT_DAYS} дней ({age} д)"
     return ""
 
 

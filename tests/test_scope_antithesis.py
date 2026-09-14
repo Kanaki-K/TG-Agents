@@ -72,12 +72,34 @@ def test_title_tag_theme_not_flagged():
     assert ct._title_antithesis("🌐 LINK | Мост в крипту для азиатских капиталов") is False
 
 
-def test_title_warn_but_not_cut():
-    # заголовок помечаем, но НЕ режем: отличить чучело от реального спора код не может,
-    # а ложный рез заголовка — тот самый вред, из-за которого автор перестаёт верить линтеру
+def _cut_warn(warns):
+    return [w for w in warns if "заголовок был АНТИТЕЗОЙ" in w]
+
+
+def test_title_antithesis_is_cut_like_the_owner_did():
+    # 14.09 владелец: «всегда одно предложение» — исключения «антитеза законна» больше нет, режем кодом
     clean, warns = ct._lint(POST, "scope")
-    assert _title_warn(warns), "фигура в заголовке должна быть помечена всегда"
-    assert "не модель, а рубильник" in clean, "заголовок правит автор, код только показывает"
+    assert _cut_warn(warns)
+    assert clean.splitlines()[0] == "**🌐 Stripe купил рубильник для ИИ-агентов**"
+
+
+def test_title_cut_forms():
+    cases = {
+        "**🌐 Токенизацию первым в мире запустил не крипторынок, а госрегулятор**":
+            "**🌐 Токенизацию первым в мире запустил госрегулятор**",      # прогон 14.09
+        "⚡️ Не ФРС, а Минфин двигает ликвидность": "⚡️ Минфин двигает ликвидность",
+        "🌐 Платит рынок, а не регулятор": "🌐 Платит рынок",
+        "🌐 LINK | Платит не банк, а сеть валидаторов": "🌐 LINK | Платит сеть валидаторов",
+    }
+    for head, want in cases.items():
+        assert ct._title_drop_antithesis(head) == want, head
+
+
+def test_title_plain_is_left_alone():
+    head = "**📊 Пенсионные деньги американцев дотянулись до крипты**"
+    assert ct._title_drop_antithesis(head) == head
+    _, warns = ct._lint(head + "\n\nтело\n", "scope")
+    assert not _cut_warn(warns) and not _title_warn(warns)
 
 
 # --- валюта при СЛОВЕСНОМ числе (та же правка 17.08) ---
