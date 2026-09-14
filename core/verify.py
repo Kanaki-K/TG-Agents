@@ -556,6 +556,25 @@ def mechanics_targets(verdict: str) -> list:
     return out
 
 
+def numeric_targets(verdict: str) -> list:
+    """Закавыченные фрагменты ОСТАТОЧНЫХ ⚠️ — не полнота, не механика, не красная линия.
+
+    Прогон 14.09: вторая веб-сверка нашла «около 12-13% всего застейканного эфира» при проверенных 11.8% —
+    и пайплайн ушёл в ветку «остался числовой нюанс, публикую», не тронув цифру: там не было ни правки,
+    ни проверки. Цель та же, что у механики: фрагмент больше не должен стоять дословно."""
+    out, seen = [], set()
+    for ln in warn_lines(verdict):
+        low = ln.lower()
+        if is_completeness(ln) or is_mechanics(ln) or any(m in low for m in _REDLINE_MARKERS):
+            continue
+        for frag in _QUOTED_RE.findall(ln):
+            key = " ".join(frag.split()).lower()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(" ".join(frag.split()))
+    return out
+
+
 def strip_completeness(verdict: str) -> str:
     """Вердикт БЕЗ строк-полноты — именно он идёт в авто-правку.
 
