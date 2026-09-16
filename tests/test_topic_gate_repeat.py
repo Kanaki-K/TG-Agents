@@ -350,3 +350,19 @@ def test_pipeline_repicks_instead_of_advising():
     assert "concept_repeat" in src
     assert "forbid_why=concept" in src, "вердикт судьи обязан стать ЗАПРЕТОМ на пере-выборе"
     assert 'panel["🧠 понятие"]' in src
+
+
+def test_concept_judge_never_costs_a_whole_day():
+    """ОТКАТ, ЕСЛИ ЗАМЕНА ХУЖЕ ОТСУТСТВИЯ (16.09).
+
+    Первый живой прогон с судьёй понятия кончился НИЧЕМ: судья снял годную тему, пере-выбор упёрся
+    в исчерпанный бриф, конвейер ушёл на второй круг разведки — и поста в этот день не было вовсе.
+    $0.44 и ноль постов. Повтор понятия — дефект, но «поста нет» дороже: третий заход на механизм
+    читатель хотя бы прочтёт, пустой день не читает никто."""
+    src = inspect.getsource(rp._choose_scope_topic)
+    assert "_rec0" in src, "исходная тема не запоминается — откатывать будет нечего"
+    assert "is_exhausted(verdict) or topic_gate.is_offbrand(verdict)" in src
+    assert "возвращаю исходную тему" in src
+    i_save = src.index("_rec0, _weak0, _verdict0 = rec, weak, verdict")
+    i_back = src.index("rec, weak, verdict = _rec0")
+    assert i_save < i_back, "откат обязан идти ПОСЛЕ запоминания"
