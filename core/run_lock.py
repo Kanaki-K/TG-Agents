@@ -14,11 +14,22 @@
 хуже отказа: владелец ушёл бы пить чай, а через полчаса получил бы два поста в отложке подряд.
 Замок старше часа считается брошенным (упал процесс) и перехватывается — иначе один сбой запер бы
 конвейер навсегда.
+
+⚠️ ДВА УТОЧНЕНИЯ ОТ 16.09.2026, оба из живого случая.
+1) ПРОВЕРИТЬ ≠ ЗАНЯТЬ. `acquire` не проверяет, а БЕРЁТ. Ассистент дважды позвал его «чтобы глянуть,
+   идёт ли прогон», второй раз замок оказался свободен — и достался процессу, который тут же
+   завершился. Владелец на час остался без конвейера с сообщением про чужой pid. Для проверки есть
+   `is_busy()`, и она ничего не занимает.
+2) МЁРТВЫЙ PID = ЗАМКА НЕТ, но проверять живость можно ТОЛЬКО на своей машине. `/workspace` —
+   общий диск между Windows владельца и Linux-контейнером ассистента; pid 8581 из контейнера на
+   Windows означает совсем другой процесс (или ничей). Поэтому в замке пишется ещё и `host`, и
+   живость смотрим, лишь когда хост совпал. Чужой хост — ждём протухания по таймеру, как раньше.
 """
 from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from datetime import datetime
 
@@ -26,6 +37,19 @@ from core import config, content_plan
 
 LOCK = config.ROOT / "data" / "pipeline.lock"
 STALE_SECONDS = 3600
+
+
+def _alive(pid: int) -> bool:
+    """Жив ли процесс с этим pid НА ЭТОЙ машине. Проверять чужой хост нельзя — см. шапку."""
+    try:
+        os.kill(pid, 0)               # сигнал 0 ничего не делает, только проверяет существование
+    except ProcessLookupError:
+        return False
+    except PermissionError:           # процесс есть, но чужой пользователь — значит жив
+        return True
+    except Exception:                 # noqa: BLE001 — не смогли проверить → считаем живым (осторожнее)
+        return True
+    return True
 
 
 def _read() -> dict:
@@ -42,7 +66,16 @@ def holder() -> dict:
         return {}
     if time.time() - float(row.get("at_ts") or 0) > STALE_SECONDS:
         return {}
+    # Замок своей машины с мёртвым процессом — брошенный: ждать час незачем. Чужой хост не трогаем:
+    # pid оттуда у нас означает другой процесс, и «проверка живости» убила бы чужой живой прогон.
+    if row.get("host") == socket.gethostname() and not _alive(int(row.get("pid") or 0)):
+        return {}
     return row
+
+
+def is_busy() -> bool:
+    """Идёт ли прогон ПРЯМО СЕЙЧАС. Только читает — замок НЕ занимает (случай 16.09)."""
+    return bool(holder())
 
 
 def acquire(what: str = "прогон") -> bool:
@@ -51,7 +84,7 @@ def acquire(what: str = "прогон") -> bool:
         return False
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     LOCK.write_text(json.dumps({
-        "what": what, "pid": os.getpid(), "at_ts": time.time(),
+        "what": what, "pid": os.getpid(), "host": socket.gethostname(), "at_ts": time.time(),
         "at": datetime.now(content_plan.tz()).isoformat(timespec="seconds")}, ensure_ascii=False),
         encoding="utf-8")
     return True
@@ -61,7 +94,7 @@ def release() -> None:
     """Снять замок. Чужой не трогаем: если перехватили протухший, а старый процесс ожил — пусть
     дорабатывает, ломать ему конец прогона хуже, чем оставить лишний файл."""
     row = _read()
-    if row and int(row.get("pid") or 0) == os.getpid():
+    if row and int(row.get("pid") or 0) == os.getpid() and row.get("host") in (None, socket.gethostname()):
         LOCK.unlink(missing_ok=True)
 
 
@@ -72,4 +105,4 @@ def busy_message() -> str:
     return (f"⏳ Уже идёт «{row.get('what', 'прогон')}» (запущен {str(row.get('at', ''))[11:16]}, "
             f"pid {row.get('pid')}). Два прогона разом портят друг другу драфты и обложку.\n"
             f"   Дождись окончания или, если тот прогон умер, удали {LOCK.name} в data/ "
-            f"(замок сам протухает через час).")
+            f"(замок своей машины снимается сам, как только процесс умер; чужой — через час).")
