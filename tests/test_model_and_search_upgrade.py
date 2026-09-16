@@ -64,14 +64,20 @@ def test_effort_is_pluggable():
 
 # ── веб-поиск ───────────────────────────────────────────────────────────────────────────────────
 
-def test_modern_search_for_capable_models():
-    for model in ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-4-6"):
-        assert llm.web_search_tool(model)["type"] == "web_search_20260209", model
+def test_modern_search_is_off_until_the_loop_can_carry_a_container():
+    """ОТКАТ 16.09 по живому прогону. Новый вариант поиска фильтрует выдачу ЧЕРЕЗ ИСПОЛНЕНИЕ КОДА:
+    ответ оставляет pending tool uses, и следующий шаг агентного цикла обязан нести container_id.
+    Наш цикл его не возит → 400 на круге правок, пост не доехал до отложки.
+    Тестом это не ловится — ошибку отдаёт только живой API, поэтому тест сторожит сам факт отката."""
+    for model in ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"):
+        assert llm.web_search_tool(model)["type"] == "web_search_20250305", model
 
 
-def test_basic_search_for_haiku():
-    """/test и MODEL_OVERRIDE подменяют роль на Haiku — там новый тип это 400 на весь прогон."""
-    assert llm.web_search_tool("claude-haiku-4-5")["type"] == "web_search_20250305"
+def test_modern_search_needs_container_plumbing_first():
+    """Включать обратно можно только вместе с container_id в цикле — комментарий держит причину."""
+    import inspect
+    src = inspect.getsource(llm)
+    assert "container_id" in src, "причина отката потеряна — включат снова и снова уронят прогон"
 
 
 def test_max_uses_of_each_role_is_preserved():
@@ -79,7 +85,7 @@ def test_max_uses_of_each_role_is_preserved():
     tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5},
              {"name": "save_draft"}]
     fixed = llm.fix_web_search(tools, "claude-opus-5")
-    assert fixed[0]["max_uses"] == 5 and fixed[0]["type"] == "web_search_20260209"
+    assert fixed[0]["max_uses"] == 5 and fixed[0]["type"] == "web_search_20250305"
     assert fixed[1] == {"name": "save_draft"}, "не-поисковые инструменты обязаны пройти нетронутыми"
 
 
