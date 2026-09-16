@@ -166,3 +166,75 @@ def test_writer_gets_the_prior_post_on_upgrade():
 def test_prior_note_silent_without_declared_upgrade():
     """Нет заявленного 🔼 — никакой точки отсчёта писателю не идёт (лишний контекст = лишние деньги)."""
     assert rp._prior_post_note(_v(ARC_AGAIN)) == ""
+
+
+# ── сверка ГОТОВОГО ТЕЛА (16.09): дыра, которую тема не закрывает ───────────────────────────────
+# Прогон 16.09 поставил в отложку пост, по сути повторяющий #501 от 11.09: та же средняя цена входа
+# 83 000$ от того же Glassnode, та же механика «уровень работает крышей». repeat_problem пропустил
+# закономерно — он судит ТЕМУ, а она была абстрактной («слои себестоимости») и дала с #501 одно общее
+# имя при пороге два. Совпала не формулировка, а ОПОРНАЯ ЦИФРА.
+
+_D501 = "#501 [{d}] Рынок | Институции поставили крышу — средняя цена входа фондов около 83 000$\n"
+
+
+def _digest_days_ago(days: int) -> str:
+    import datetime
+    return _D501.format(d=(datetime.date.today() - datetime.timedelta(days=days)).isoformat())
+
+
+def test_shared_anchor_number_is_caught():
+    body = ("**Биткоин дешевле, чем его покупали крупные держатели**\n\n"
+            "Плотный кластер себестоимости сидит в 83 000-86 000$, там же выходят в плюс фонды")
+    why = tg.body_repeat_problem(body, _digest_days_ago(5))
+    assert "#501" in why and "83000" in why
+
+
+def test_old_match_is_allowed():
+    """Перекличка со старым постом законна — режем только вторую серию подряд."""
+    body = "Кластер себестоимости в 83 000$"
+    assert tg.body_repeat_problem(body, _digest_days_ago(tg.COOLDOWN_DAYS + 5)) == ""
+
+
+def test_unrelated_body_passes():
+    body = "Логистика слила 67 000 адресов покупателей Trezor — ключи целы, а дверь известна"
+    assert tg.body_repeat_problem(body, _digest_days_ago(3)) == ""
+
+
+def test_small_numbers_are_not_anchors():
+    """3%, 11 валидаторов, 2 дня — такие числа есть в каждом посте, дублем они не свидетельствуют."""
+    assert tg._big_numbers("минус 3.8% за неделю, 11 институтов, 2 дня") == set()
+    assert 83000 in tg._big_numbers("средняя цена 83 000$")
+
+
+def test_meta_is_not_judged():
+    """Мета после [[SPLIT]] не публикуется — судить её нечего."""
+    assert tg.body_repeat_problem("[[SPLIT]]\n[[УЗЕЛ]] что-то про 83 000$", _digest_days_ago(2)) == ""
+
+
+def test_channel_history_has_almost_no_false_hits():
+    """Замер: 424 реальных поста против вышедших за 7 дней до них — 1 срабатывание, и то живая пара."""
+    import json, datetime
+    from core import config
+    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    topics = json.load(open(config.ROOT / "data" / "post_topics.json", encoding="utf-8"))
+    rows = sorted((p for p in posts if str(p["id"]) in topics), key=lambda p: p["date"])
+    hits = 0
+    for i, p in enumerate(rows):
+        d = datetime.date.fromisoformat(p["date"][:10])
+        prev = [q for q in rows[:i]
+                if 0 <= (d - datetime.date.fromisoformat(q["date"][:10])).days <= tg.COOLDOWN_DAYS]
+        if not prev:
+            continue
+        lines = []
+        for q in prev:
+            t = topics[str(q["id"])]
+            lines.append(f"#{q['id']} [{q['date'][:10]}] {t.get('theme','—')} | "
+                         f"{t.get('title','')} — {t.get('summary','')}")
+        real = tg.datetime.date
+        tg.datetime.date = type("F", (real,), {"today": classmethod(lambda cls: d)})
+        try:
+            if tg.body_repeat_problem(p.get("text") or "", "\n".join(lines)):
+                hits += 1
+        finally:
+            tg.datetime.date = real
+    assert hits <= 3, f"шумит: {hits} срабатываний на {len(rows)} постах"

@@ -70,7 +70,8 @@ def test_cap_and_bloat_are_one_number_now():
     Тест держит именно это: если кто-то вернёт зазор, тесты скажут раньше, чем канал получит
     полуторатысячные посты обратно."""
     assert CAP == BLOAT == 1500
-    assert creator_tools.SCOPE_TOTAL_MIN == 1000        # ниже — телеграмма, а не разбор
+    # 16.09 (владелец): формат 800-1500. Ниже 800 — телеграмма, а не разбор; выше 1500 — недофлагман
+    assert creator_tools.SCOPE_TOTAL_MIN == 800
 
 
 def test_trims_over_bloat_keeps_head_and_footer():

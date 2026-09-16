@@ -627,6 +627,67 @@ def _too_soon(post_id: str, digest: str | None) -> bool:
     return False
 
 
+# ── ПОВТОР ПО ГОТОВОМУ ТЕЛУ (16.09.2026) ────────────────────────────────────────────────────────
+# ДЫРА, КОТОРУЮ ЭТО ЗАКРЫВАЕТ. Прогон 16.09 поставил в отложку «Биткоин дешевле, чем его покупали
+# почти все крупные держатели» — по сути повтор #501 от 11.09 («средняя цена входа фондов 83 000$
+# работает крышей»): тот же Glassnode, та же цифра 83 000, та же механика. repeat_problem это
+# пропустил закономерно: он сверяет ТЕМУ (одну строку), а тема была сформулирована абстрактно
+# («слои себестоимости») и дала с #501 всего одно общее имя при пороге два.
+# ЧТО ДОБАВЛЯЕМ: сверку по ГОТОВОМУ ТЕЛУ и по ОПОРНЫМ ЦИФРАМ. Совпавшая крупная цифра — сигнал
+# сильнее общего слова: два поста, опирающиеся на одно и то же число из одного источника, почти
+# всегда об одном. Это НЕ блокировка (пост уже написан), а строка в панель: решает владелец.
+_BIG_NUM_RE = re.compile(r"\b\d{1,3}(?:[   ]\d{3})+\b|\b\d{2,3}\s?(?:000|тыс)\b")
+
+
+def _big_numbers(text: str) -> set:
+    """Опорные цифры текста в нормальном виде («83 000», «83000» → 83000). Мелочь не берём."""
+    out = set()
+    for m in _BIG_NUM_RE.finditer(text or ""):
+        digits = re.sub(r"\D", "", m.group(0).replace("тыс", "000"))
+        if digits and int(digits) >= 10_000:
+            out.add(int(digits))
+    return out
+
+
+def body_repeat_problem(post: str, digest: str | None = None, days: int = COOLDOWN_DAYS) -> str:
+    """Готовое ТЕЛО поста повторяет пост, вышедший меньше `days` назад? Причина или ''.
+
+    Смотрим только СВЕЖЕЕ окно: старые совпадения — законная перекличка тем, а вот вторая серия
+    за неделю читается лентой. Не блокирует: пост уже написан, это предупреждение владельцу."""
+    body = (post or "").partition("[[SPLIT]]")[0]
+    if not body.strip():
+        return ""
+    if digest is None:
+        try:
+            digest = analytics.topics_digest(weeks=REPEAT_SCAN_WEEKS)
+        except Exception:
+            logging.exception("Сверка тела с каналом не прочиталась — пропускаю")
+            return ""
+    names, nums = _entities(body), _big_numbers(body)
+    today = datetime.date.today()
+    for ln in (digest or "").splitlines():
+        m = _DIGEST_LINE_RE.match(ln.strip())
+        if not m:
+            continue
+        try:
+            age = (today - datetime.date.fromisoformat(m.group(2))).days
+        except ValueError:
+            continue
+        if age > days:
+            continue
+        shared = sorted(names & _entities(m.group(3)))
+        same_nums = sorted(nums & _big_numbers(m.group(3)))
+        if len(shared) >= _REPEAT_MIN_SHARED or same_nums:
+            why = []
+            if shared:
+                why.append("общие имена: " + ", ".join(shared[:3]))
+            if same_nums:
+                why.append(f"та же опорная цифра {same_nums[0]}")
+            return (f"тело перекликается с постом #{m.group(1)} от {m.group(2)} "
+                    f"({age} дн назад) — {'; '.join(why)}")
+    return ""
+
+
 def repeat_problem(verdict: str, digest: str | None = None) -> str:
     """Выбранная тема МОЛЧА повторяет вышедший пост? Причина с #id или ''.
 

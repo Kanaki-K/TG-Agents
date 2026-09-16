@@ -107,7 +107,8 @@ def test_cap_is_a_real_limit_now():
     «режем структурно»: лишний пример и повтор, а не абзац под нож.
     Эталон раздувания 1770 (урок 24.07) по-прежнему за пределом."""
     assert ct.SCOPE_BLOAT_CAP == ct.SCOPE_TOTAL_CAP == 1500
-    assert ct.SCOPE_TOTAL_MIN == 1000
+    # 16.09: владелец опустил нижнюю границу до 800 — короткий пост не дефект, если мысль закрыта
+    assert ct.SCOPE_TOTAL_MIN == 800
     assert ct.SCOPE_BLOAT_CAP < 1770
 
 
