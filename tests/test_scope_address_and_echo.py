@@ -195,3 +195,46 @@ def test_rule_lives_in_brand_and_manual_too():
     manual = (config.ROOT / "memory" / "scope_manual.md").read_text(encoding="utf-8")
     assert "ОБЗОР ТОКЕНА/ПРОЕКТА" in brand
     assert "обзор токена" in manual, "мёртвый жанр не попал в таблицу свода"
+
+
+# ── ГЕЙТ ПЕРЕД ОТЛОЖКОЙ (16.09) ─────────────────────────────────────────────────────────────────
+# Владелец за день не получил НИ ОДНОГО поста: три прогона уехали в отложку с браком, и каждый раз
+# дефект БЫЛ НАЙДЕН линтером. Замечания возвращаются автору, автор их заболтал (класс с 07.08), пост
+# всё равно поставился. Совет, который ничего не останавливает, работает до первого спора с моделью.
+
+def test_clean_post_passes_the_gate():
+    clean = """**⚡️ Рост сервиса не доходит до тех, кто купил его токен**
+
+Есть короткая проверка для проекта, где рядом с продуктом живёт своя монета: **обязательна ли она**
+
+Venice пишет прямо: платить её монетой **не обязательно**, можно картой. Спроса это не создаёт
+
+Люди с доступом купили долю в бизнесе. Остальным предложили монету
+
+Посмотрите, можно ли пользоваться сервисом, **не покупая его монету**. Можно - выручка к ней не идёт
+
+🖥 [Канал](https://t.me/x) | ▶️ [Медиа](https://linktr.ee/x)
+"""
+    assert ct.publish_blockers(clean, "scope") == []
+
+
+def test_token_review_is_blocked_from_scheduling():
+    assert ct.publish_blockers(_SHILL, "scope"), "обзор токена снова уехал бы в отложку"
+
+
+def test_ty_address_is_blocked_from_scheduling():
+    assert any("ТЫ" in b for b in ct.publish_blockers(BAD, "scope"))
+
+
+def test_taste_warnings_do_not_block():
+    """Жирный, воздух, ритм — это спор и вкус: там совет уместен, запрет нет."""
+    for w in ("якорного жирного МАЛО", "МАЛО ВОЗДУХА", "вывод БЕЗ акцента", "scope длинноват"):
+        assert not any(mark in w for mark in ct._PUBLISH_BLOCKERS), w
+
+
+def test_pipeline_refuses_to_schedule_on_blockers():
+    src = open(rp.__file__, encoding="utf-8").read()
+    assert "publish_blockers" in src
+    assert "В ОТЛОЖКУ НЕ СТАВЛЮ" in src
+    i, j = src.index("publish_blockers"), src.index("[3/3] Ставлю в отложенные")
+    assert i < j, "гейт обязан стоять ДО постановки в отложку, иначе он бесполезен"
