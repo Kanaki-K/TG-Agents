@@ -1039,7 +1039,23 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
             LAST_COVER_NOTE = first_note.replace("весь пул", "весь пул и второй круг поиска")
             LAST_POOL_NOTE += f"; второй круг поиска: {len(extra)} кадр(а), не годятся"
     chosen, label = picked
-    creator_tools.SCOPE_COVER.write_text(str(chosen), encoding="utf-8")
+    # ПРИВЯЗКА К ДРАФТУ, А НЕ КО ВРЕМЕНИ (16.09.2026). Раньше publish_now брал обложку, если её файл
+    # свежее драфта на ≤2 сек. В прогоне 16.09 тему ПЕРЕ-ВЫБРАЛИ (судья понятия отклонил первую), за
+    # один прогон написалось два поста подряд, и обложка от первого (Strategy) прошла временной гейт
+    # для второго (Venice) — в канал уехал пост с чужой картинкой. Время не отличает «прошлый прогон»
+    # от «прошлая тема в этом же прогоне». Кладём вторую строкой имя драфта — сверка станет точной.
+    _own = ""
+    try:
+        _own = (verify.latest_draft_path("scope") or "").name if hasattr(verify, "latest_draft_path") else ""
+    except Exception:
+        _own = ""
+    if not _own:
+        try:
+            _d = sorted(creator_tools.DRAFTS_DIR.glob("*.md"), key=lambda f: f.stat().st_mtime)
+            _own = _d[-1].name if _d else ""
+        except Exception:
+            _own = ""
+    creator_tools.SCOPE_COVER.write_text(f"{chosen}\n{_own}", encoding="utf-8")
     scope_cover_log.record(label, _first_line(post_body))
     logging.info("scope: обложка выбрана из %d кандидат. — %s (%s)", len(imgs), chosen, label or "без ярлыка")
     return str(chosen)

@@ -238,3 +238,62 @@ def test_pipeline_refuses_to_schedule_on_blockers():
     assert "В ОТЛОЖКУ НЕ СТАВЛЮ" in src
     i, j = src.index("publish_blockers"), src.index("[3/3] Ставлю в отложенные")
     assert i < j, "гейт обязан стоять ДО постановки в отложку, иначе он бесполезен"
+
+
+# ── ФИНАЛ: ПАНЧ БЕЗ ПОЯСНЕНИЯ (16.09) ───────────────────────────────────────────────────────────
+# Правило ВЫВЕДЕНО ЗАМЕРОМ из правок владельца, а не спрошено у него (его требование: «сам смотри,
+# включай мозг»). Правка #501: завод написал «Сильнее не тот, у кого больше капитала, а тот, у кого
+# ниже цена входа. Купивший месяцами дешевле фондов сидит спокойно там, где Уолл-стрит считает, как
+# выскочить в ноль» — владелец оставил первое предложение и снёс второе. Тот же почерк в #503.
+# ЗАМЕР: финал 30 принятых скоупов — медиана 92 знака, 90-й перцентиль 141; флагманы v1 — медиана 94
+# и РОВНО ОДНО предложение у всех 17. Драфты завода в тот же день: 146-190 знаков, два предложения.
+
+def test_long_finale_is_flagged():
+    long_fin = ("Сильнее не тот, у кого больше капитала, а тот, у кого ниже цена входа. Купивший "
+                "месяцами дешевле фондов сидит спокойно там, где Уолл-стрит считает, как выскочить")
+    assert any("ВДВОЕ ДЛИННЕЕ" in d for d in ct._finale_defects(long_fin))
+
+
+def test_punch_alone_passes():
+    """То, что владелец оставил своей правкой, обязано проходить."""
+    punch = "Сильнее не тот, у кого больше капитала, а тот, у кого ниже цена входа"
+    assert not any("ВДВОЕ ДЛИННЕЕ" in d for d in ct._finale_defects(punch))
+
+
+def test_threshold_matches_the_measurement():
+    assert ct._FINALE_LONG == 150
+
+
+def test_almost_no_accepted_post_is_touched():
+    """Замер-регресс: порог задевает ровно один принятый пост из тридцати."""
+    import json
+    from core import config
+    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    def fin(t):
+        b = (t or "").partition("[[SPLIT]]")[0]
+        ps = [x.strip() for x in b.split("\n\n")
+              if x.strip() and not any(m in x for m in ct._FOOTER_MARK)]
+        return ps[-1] if ps else ""
+    sc = [p for p in posts
+          if p.get("date", "") >= "2026-06-24" and 700 <= len(p.get("text") or "") < 1700]
+    hit = [p["id"] for p in sc if any("ВДВОЕ ДЛИННЕЕ" in d for d in ct._finale_defects(fin(p["text"])))]
+    assert len(hit) <= 2, f"порог шумит на принятых постах: {hit}"
+
+
+def test_finale_advice_is_not_a_publish_blocker():
+    """Финал — вкус: длинный финал иногда работает (#456, 173 знака). Совет, не запрет."""
+    assert not any(mark in "ФИНАЛ ВДВОЕ ДЛИННЕЕ НОРМЫ" for mark in ct._PUBLISH_BLOCKERS)
+
+
+def test_edit_question_left_the_run_log():
+    """Владелец: «вот эта хуйня мне в логах не нужна — это тебе нужно». Вопрос ушёл из прогона,
+    но функция цела: собираем её, когда владелец САМ сел за правки."""
+    # Ищем ВЫЗОВ, а не упоминание: в коде осталась строка-подсказка в комментарии, как собрать
+    # вопрос руками, и она законна.
+    calls = [ln for ln in open(rp.__file__, encoding="utf-8")
+             if "edit_delta.ask(" in ln and not ln.lstrip().startswith("#")]
+    assert not calls, f"вопрос про правки снова печатается в прогоне: {calls}"
+    src = open(rp.__file__, encoding="utf-8").read()
+    assert "edit_delta.panel_line" in src, "число правок из панели убирать не просили"
+    from core import edit_delta
+    assert callable(edit_delta.ask), "сама функция нужна — её зовут вручную между прогонами"

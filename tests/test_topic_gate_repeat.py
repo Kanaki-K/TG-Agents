@@ -366,3 +366,46 @@ def test_concept_judge_never_costs_a_whole_day():
     i_save = src.index("_rec0, _weak0, _verdict0 = rec, weak, verdict")
     i_back = src.index("rec, weak, verdict = _rec0")
     assert i_save < i_back, "откат обязан идти ПОСЛЕ запоминания"
+
+
+# ── УЖЕ НАПИСАНО, НО ЕЩЁ НЕ ВЫШЛО (16.09) ───────────────────────────────────────────────────────
+# Прогон 16.09 ВТОРОЙ РАЗ ПОДРЯД взял Venice. Гейту показали список «недавно написано», и там прямым
+# текстом стоял «⚡️ Токен Venice не нужен, чтобы платить Venice». Он всё равно выбрал Venice.
+# Почему не поймал код: repeat_problem и concept_repeat сверяют тему с ВЫШЕДШИМИ постами канала, а
+# этот пост в канал не выходил — он в отложке. Список жил просьбой в промпте, как до сегодня жили
+# правило «Вы» и повтор понятия. Владелец: «снова про ту же монету».
+
+_RECENT = ["⚡️ Токен Venice не нужен, чтобы платить Venice — Venice, приватный AI-сервис Вурхиса",
+           "📊 Главный покупатель биткоина выкупает свои бумаги — Strategy отчиталась в SEC"]
+
+
+def test_second_post_about_the_same_project_is_caught():
+    why = tg.already_written("Инсайдеры Venice взяли долю в бизнесе, рознице монета VVV", _RECENT)
+    assert "venice" in why and "не вышедшим" in why
+
+
+def test_one_shared_name_is_enough_here_unlike_the_channel():
+    """Порог здесь ОДНО имя: окно — восемь свежих драфтов, а не 427 постов за год. У канала одно
+    общее имя ничего не значит (BlackRock в 21 посте), здесь — почти наверняка та же тема."""
+    assert tg.already_written("Strategy купила биткоин на открытом рынке", _RECENT)
+    assert tg._REPEAT_MIN_SHARED == 2, "порог сверки С КАНАЛОМ трогать нельзя — там он оправдан"
+
+
+def test_unrelated_theme_passes():
+    assert tg.already_written("Утечка адресов покупателей Trezor у подрядчика", _RECENT) == ""
+
+
+def test_theme_without_names_passes():
+    """У тем-механизмов имён нет вовсе — их ловит concept_repeat, а не эта проверка."""
+    assert tg.already_written("Средняя цена покупки работает как уровень", _RECENT) == ""
+
+
+def test_empty_inputs_fail_open():
+    assert tg.already_written("", _RECENT) == ""
+    assert tg.already_written("Venice снова", []) == ""
+
+
+def test_pipeline_repicks_on_already_written():
+    src = inspect.getsource(rp._choose_scope_topic)
+    assert "already_written" in src and "forbid_why=written" in src
+    assert 'panel["📝 уже написано"]' in src
