@@ -688,6 +688,80 @@ def body_repeat_problem(post: str, digest: str | None = None, days: int = COOLDO
     return ""
 
 
+# ── ПОВТОР ПОНЯТИЯ, А НЕ СОБЫТИЯ (16.09.2026) ───────────────────────────────────────────────────
+# ДЫРА. Владелец: «антиповтор не поймал, что относительно недавно флагман или скоуп ровно про это же
+# писал». Речь про ТРЕТИЙ пост об одном механизме: #482 (флагман 18.08, «реализованная цена — средняя
+# цена, по которой купили ВСЕ»), #501 (скоуп 11.09, «средняя цена входа фондов работает крышей») и
+# драфт 16.09 («кластеры себестоимости разъехались»).
+# ПОЧЕМУ МОЛЧАЛИ ВСЕ СЕТКИ. Обе прошлые проверки ищут ИМЕНА СОБСТВЕННЫЕ и ЦИФРЫ. У этой темы нет ни
+# того, ни другого: она вся на русских нарицательных — «средняя цена», «себестоимость», «безубыток».
+# Замер: общих имён у драфта с #482 и #501 — НОЛЬ (одно `notion` из футера), общих опорных цифр — ноль
+# (83 000 против 80 000-88 000). Класс тем «механизм/понятие» был для кода невидим целиком.
+# КАК ЛОВИМ. По РЕДКИМ для канала словам. Стем, встречающийся не чаще чем в 6% постов, — различающее
+# понятие; частотный домен («рынок», «биткоин», «цена») отсекается сам, без ручного стоп-листа.
+# Меряем ДОЛЮ понятий меньшего из двух постов: иначе длинный флагман совпадал бы со всем подряд.
+# ЗАМЕР порога по 427 постам канала: медиана доли 0.12, 90-й перцентиль 0.23. Порог 0.22 даёт строку
+# в панель у ~11% постов и ловит разбираемый случай (0.24 против #482, 0.18 против #501).
+# ЭТО ПРЕДУПРЕЖДЕНИЕ, А НЕ ГЕЙТ: понятия законно возвращаются, и решать, вторая это серия или развитие,
+# может только владелец. Окно 8 недель — понятия возвращаются медленнее новостей.
+CONCEPT_WINDOW_DAYS = 56
+CONCEPT_MIN_SHARE = 0.22
+CONCEPT_RARE_SHARE = 0.06   # стем в ≤6% постов канала = различающее понятие
+_RU_STEM_RE = re.compile(r"[а-яё]{6,}")
+_LINK_RE = re.compile(r"https?://\S+|\[[^\]]*\]\([^)]*\)")
+
+
+def _ru_stems(text: str) -> set:
+    """Усечённые русские слова от 6 букв — грубая замена лемматизации. Ссылки и футер выкинуты."""
+    body = _LINK_RE.sub(" ", (text or "").partition("[[SPLIT]]")[0])
+    return {w[:7] for w in _RU_STEM_RE.findall(body.lower())}
+
+
+def concept_echo(post: str, posts: list | None = None, today=None) -> str:
+    """Готовый пост повторяет ПОНЯТИЕ недавнего поста канала? Строка для панели или ''.
+
+    Не блокирует и блокировать не должен: понятия возвращаются законно. Задача — не дать владельцу
+    узнать о третьем посте про один механизм уже в канале."""
+    if posts is None:
+        try:
+            posts = analytics._load_posts()
+        except Exception:
+            logging.exception("Сверка понятий: выгрузка канала не прочиталась — пропускаю")
+            return ""
+    texts = [p for p in (posts or []) if p.get("text") and p.get("date")]
+    if len(texts) < 30:               # на пустой истории редкость слова не посчитать
+        return ""
+    freq: dict = {}
+    for p in texts:
+        for s in _ru_stems(p["text"]):
+            freq[s] = freq.get(s, 0) + 1
+    rare_cap = len(texts) * CONCEPT_RARE_SHARE
+    mine = {s for s in _ru_stems(post) if freq.get(s, 0) <= rare_cap}
+    if not mine:
+        return ""
+    today = today or datetime.date.today()
+    best = (0.0, None, None, [])
+    for p in texts:
+        try:
+            age = (today - datetime.date.fromisoformat(p["date"][:10])).days
+        except ValueError:
+            continue
+        if not 0 <= age <= CONCEPT_WINDOW_DAYS:
+            continue
+        theirs = {s for s in _ru_stems(p["text"]) if freq.get(s, 0) <= rare_cap}
+        if not theirs:
+            continue
+        shared = mine & theirs
+        share = len(shared) / min(len(mine), len(theirs))
+        if share > best[0]:
+            best = (share, p["id"], p["date"][:10], sorted(shared, key=lambda s: freq.get(s, 0)))
+    share, pid, date, shared = best
+    if share < CONCEPT_MIN_SHARE or not pid:
+        return ""
+    return (f"про то же понятие уже был пост #{pid} от {date} — общих понятий "
+            f"{share:.0%} ({', '.join(shared[:5])})")
+
+
 def repeat_problem(verdict: str, digest: str | None = None) -> str:
     """Выбранная тема МОЛЧА повторяет вышедший пост? Причина с #id или ''.
 

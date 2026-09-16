@@ -238,3 +238,69 @@ def test_channel_history_has_almost_no_false_hits():
         finally:
             tg.datetime.date = real
     assert hits <= 3, f"шумит: {hits} срабатываний на {len(rows)} постах"
+
+
+# ── ПОВТОР ПОНЯТИЯ, А НЕ СОБЫТИЯ (16.09) ────────────────────────────────────────────────────────
+# Владелец: «антиповтор не поймал, что относительно недавно флагман или скоуп ровно про это же писал».
+# Третий пост об одном механизме: #482 (флагман 18.08, реализованная цена), #501 (скоуп 11.09, средняя
+# цена входа фондов), драфт 16.09 (кластеры себестоимости). Имён собственных они не делят ВООБЩЕ, цифр
+# тоже (83 000 против 80 000-88 000) — обе прошлые сетки ищут именно их, поэтому класс был невидим.
+
+def _corpus(*pairs):
+    """Мини-канал: (id, дата, текст). Нужен объём, иначе редкость слова не посчитать."""
+    filler = [{"id": 900 + i, "date": "2026-07-01",
+               "text": f"Обычный пост номер {i} про биржи, комиссии, кошельки и заявки клиентов"}
+              for i in range(35)]
+    return filler + [{"id": i, "date": d, "text": t} for i, d, t in pairs]
+
+
+_MEAN_PRICE = ("Реализованная цена показывает себестоимость рынка: средняя цена, по которой "
+               "держатели покупали монеты. Средний участник сидит около неё, продавцы выходят в ноль")
+
+
+def test_same_concept_is_caught_without_names_or_numbers():
+    import datetime
+    posts = _corpus((482, "2026-08-18", _MEAN_PRICE))
+    new = ("Кластеры себестоимости разъехались: средняя цена держателей выше сегодняшней, "
+           "средний участник в нуле, продавцы выходят по своей себестоимости")
+    why = tg.concept_echo(new, posts, today=datetime.date(2026, 9, 16))
+    assert "#482" in why, "повтор понятия снова невидим"
+    assert tg._entities(new) & tg._entities(_MEAN_PRICE) == set(), "тест обязан идти БЕЗ общих имён"
+
+
+def test_other_concept_stays_silent():
+    import datetime
+    posts = _corpus((482, "2026-08-18", _MEAN_PRICE))
+    other = ("Логистический подрядчик слил домашние адреса покупателей аппаратных кошельков, "
+             "ключи целы, а физическая безопасность держателя оказалась отдельным риском")
+    assert tg.concept_echo(other, posts, today=datetime.date(2026, 9, 16)) == ""
+
+
+def test_old_concept_is_allowed_back():
+    """Окно 8 недель: понятия возвращаются законно, режем только близкий повтор."""
+    import datetime
+    posts = _corpus((482, "2026-01-10", _MEAN_PRICE))
+    assert tg.concept_echo(_MEAN_PRICE, posts, today=datetime.date(2026, 9, 16)) == ""
+
+
+def test_empty_and_tiny_corpus_fail_open():
+    assert tg.concept_echo("", []) == ""
+    assert tg.concept_echo(_MEAN_PRICE, [{"id": 1, "date": "2026-09-01", "text": _MEAN_PRICE}]) == ""
+
+
+def test_real_case_is_caught_on_live_channel():
+    """Регресс на живых данных: драфт 16.09 обязан указать на флагман #482."""
+    from core import analytics, config
+    draft = config.ROOT / "memory" / "drafts" / "2026-09-16-btc-cost-basis-clusters-scope.md"
+    if not draft.exists():
+        return                                  # драфт мог быть убран владельцем — тест не падает
+    import datetime
+    why = tg.concept_echo(draft.read_text(encoding="utf-8"), analytics._load_posts(),
+                          today=datetime.date(2026, 9, 16))
+    assert "#482" in why
+
+
+def test_wired_into_the_panel_as_a_warning_not_a_gate():
+    src = open(rp.__file__, encoding="utf-8").read()
+    assert "concept_echo" in src and 'panel["🧠 то же понятие"]' in src
+    assert "не блокирую пост" in src, "сверка понятий не должна блокировать: понятия возвращаются"
