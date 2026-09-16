@@ -219,7 +219,8 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: 
     return text or ""
 
 
-def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str = "") -> str:
+def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str = "",
+               entry: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
     гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится.
@@ -232,7 +233,7 @@ def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str 
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
-    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, prior)  # verify_facts=False: факты в ре-гейте
+    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, prior, entry)  # verify_facts=False: факты в ре-гейте
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
 
@@ -321,6 +322,12 @@ def _topic_shortfall(verdict: str, rec: str, brief: str, today=None) -> str:
     # ПРОТУХШИЙ «ЛУЧШИЙ ИЗ ОСТАВШИХСЯ» (14.09): суд взял Индию с действием 09.09 — свежесть у него
     # ранжирует, а не режет, и без свежих соседей протухший повод выигрывает. Тема всё равно будет,
     # но сперва второй круг разведки поищет свежее.
+    # ⚠️ ВХОД 2 «МЕХАНИЗМ» (16.09) свежестью НЕ судится: там пост про устройство, а не про новость, и
+    # гонять Скаута за свежим поводом бессмысленно — он и так не нашёл свежего сдвига, потому гейт и
+    # ушёл на второй вход. Гонять здесь значило бы вернуть ровно тот однoвходовый конвейер, из-за
+    # которого канал читался новостной лентой.
+    if topic_gate.entry_kind(verdict) == "механизм":
+        return ""
     age = topic_gate.action_age_days(verdict, today)
     if age is not None and age > topic_gate.FRESH_EVENT_DAYS:
         return f"лучший повод старше {topic_gate.FRESH_EVENT_DAYS} дней ({age} д)"
@@ -654,7 +661,12 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             if _use:
                 panel["💡 польза"] = _use[:60]
             _dt = topic_gate.parse_action_date(tg_verdict)
-            panel["📅 дата действия"] = _dt or "⚠️ не определена"
+            _entry = topic_gate.entry_kind(tg_verdict)
+            panel["🚪 вход"] = ("2 — механизм (свежего сдвига не нашлось, пост про устройство)"
+                               if _entry == "механизм" else "1 — сдвиг (свежее событие)")
+            # На входе 2 дата действия ничего не решает: пост не про новость, свежесть к нему не
+            # применяется. Печатать «⚠️ не определена» там значило бы пугать владельца ложной тревогой.
+            panel["📅 дата действия"] = (_dt or "—") if _entry == "механизм" else (_dt or "⚠️ не определена")
             # 🔼 ПРОДОЛЖЕНИЕ — владелец должен видеть это В ПАНЕЛИ, а не вычитывать из лога: он один
             # решает, тянет ли «что изменилось» на отдельный пост или это всё-таки дубль (правило 16.09).
             _prev_id, _new = topic_gate.parse_repeat(tg_verdict)
@@ -694,8 +706,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid, scope_rec, scope_weak,
-                          _prior_post_note(tg_verdict)) if scope else _run_creator("post", avoid, hint,
+        post = _run_scope(avoid, scope_rec, scope_weak, _prior_post_note(tg_verdict),
+                          topic_gate.entry_kind(tg_verdict)) if scope else _run_creator("post", avoid, hint,
                                                 theme, evergreen=evergreen, no_image=no_image,
                                                 angle=theme_angle)
     except Exception as e:
