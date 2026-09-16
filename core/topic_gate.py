@@ -570,6 +570,33 @@ def closest_published(theme: str, digest: str) -> tuple[str, str, list]:
     return best
 
 
+# ВСТЫК = СТОП, ДАЖЕ ЧЕСТНОЕ ПРОДОЛЖЕНИЕ (16.09.2026). Владелец: «буквально вчера был флагман про
+# кларити тоже… я блять как новостник уже». Продолжение темы законно — но не на следующий день: две
+# серии одного сюжета подряд читаются как новостная лента, а не как канал с мыслью. Поэтому в окне
+# COOLDOWN_DAYS поле «ЧТО НОВОГО» повод не спасает: сюжет закрыт для ОБОИХ форматов, отлежится — вернём.
+COOLDOWN_DAYS = 7
+
+
+def _too_soon(post_id: str, digest: str | None) -> bool:
+    """Пост #id вышел меньше COOLDOWN_DAYS назад? Дату не нашли → False (fail-open, не режем вслепую)."""
+    if not post_id:
+        return False
+    if digest is None:
+        try:
+            digest = analytics.topics_digest(weeks=REPEAT_SCAN_WEEKS)
+        except Exception:
+            return False
+    for ln in (digest or "").splitlines():
+        m = _DIGEST_LINE_RE.match(ln.strip())
+        if m and m.group(1) == post_id:
+            try:
+                age = (datetime.date.today() - datetime.date.fromisoformat(m.group(2))).days
+            except ValueError:
+                return False
+            return age < COOLDOWN_DAYS
+    return False
+
+
 def repeat_problem(verdict: str, digest: str | None = None) -> str:
     """Выбранная тема МОЛЧА повторяет вышедший пост? Причина с #id или ''.
 
@@ -581,14 +608,17 @@ def repeat_problem(verdict: str, digest: str | None = None) -> str:
     if not theme:
         return ""   # пустой выбор — сбой гейта, его разбирает конвейер, а не эта проверка
     said_id, whats_new = parse_repeat(verdict)
-    if said_id and whats_new:
-        return ""   # заявлено 🔼 по контракту — решение за гейтом, код тут не спорит
     if digest is None:
         try:
             digest = analytics.topics_digest(weeks=REPEAT_SCAN_WEEKS)
         except Exception:
             logging.exception("Сводка канала для кодовой сверки повтора не прочиталась — пропускаю")
             return ""
+    if said_id and _too_soon(said_id, digest):
+        return (f"сюжет поста #{said_id} разбирали меньше {COOLDOWN_DAYS} дней назад — продолжение "
+                "встык читается новостной лентой; сюжет закрыт для обоих форматов, пока не отлежится")
+    if said_id and whats_new:
+        return ""   # заявлено 🔼 по контракту и сюжет отлежался — решение за гейтом, код не спорит
     post_id, date, shared = closest_published(theme, digest)
     if not post_id:
         return ""
