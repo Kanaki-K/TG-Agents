@@ -1170,8 +1170,10 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # ПРАВИЛО 22.07 «текстом — это отмазка» НЕ ОТМЕНЕНО, у него просто сменился адресат: пост без
         # картинки теперь чинится РАСШИРЕНИЕМ ПОИСКА (лого темы, кадры из тела статьи), а не рисованием.
         try:
-            sc = creator_tools.SCOPE_COVER
-            cp = sc.read_text(encoding="utf-8").strip() if sc.exists() else ""
+            # ЧИТАЕМ ЧЕРЕЗ ОБЩИЙ РАЗБОР (16.09): в файле две строки — путь и имя драфта-владельца.
+            # Прямой read_text() склеивал их в один «путь», файла с таким именем нет, и прогон писал
+            # «обложки нет» при найденной картинке. Формат знает ровно одна функция.
+            cp, _ = creator_tools.scope_cover()
             cover_path = cp if cp and Path(cp).exists() else ""
         except Exception:
             logging.exception("scope-обложка: не смог подхватить SCOPE_COVER")

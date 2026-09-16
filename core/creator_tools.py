@@ -2635,6 +2635,48 @@ def _apply_standard() -> str:
             "Предложение очищено.")
 
 
+# ── ОБЛОЖКА И ЕЁ ДРАФТ: СРАВНИВАЕМ ТЕМУ, А НЕ ИМЯ ФАЙЛА (16.09.2026) ────────────────────────────
+# Первая версия этой привязки требовала ТОЧНОГО совпадения имени — и выбросила правильную обложку:
+# писатель пересохраняет драфт на каждом круге правок под новым именем
+# («btc-reserve-hr8957-scope.md» → «hr8957-audit-scope.md»), и побуквенная сверка всегда падала.
+# Владелец: «обложка всегда должна быть» — это правило канала (решение 07.09, «всегда, без исключений»),
+# и моя проверка его нарушила.
+# СРАВНИВАЕМ ПО СМЫСЛУ ИМЕНИ: выкидываем дату и служебные хвосты (scope/fix/short), берём остальные
+# куски. Есть хоть один общий — это та же тема, обложка её. Общих нет — тема другая, картинку не берём
+# (ровно случай 16.09: «strategy-strc-buyback» против «venice-insiders»).
+_DRAFT_NOISE = {"scope", "fix", "short", "flagship", "post", "draft"}
+
+
+def _draft_topic_tokens(name: str) -> set:
+    stem = re.sub(r"\.md$", "", str(name or ""), flags=re.I)
+    stem = re.sub(r"^\d{4}-\d{2}-\d{2}-?", "", stem)          # дата к теме не относится
+    return {t for t in re.split(r"[-_]+", stem.lower()) if t and t not in _DRAFT_NOISE and len(t) > 2}
+
+
+def scope_cover() -> tuple:
+    """(путь к обложке, имя драфта-владельца). Единственный разбор файла SCOPE_COVER на весь проект.
+
+    ⚠️ ПОЧЕМУ ФУНКЦИЯ, А НЕ read_text() НА МЕСТЕ. 16.09 я добавил в файл вторую строку — имя драфта,
+    которому обложка принадлежит, — и забыл, что файл читают ТРИ разных места. Конвейер прочитал обе
+    строки как один путь, такого файла нет, и прогон отрапортовал «🚨 ОБЛОЖКИ НЕТ» при найденной и
+    правильной картинке. Владелец: «обложка всегда должна быть». Теперь формат знает одна функция.
+    Пустой/битый файл → ("", "")."""
+    try:
+        raw = SCOPE_COVER.read_text(encoding="utf-8") if SCOPE_COVER.exists() else ""
+    except Exception:
+        return "", ""
+    lines = [x.strip() for x in raw.splitlines() if x.strip()]
+    return (lines[0] if lines else ""), (lines[1] if len(lines) > 1 else "")
+
+
+def _same_topic_draft(owner: str, current: str) -> bool:
+    """Обложка от ТОГО ЖЕ поста? Имя между кругами правок меняется, тема — нет."""
+    a, b = _draft_topic_tokens(owner), _draft_topic_tokens(current)
+    if not a or not b:
+        return True                  # не смогли разобрать имена — обложку НЕ теряем (она всегда нужна)
+    return bool(a & b)
+
+
 def _publish_now(args: dict | None = None, receipt: dict | None = None) -> str:
     """Поставить ПОСЛЕДНИЙ готовый пост (последний драфт + обложка) в отложенные канала на слот
     контент-плана и уведомить мейн владельца. Детерминированно: текст берётся ДОСЛОВНО из сохранённого
@@ -2700,13 +2742,10 @@ def _publish_now(args: dict | None = None, receipt: dict | None = None) -> str:
         # ⚠️ СВЕРЯЕМ ИМЯ ДРАФТА, НЕ ВРЕМЯ (16.09.2026). Временной гейт (mtime+2) не отличал «обложка
         # прошлого прогона» от «обложка прошлой ТЕМЫ этого же прогона»: 16.09 тему пере-выбрали,
         # написалось два поста за прогон, и картинка от первого уехала в канал со вторым.
-        _raw = SCOPE_COVER.read_text(encoding="utf-8").strip() if SCOPE_COVER.exists() else ""
-        _lines = [x.strip() for x in _raw.splitlines() if x.strip()]
-        sc = _lines[0] if _lines else ""
-        _owner = _lines[1] if len(_lines) > 1 else ""
+        sc, _owner = scope_cover()
         if sc and Path(sc).exists():
             if _owner:                       # новый формат: обложка знает СВОЙ драфт
-                if _owner == drafts[0].name:
+                if _same_topic_draft(_owner, drafts[0].name):
                     cover = sc
             elif SCOPE_COVER.stat().st_mtime + 2 >= drafts[0].stat().st_mtime:
                 cover = sc                   # старый формат — прежнее правило по времени
