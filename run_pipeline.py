@@ -219,11 +219,12 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: 
     return text or ""
 
 
-def _run_scope(avoid: str = "", recommend: str = "", weak: str = "") -> str:
+def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
     гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится.
-    recommend — повод, отобранный гейтом темы (steer); weak — чем он слабоват (для заострения)."""
+    recommend — повод, отобранный гейтом темы (steer); weak — чем он слабоват (для заострения).
+    prior — точка отсчёта для 🔼 (см. _prior_post_note): вышедший пост, от которого пишем дальше."""
     try:  # флагман-аутбокс GPT-обложки чистим — scope им не пользуется (у него свой SCOPE_COVER)
         if creator_tools.MEDIA_OUTBOX.exists():
             creator_tools.MEDIA_OUTBOX.unlink()
@@ -231,16 +232,19 @@ def _run_scope(avoid: str = "", recommend: str = "", weak: str = "") -> str:
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
-    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False)  # verify_facts=False: факты в ре-гейте
+    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, prior)  # verify_facts=False: факты в ре-гейте
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
 
 
 def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str, str, str]:
-    """Суд темы scope + два кодовых предохранителя, каждый с ОДНИМ пере-выбором под запретом.
+    """Суд темы scope + три кодовых предохранителя, каждый с ОДНИМ пере-выбором под запретом.
 
     1) СКЛЕЙКА (14.09): тема собрана из нескольких событий или не привязана к одному направлению брифа.
     2) АВТОРСКИЙ МОСТ (12.09): гейт сам признал в СЛАБО, что связь повода с каналом придумана.
+    3) МОЛЧАЛИВЫЙ ПОВТОР (16.09): тема совпала с вышедшим постом по именам собственным, а в контракте
+       стоит «ПОВТОР: нет». Правило владельца — 1в1 нельзя, годится другая тема либо значительное
+       улучшение; признанное улучшение (🔼 с полем ЧТО НОВОГО) код пропускает, молчание — нет.
     Что не починилось пере-выбором, увидит _topic_shortfall и отправит Скаута на второй круг."""
     brief = verify.latest_brief()
     rec, weak, verdict = topic_gate.select(brief, api_key=gkey, recent=recent)
@@ -259,7 +263,42 @@ def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str,
         rec, weak, verdict = topic_gate.select(brief, api_key=gkey, recent=recent, forbid=(rec or bridge))
         out("🎯 [Выбор темы] после запрета:\n" + str(verdict) + "\n")
         panel["🚫 мост"] = "повод с выдуманной связкой отклонён → взят другой"
+    repeat = topic_gate.repeat_problem(verdict)
+    if repeat:
+        out(f"🔁 Выбор отклонён кодом: {repeat}. Тему 1в1 не повторяем — пере-выбираю "
+            "(годится ДРУГАЯ тема либо значительное улучшение с честным «что изменилось»).")
+        rec, weak, verdict = topic_gate.select(
+            brief, api_key=gkey, recent=recent, forbid=(rec or repeat), forbid_why=repeat)
+        out("🎯 [Выбор темы] после запрета повтора:\n" + str(verdict) + "\n")
+        panel["🔁 повтор"] = _clip(repeat, 58) + " → пере-выбор"
     return rec, weak, verdict
+
+
+def _prior_post_note(verdict: str) -> str:
+    """Писателю — точка отсчёта, если гейт заявил 🔼 (значительное улучшение уже вышедшей темы).
+
+    Без этого «улучшение» превращается в слово-пропуск: гейт называет #id, а завод всё равно пишет тот
+    же пост заново (дубль Arc 16.09). Условие (в) правила повтора требует ОПЕРЕТЬСЯ на старый пост, а
+    для этого писатель обязан его видеть — целиком, а не по заголовку. Пост не читается → '' и письмо
+    идёт как обычно: точка отсчёта — улучшение подачи, ронять из-за неё прогон незачем."""
+    post_id, whats_new = topic_gate.parse_repeat(verdict)
+    if not (post_id and whats_new):
+        return ""
+    try:
+        body = analytics.read_post(int(post_id))
+    except Exception:
+        logging.exception("Точка отсчёта: пост #%s не прочитался — пишем без неё", post_id)
+        return ""
+    if not body or "не найден" in body[:40]:
+        return ""
+    return (f"\n\n🔼 ЭТО ПРОДОЛЖЕНИЕ, А НЕ НОВАЯ ТЕМА. Канал уже писал об этом — пост #{post_id} ниже "
+            f"целиком.\nЧТО ИЗМЕНИЛОСЬ С ТЕХ ПОР: {whats_new}\n"
+            "ПИШИ ОТ ЭТОЙ ТОЧКИ: сошлись на прошлый разбор одной фразой («в августе разбирали, что…») и "
+            "дальше говори ТОЛЬКО о новом — что изменилось и что теперь делать читателю. Факты, имена, "
+            "цифры и вывод, которые уже были в том посте, ПОВТОРНО НЕ РАЗЖЁВЫВАЙ: читатель их видел. "
+            "Если, убрав всё уже сказанное, поста не остаётся — значит это не продолжение, а дубль: "
+            f"напиши это прямо первой строкой вместо поста.\n\n--- УЖЕ ВЫШЕДШИЙ ПОСТ #{post_id} ---\n"
+            f"{body}\n--- конец вышедшего поста ---")
 
 
 def _topic_shortfall(verdict: str, rec: str, brief: str, today=None) -> str:
@@ -275,6 +314,8 @@ def _topic_shortfall(verdict: str, rec: str, brief: str, today=None) -> str:
         return "годного повода в брифе нет"
     if topic_gate.splice_problem(verdict, brief):
         return "тема всё ещё склеена из нескольких событий"
+    if topic_gate.repeat_problem(verdict):
+        return "тема всё ещё повторяет вышедший пост"
     if topic_gate.is_forced_bridge(verdict):
         return "связка с каналом всё ещё придумана"
     # ПРОТУХШИЙ «ЛУЧШИЙ ИЗ ОСТАВШИХСЯ» (14.09): суд взял Индию с действием 09.09 — свежесть у него
@@ -614,6 +655,13 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 panel["💡 польза"] = _use[:60]
             _dt = topic_gate.parse_action_date(tg_verdict)
             panel["📅 дата действия"] = _dt or "⚠️ не определена"
+            # 🔼 ПРОДОЛЖЕНИЕ — владелец должен видеть это В ПАНЕЛИ, а не вычитывать из лога: он один
+            # решает, тянет ли «что изменилось» на отдельный пост или это всё-таки дубль (правило 16.09).
+            _prev_id, _new = topic_gate.parse_repeat(tg_verdict)
+            if _prev_id and _new:
+                panel["🔼 продолжение"] = f"развивает #{_prev_id}: {_clip(_new, 44)}"
+                out(f"🔼 Тема уже выходила (#{_prev_id}) — гейт заявил значительное улучшение: {_new}\n"
+                    "   Писателю отдан тот пост целиком: пишем ОТ него, без повтора уже сказанного.\n")
             # ОТКЛОНЁННЫЕ — предохранитель владельца от «взяли слабейшее». Раньше кандидаты отваливались
             # молча, и увидеть, что система выбросила сильный повод, можно было только вычитав весь лог.
             _rej = topic_gate.parse_rejected(tg_verdict)
@@ -646,7 +694,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     pre_mtime = _latest_draft_mtime()  # снимок ДО генерации: публикуем только если появится НОВЕЕ
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
-        post = _run_scope(avoid, scope_rec, scope_weak) if scope else _run_creator("post", avoid, hint,
+        post = _run_scope(avoid, scope_rec, scope_weak,
+                          _prior_post_note(tg_verdict)) if scope else _run_creator("post", avoid, hint,
                                                 theme, evergreen=evergreen, no_image=no_image,
                                                 angle=theme_angle)
     except Exception as e:
