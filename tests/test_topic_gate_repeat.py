@@ -304,3 +304,49 @@ def test_wired_into_the_panel_as_a_warning_not_a_gate():
     src = open(rp.__file__, encoding="utf-8").read()
     assert "concept_echo" in src and 'panel["🧠 то же понятие"]' in src
     assert "не блокирую пост" in src, "сверка понятий не должна блокировать: понятия возвращаются"
+
+
+# ── СУДЬЯ ПОНЯТИЯ ДО ПИСЬМА (16.09) ─────────────────────────────────────────────────────────────
+# Гейт ВИДЕЛ в своей сводке обе строки — «#482 Дно рынка определяется средней ценой покупки» и
+# «#501 Уровень безубытка ETF работает как сопротивление» — и написал «ПОВТОР: нет». Данные были,
+# правило было, последствия не было. Статистикой не добивается: у таких тем нет ни общих имён, ни
+# общих цифр. Поэтому узкий судья с машинным ответом + обязательный пере-выбор.
+
+def test_judge_asks_exactly_one_question_with_a_machine_answer():
+    assert "ПОВТОР ПОНЯТИЯ:" in tg._CONCEPT_JUDGE
+    assert "РЕЧЬ НЕ О СОБЫТИИ" in tg._CONCEPT_JUDGE, "судья обязан отличать механизм от повода"
+    assert "Сомневаешься" in tg._CONCEPT_JUDGE, "при сомнении — «нет», ложная тревога стоит круга"
+
+
+def test_verdict_is_parsed_with_and_without_reason():
+    assert tg._CONCEPT_VERDICT_RE.search("ПОВТОР ПОНЯТИЯ: #482 — средняя цена покупки как уровень")
+    assert tg._CONCEPT_VERDICT_RE.search("ПОВТОР ПОНЯТИЯ: #482")
+    assert not tg._CONCEPT_VERDICT_RE.search("ПОВТОР ПОНЯТИЯ: нет")
+
+
+def test_judge_fails_open(monkeypatch):
+    """Судья — предохранитель, а не единственная опора: сбой не роняет прогон и не блокирует тему."""
+    monkeypatch.setattr(tg.llm, "reply", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("сеть")))
+    assert tg.concept_repeat("любая тема", digest="#1 [2026-09-01] X | Y — Z") == ""
+    assert tg.concept_repeat("", digest="#1 [2026-09-01] X | Y — Z") == ""
+    assert tg.concept_repeat("тема", digest="") == ""
+
+
+def test_judge_reads_the_id_from_a_real_answer(monkeypatch):
+    monkeypatch.setattr(tg.llm, "reply",
+                        lambda *a, **k: ("ПОВТОР ПОНЯТИЯ: #482 — средняя цена покупки как уровень", []))
+    why = tg.concept_repeat("кластеры себестоимости", digest="#482 [2026-08-18] Рынок | дно — средняя цена")
+    assert "#482" in why and "средняя цена покупки" in why
+
+
+def test_no_repeat_answer_passes(monkeypatch):
+    monkeypatch.setattr(tg.llm, "reply", lambda *a, **k: ("ПОВТОР ПОНЯТИЯ: нет", []))
+    assert tg.concept_repeat("свежая тема", digest="#482 [2026-08-18] Рынок | дно — средняя цена") == ""
+
+
+def test_pipeline_repicks_instead_of_advising():
+    """Совет тут не годится: этот проект игнорирует советы с 31.07. Нужен пере-выбор с запретом."""
+    src = inspect.getsource(rp._choose_scope_topic)
+    assert "concept_repeat" in src
+    assert "forbid_why=concept" in src, "вердикт судьи обязан стать ЗАПРЕТОМ на пере-выборе"
+    assert 'panel["🧠 понятие"]' in src
