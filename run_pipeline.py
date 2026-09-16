@@ -554,7 +554,6 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         logging.exception("замер правок владельца не удался — продолжаю без него")
     age = _latest_brief_age_hours()
     scout_day = datetime.date.today().weekday() in SCOUT_DAYS
-    scout_ran = False  # бегал ли Скаут в этом прогоне — чтобы при исчерпании брифа не гонять его дважды
     if skip_scout or evergreen:
         panel["Скаут"] = "пропущен — вечная тема из банка" if evergreen else "пропущен (--skip-scout)"
         out("⏭ Скаута пропускаю — вечная тема из банка, разведка не нужна.\n"
@@ -591,7 +590,6 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 f"запускаю свежую.\n")
         try:
             _run_scout()
-            scout_ran = True
         except Exception:
             logging.exception("Скаут упал — продолжаю на последнем имеющемся брифе (если он есть)")
     # ВЫБОР ТЕМЫ — ОДИН ОРГАН (переработка 31.07).
@@ -634,7 +632,6 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 out(f"♻️ {_why} — гоню Скаута на второй круг шире (отклонённое не приносить), тему не "
                     "выдумываю...")
                 _run_scout(_wider_scan_note(tg_verdict, _why))
-                scout_ran = True
                 scope_rec, scope_weak, tg_verdict = _choose_scope_topic(
                     gkey, _recent_scope_titles(), panel, out)
                 panel["♻️ второй круг"] = f"{_clip(_why, 40)} → разведка шире → новый повод"

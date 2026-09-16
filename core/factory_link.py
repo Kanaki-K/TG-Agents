@@ -177,7 +177,7 @@ def report(since_days: int = 90, top: int = 8) -> str:
         out.append(f"\n▸ личное (для сравнения) — постов {len(personal)}")
         out.append("   " + " · ".join(f"{label} {_avg(personal, key)}" for key, label in _METRICS))
 
-    out.append(f"\n🏆 ЛИДЕРЫ среди заводских — по числу РАЗНЫХ людей в ответах (сигнал владельца):")
+    out.append("\n🏆 ЛИДЕРЫ среди заводских — по числу РАЗНЫХ людей в ответах (сигнал владельца):")
     for p in sorted(factory, key=lambda x: ((x.get("people_count") or 0), (x.get("views") or 0)),
                     reverse=True)[:top]:
         link = m[str(p["id"])]

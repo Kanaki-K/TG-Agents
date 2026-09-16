@@ -31,6 +31,38 @@ _THREADS_TOPICS = config.ROOT / "data" / "threads_topics.json"
 _TG_TOPICS = config.ROOT / "data" / "post_topics.json"
 
 
+# ⚠️ ВОССТАНОВЛЕНО 16.09.2026. Коммит ea10940 (перевод ветки Threads на два формата) удалил эти три
+# функции, а ВЫЗОВЫ их оставил — модуль падал NameError на первой же строке main() и был мёртв всё
+# это время. Никто не заметил, потому что на диагностику не было ни одного теста.
+# Тот же класс, что дубль Arc и осиротевший урок: рефакторинг уносит реализацию, а вызывающий код
+# остаётся. Теперь модуль покрыт тестом, который просто запускает main() и требует, чтобы он не падал.
+def _load_threads_posts() -> list[dict]:
+    return io_safe.load_json(_THREADS_POSTS, [])   # битый/нет файла → [] + INFO-лог (не молча)
+
+
+def _fresh_note(created: str) -> str:
+    """Объяснить, почему балл ещё None: посты моложе гейта зрелости (это норма, не поломка)."""
+    mdays = th_scoring.MATURITY_DAYS
+    try:
+        c = date.fromisoformat((created or "")[:10])
+    except ValueError:
+        return "балл: — (нет зрелых данных)"
+    age = (date.today() - c).days
+    if age < mdays:
+        ripe = (c + timedelta(days=mdays)).strftime("%d.%m")
+        return f"балл: — рано судить (посты ~{age} дн из {mdays}; оценка ≈ после {ripe})"
+    return "балл: — нет зрелых цифр (пост без охвата / ТГ не привязался)"
+
+
+def _bank_distribution() -> None:
+    dist = Counter(tc._bank_map().values())
+    print(f"[1] БАНК ТЕМ → категории (всего тем: {sum(dist.values())})")
+    for slug in tc.all_slugs():
+        print(f"    {dist.get(slug, 0):>3}  {tc.label(slug)}")
+    if dist.get(tc.UNKNOWN):
+        print(f"    {dist[tc.UNKNOWN]:>3}  ⚠ UNKNOWN (тема вне слоёв — проверь заголовки банка)")
+
+
 def _load_flagships() -> list[dict]:
     """Вышедшие ФЛАГМАНЫ из общего журнала вышедших постов (скоупы сюда не берём: этот отчёт про
     join темы флагмана с категорией; у скоупа тема — повод дня, к банку она не привязана)."""

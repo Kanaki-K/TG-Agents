@@ -25,7 +25,6 @@ import shutil
 from pathlib import Path
 
 import json
-import re
 import time
 from datetime import date
 

@@ -31,9 +31,59 @@ _ADAPTIVE_OK = ("opus-4-6", "opus-4-7", "opus-4-8", "opus-5", "sonnet-4-6", "son
 # параметра мышления — худший из исходов; работа без мышления хотя бы доходит до конца.
 _BUDGET_REMOVED = ("opus-4-7", "opus-4-8", "opus-5", "sonnet-5", "fable-5", "mythos-5")
 
+# ⚠️ ВЫКЛЮЧЕННОЕ МЫШЛЕНИЕ ОПАСНО НЕ ВЕЗДЕ (16.09.2026). На Opus 5 мышление включено ПО УМОЛЧАНИЮ, и
+# явное `disabled` там даёт два известных сбоя: модель иногда пишет ВЫЗОВ ИНСТРУМЕНТА обычным текстом
+# вместо блока tool_use (ход завершается успешно, вызова нет, ошибки нет) и подтекает тегами
+# <thinking>. Для завода первый сбой критичен: пост попадает на диск ТОЛЬКО через save_draft — вызов,
+# написанный текстом, означает потерянный пост при зелёном логе.
+# ЛЕЧЕНИЕ (рекомендация Anthropic): не выключать мышление, а включить адаптивное и понизить УСИЛИЕ.
+# Это чинит оба сбоя и выходит дешевле выключенного мышления на высоком усилии по умолчанию.
+_DISABLED_THINK_RISKY = ("opus-5",)
+# Усилия: low | medium | high | xhigh | max. Роли без мышления получают low — им нужна не глубина
+# рассуждения, а отсутствие сбоя; глубину на этих ролях и раньше не использовали.
+_EFFORT_FOR_NO_THINK = "low"
+
 
 def _supports_thinking(model: str) -> bool:
     return any(tag in model for tag in _ADAPTIVE_OK)
+
+
+def _disabled_think_risky(model: str) -> bool:
+    """Модель, на которой явное «мышление выключено» ломает вызовы инструментов."""
+    return any(tag in model for tag in _DISABLED_THINK_RISKY)
+
+
+# ── ВЕБ-ПОИСК: ВАРИАНТ ЗАВИСИТ ОТ МОДЕЛИ (16.09.2026) ───────────────────────────────────────────
+# Завод объявлял поиск как web_search_20250305 в ШЕСТИ местах — это базовый вариант марта 2025.
+# У текущего (web_search_20260209) есть динамическая фильтрация выдачи, и это прямо про нашу боль:
+# «получался пересказ пресс-релиза» (22.07). Но живёт он только на Opus 4.6+ / Sonnet 4.6+, а /test
+# и MODEL_OVERRIDE подменяют роль на Haiku — там новый тип вернёт 400 на весь прогон.
+# Поэтому вариант выбирается ПО МОДЕЛИ в одном месте, как и конфиг мышления, а не хардкодится у ролей.
+_WEB_SEARCH_MODERN_OK = ("opus-4-6", "opus-4-7", "opus-4-8", "opus-5", "sonnet-4-6", "sonnet-5",
+                         "fable-5", "mythos-5")
+
+
+def web_search_tool(model: str, max_uses: int = 4) -> dict:
+    """Объявление веб-поиска, которое ЭТА модель примет. Новый вариант — с фильтрацией выдачи."""
+    modern = any(tag in model for tag in _WEB_SEARCH_MODERN_OK)
+    return {"type": "web_search_20260209" if modern else "web_search_20250305",
+            "name": "web_search", "max_uses": max_uses}
+
+
+def fix_web_search(tools: list, model: str) -> list:
+    """Привести объявления веб-поиска в списке инструментов к варианту, который примет МОДЕЛЬ.
+
+    Роли собирают свои списки инструментов на импорте, когда реальная модель ещё не известна
+    (её выбирает runmode уже в вызове — /test и MODEL_OVERRIDE подменяют роль на дешёвую). Поэтому
+    тип поиска чиним в момент вызова, сохраняя max_uses роли: у Скаута он 4, у 2FA 1, у скоупа 5 —
+    это настроенные числа, не трогаем."""
+    out = []
+    for t in tools or []:
+        if isinstance(t, dict) and str(t.get("type", "")).startswith("web_search_"):
+            out.append(web_search_tool(model, int(t.get("max_uses") or 4)))
+        else:
+            out.append(t)
+    return out
 
 
 # ПОСЛЕДНИЙ ПУСТОЙ ОТВЕТ — для панели прогона. Лог видит разработчик, а владелец смотрит вывод
@@ -133,7 +183,7 @@ def resolve_thinking(val) -> dict | None:
 def reply(model: str, system: str, history: list[dict], user_text: str,
           tools_schema: list[dict], dispatch: Callable[[str, dict], str],
           api_key: str | None = None, thinking: dict | None = None,
-          cache_system: bool = True) -> tuple[str, list[dict]]:
+          cache_system: bool = True, effort: str = "") -> tuple[str, list[dict]]:
     """Один проход диалога с агентным циклом инструментов.
 
     tools_schema/dispatch — набор «рук» конкретного агента (память, аналитика, ...).
@@ -141,9 +191,15 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
     thinking — конфиг мышления (напр. {"type": "adaptive"}); None = выключено.
     cache_system=False — для ONE-SHOT вызовов без инструментов и повторов (threads_creator):
     запись 1h-кэша стоит 2× входа, и без единого перечтения это чистое УДОРОЖАНИЕ (аудит 15.07).
+    effort — глубина работы модели (low|medium|high|xhigh|max; по умолчанию сервер берёт high).
+    Первый рычаг цены после кэша: на ролях, где глубина не нужна, low экономит, ничего не ломая.
     Возвращает (текст ответа, обновлённую history).
     """
     client = _client(api_key)
+    # ВЕБ-ПОИСК ПРИВОДИМ К МОДЕЛИ ЗДЕСЬ, а не у каждой роли: только тут известны ОБА — и список
+    # инструментов, и модель, которую реально выбрал runmode. Роли объявляют поиск на импорте, когда
+    # подмена на дешёвую модель (/test, MODEL_OVERRIDE) ещё не случилась.
+    tools_schema = fix_web_search(tools_schema, model)
     messages = history + [{"role": "user", "content": user_text}]
 
     # снять старые точки кэша из переданной истории (в ботах она переиспользуется между ходами —
@@ -190,7 +246,16 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
             # выдал ровно 16384 токена вывода (весь потолок) и НИ ОДНОГО блока текста — всё ушло в
             # мышление, серия пришла пустой, $0.20 в никуда. Тот же корень уже ловили 07.09 у судьи
             # обложек и лечили точечно в scope_writer; лечим в одном месте для всех ролей.
-            params["thinking"] = {"type": "disabled"}
+            if _disabled_think_risky(model):
+                # См. _DISABLED_THINK_RISKY: на Opus 5 «disabled» роняет вызовы инструментов в текст,
+                # а у завода через инструмент идёт сам пост. Включаем адаптивное на НИЗКОМ усилии —
+                # это дешевле выключенного мышления на дефолтном high и без обоих сбоев.
+                params["thinking"] = {"type": "adaptive"}
+                params["output_config"] = {"effort": _EFFORT_FOR_NO_THINK}
+            else:
+                params["thinking"] = {"type": "disabled"}
+        if effort and "output_config" not in params:
+            params["output_config"] = {"effort": effort}
         resp = client.messages.create(**params)
         cost.record(model, resp.usage)  # учёт расхода: лог в консоль + копим для итога (run_pipeline)
         # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю

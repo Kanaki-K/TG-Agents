@@ -45,7 +45,6 @@ def test_every_scope_post_gets_the_freshness_check():
 
 
 def test_linter_no_longer_recommends_a_question_headline():
-    src = creator_tools._lint.__doc__ or ""
     import inspect
     body = inspect.getsource(creator_tools._lint)
     assert "чистый вопрос" not in body            # старая формула ушла из совета

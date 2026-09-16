@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from core import config, io_safe, threads_app_metrics
 

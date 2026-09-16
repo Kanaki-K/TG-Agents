@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import datetime
-import random
 import re
 import time
 
@@ -27,11 +26,6 @@ BANK_FILE = config.ROOT / "memory" / "flagship_topics.md"  # пул вечных
 BANK_REUSE_DAYS = 180  # тема, вышедшая меньше полугода назад, в ротацию НЕ идёт; позже сама возвращается
 # Помеченная строка: «- [вышло ГГГГ-ММ-ДД] тема — угол». Дата = когда тему опубликовали (рециклинг).
 _USED_RE = re.compile(r"^\[вышло\s+(\d{4}-\d{2}-\d{2})\]\s*(.+)$")
-
-
-def bank_topics() -> list[str]:
-    """Все АКТИВНЫЕ темы банка (строки '- …' без метки [вышло]). Совместимость/обзор."""
-    return [t for (_, t, d) in _bank_lines() if d is None]
 
 
 def _bank_lines() -> list:
@@ -85,13 +79,6 @@ def available_bank_themes() -> list[str]:
             used = sorted(((t, d) for (_, t, d) in lines if d), key=lambda x: x[1])  # самая старая первой
             pool = [t for t, _ in used] or [lines[0][1]]
     return pool
-
-
-def pick_bank_theme() -> str:
-    """ОДНА тема по ротации — СЛУЧАЙНАЯ из доступных. Детерминированный фолбэк, если актуальный
-    выбор (сентимент+бриф) в пайплайне недоступен/упал."""
-    pool = available_bank_themes()
-    return random.choice(pool) if pool else ""
 
 
 def mark_theme_used(theme: str, date_iso: str = "") -> bool:
