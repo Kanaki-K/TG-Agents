@@ -122,3 +122,58 @@ def test_the_only_bridge_is_the_journal():
     # начнёт читать драфты или звать ТГ-писателя — тест выше покраснеет, а этот покажет, что мост цел.
     assert "core.published_journal" in _imported_modules("run_pipeline.py")
     assert "core.published_journal" in _imported_modules("core/threads_source.py")
+
+
+# ── ПЕРСОНА — СЛЕПОЕ ПЯТНО СТРАЖА (найдено 16.09.2026) ──────────────────────────────────────────
+# Проверки выше сверяют, какие memory/*.md грузит модуль. По ним всё было чисто — и всё равно
+# писатель скоупа получал ФЛАГМАНСКИЕ правила: персона приходит не через _read('memory/…'), а через
+# config.load_agent(), и в поле зрения стража не попадала вовсе.
+# ЗАМЕР 16.09 (до фикса): в системном промпте скоупа флагманские числа 2800/3000/3800/4096 —
+# 17 упоминаний, свои 1250/1500/1050 — 5. Причём чужие стояли в ПЕРСОНЕ, самой авторитетной части
+# промпта, а свои — глубоко в мануале. Владелец про пост на 1656 знаков: «какого хуя такой длинный?
+# такое чувство, что он напутал флагман и скоуп». Напутал не он.
+# Лечение: флагман-специфичные куски персоны помечены [[Ф-ONLY]] и вырезаются для скоупа кодом.
+
+def test_scope_prompt_carries_no_flagship_length():
+    """Главный тест: писатель скоупа не должен видеть НИ ОДНОГО флагманского размера."""
+    from core import scope_writer
+    import re
+    s = scope_writer._system()
+    for n in ("3000", "3800"):
+        assert not re.search(r"\b" + n + r"\b", s), f"флагманское число {n} снова в промпте скоупа"
+    # 2800–4096 допустимы ровно в двух местах: явный дисклеймер «правила флагмана к тебе НЕ
+    # применяются» и таблица сравнения форматов в своде. Больше — значит снова протекло.
+    assert len(re.findall(r"\b4096\b", s)) <= 2, "флагманский потолок протёк в промпт скоупа"
+
+
+def test_scope_prompt_carries_no_flagship_branch_logic():
+    """Скоуп не выбирает формат и не правит стандарт — это ветка флагмана."""
+    from core import scope_writer
+    s = scope_writer._system()
+    for leak in ("каталог форматов", "propose_standard", "#434"):
+        assert leak not in s, f"логика флагман-ветки протекла в скоуп: «{leak}»"
+
+
+def test_flagship_prompt_carries_no_scope_rules():
+    """Изоляция обязана держать в ОБЕ стороны."""
+    from core import creator_bot
+    s = creator_bot._system()
+    for leak in ("scope_lessons", "scope_anchors", "Под прицелом» — свод"):
+        assert leak not in s, f"правила скоупа протекли во флагман: «{leak}»"
+
+
+def test_persona_keeps_the_shared_voice():
+    """Вырезаем ФОРМАТ, а не ГОЛОС: общие правила ремесла обязаны остаться — ради них персону
+    и переиспользуют. Иначе завтра у скоупа заведётся вторая копия голоса и они разойдутся."""
+    from core import config, scope_writer
+    clean = scope_writer._scope_persona(config.load_agent("creator")["persona"])
+    for must in ("Голос автора", "Железные правила", "Не выдумывай цифры"):
+        assert must in clean, f"из персоны скоупа пропал общий канон: «{must}»"
+    assert "[[Ф-ONLY]]" not in clean and "[[/Ф-ONLY]]" not in clean, "маркеры уехали в промпт"
+
+
+def test_flagship_persona_is_untouched():
+    """Флагман обязан получать персону ЦЕЛИКОМ — маркеры режут только для скоупа."""
+    from core import config
+    persona = config.load_agent("creator")["persona"]
+    assert "2800–4096" in persona and "post_standard.md" in persona
