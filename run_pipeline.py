@@ -220,7 +220,7 @@ def _run_creator(command: str = "post", avoid: str = "", hint: str = "", theme: 
 
 
 def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str = "",
-               entry: str = "") -> str:
+               entry: str = "", nudge: str = "") -> str:
     """🔭 «Под прицелом» — ОТДЕЛЬНАЯ ветка (core/scope_writer): свой лёгкий контекст + модель + 2FA
     внутри. Обложку НЕ рисует (не GPT), но ТЯНЕТ картинку из ПЕРВОИСТОЧНИКА повода (og:image + vision-
     гейт) — путь кладёт в SCOPE_COVER; нет годной → уйдёт текстом. Флагман-аутбокс к scope не относится.
@@ -233,7 +233,7 @@ def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str 
         pass
     cost.set_context("scope")
     print("✍️ [2/3] 🔭 Под прицелом: короткий аналитический (отдельная ветка, обложка из первоисточника)...")
-    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, prior, entry)  # verify_facts=False: факты в ре-гейте
+    text = _threaded(scope_writer.write, "", avoid, recommend, weak, False, prior, entry, nudge)  # verify_facts=False: факты в ре-гейте
     print((text or "(пусто)").strip()[:700], "\n")
     return text or ""
 
@@ -291,7 +291,16 @@ def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str,
             rec, weak, verdict = _rec0, _weak0, _verdict0
             panel["🧠 понятие"] = "⚠ " + _clip(concept, 44) + " — замены нет, тема оставлена"
         else:
-            panel["🧠 понятие"] = _clip(concept, 58) + " → пере-выбор"
+            # ВТОРАЯ ТЕМА ТОЖЕ ПРОВЕРЯЕТСЯ (16.09). Судья смотрел только ПЕРВЫЙ выбор: если гейт после
+            # запрета брал другой повод про тот же механизм, это уходило дальше незамеченным. Второй
+            # проверки хватает — третьего круга не делаем, иначе на плохом брифе можно ходить долго.
+            concept2 = topic_gate.concept_repeat(rec, api_key=gkey)
+            if concept2:
+                out(f"🧠 И замена повторяет понятие: {concept2}. Оставляю её — бриф беднее, чем нужно; "
+                    "проверь пост глазами.")
+                panel["🧠 понятие"] = "⚠ и замена повторяет: " + _clip(concept2, 40)
+            else:
+                panel["🧠 понятие"] = _clip(concept, 58) + " → пере-выбор"
     # УЖЕ НАПИСАНО, НО ЕЩЁ НЕ ВЫШЛО (16.09). Гейту показывают список «недавно написано», и 16.09 он
     # второй раз подряд взял Venice, хотя в списке прямым текстом стоял пост про Venice. Проверки
     # повтора сверяют тему с ВЫШЕДШИМИ постами — а этот лежит в отложке, в канал не выходил. Список
@@ -749,8 +758,20 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                                                 theme, evergreen=evergreen, no_image=no_image,
                                                 angle=theme_angle)
     except Exception as e:
-        out(f"❌ Пост не сделан: {e}\nПостановку в отложку пропускаю — в канал ничего не уйдёт.")
-        return "\n".join(report)
+        # ОДНА ПОВТОРНАЯ ПОПЫТКА (16.09). Писатель падает почти всегда по внешней причине: сеть,
+        # 429, таймаут, разовый 400. До этого любой такой сбой означал день без поста — а владелец
+        # в тот день уже терял прогоны и по кончившимся кредитам, и по моим регрессиям. Один ретрай
+        # стоит одного вызова и спасает прогон; повторный сбой значит, что причина не разовая, и
+        # тогда честно выходим. Ошибку печатаем ОБА раза — молчаливый ретрай хуже отсутствия ретрая.
+        out(f"⚠️ Писатель упал: {e}\n   Пробую ещё раз — сбои здесь обычно разовые (сеть/лимит).")
+        try:
+            post = _run_scope(avoid, scope_rec, scope_weak, _prior_post_note(tg_verdict),
+                              topic_gate.entry_kind(tg_verdict)) if scope else _run_creator(
+                "post", avoid, hint, theme, evergreen=evergreen, no_image=no_image, angle=theme_angle)
+            panel["♻️ писатель"] = "упал один раз, со второй попытки написал"
+        except Exception as e2:
+            out(f"❌ Пост не сделан и со второй попытки: {e2}\nВ канал ничего не уйдёт.")
+            return "\n".join(report)
     if scope and post:
         # СНЯТО 31.07 — ПОСТ-СВЕРКА и ГЕЙТ ПОЛЬЗЫ ПОСЛЕ ГЕНЕРАЦИИ.
         # Оба стояли здесь и оба НИЧЕГО не решали: тема уже выбрана, пост уже написан и оплачен, а по
@@ -1115,6 +1136,23 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # ОТКАЗАТЬСЯ писать (нет свежего повода — штатно) и не вызвать save_draft — тогда самый свежий драфт
     # на диске СТАРЫЙ (из архива), и publish_now поставил бы в канал его (был баг: старый флагман ушёл под
     # меткой «короткий»). Нет нового драфта → НИЧЕГО не публикуем и обложку не трогаем.
+    # ДРАФТ НЕ СОХРАНИЛСЯ → ОДИН ПРИЦЕЛЬНЫЙ ПОВТОР (16.09). Частая причина не «нет повода», а то, что
+    # модель выдала пост ТЕКСТОМ В ЧАТ и не вызвала save_draft. Для конвейера это неотличимо от отказа
+    # писать, а по правилу 22.07 отказываться нельзя: пост обязан быть. Повтор говорит об этом прямо.
+    if scope and _latest_draft_mtime() <= pre_mtime:
+        out("\n⚠️ Драфт не сохранён — повторяю с прямым требованием вызвать save_draft.")
+        try:
+            post = _run_scope(avoid, scope_rec, scope_weak, _prior_post_note(tg_verdict),
+                              topic_gate.entry_kind(tg_verdict),
+                              nudge=("⛔ В ПРОШЛЫЙ РАЗ ТЫ НЕ СОХРАНИЛ ДРАФТ. Пост существует только "
+                                     "после вызова save_draft(kind='scope') — текст в ответе чате "
+                                     "в канал не попадает и для конвейера равен отказу писать. "
+                                     "Отказываться нельзя (правило 22.07): нет идеального повода — "
+                                     "пиши лучшее из имеющегося и СОХРАНИ.")) or post
+            if _latest_draft_mtime() > pre_mtime:
+                panel["♻️ драфт"] = "не сохранился с первого раза, со второго — да"
+        except Exception:
+            logging.exception("повтор ради сохранения драфта упал — идём по прежнему пути")
     if _latest_draft_mtime() <= pre_mtime:
         panel["публикация"] = "⛔ свежий пост не создан (нет повода) — ничего не ставлю"
         out("\n⛔ Свежего поста в этом прогоне НЕ создано (scope/Криейтор не сохранил драфт — вероятно, "

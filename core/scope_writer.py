@@ -1077,7 +1077,7 @@ def _newest_draft_stamp() -> tuple[str, float]:
 
 
 def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
-          verify_facts: bool = True, prior: str = "", entry: str = "") -> str:
+          verify_facts: bool = True, prior: str = "", entry: str = "", nudge: str = "") -> str:
     """Сгенерировать 🔭-пост (своя модель/контекст) + обязательный 2FA-фактчек с правкой. Возвращает
     финальный пост (его текст уже в драфте через save_draft; публикует владелец /schedule или пайплайн).
     recommend — повод, ОТОБРАННЫЙ гейтом темы (topic_gate: свежесть+польза, ранжирован ДО письма): ведём
@@ -1121,6 +1121,8 @@ def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
                  "к ней свежие заголовки недели «для актуальности» — именно так сломался прогон 14.09.")
     if prior:  # 🔼 тема уже выходила, но есть новое развитие — пишем ОТ старого поста, а не заново
         task += prior
+    if nudge:  # прицельная дописка конвейера (напр. повтор после того, как драфт не сохранился)
+        task += "\n\n" + nudge
     if theme:
         task += f"\n\nТЕМА ОТ ВЛАДЕЛЬЦА: {theme} — пиши по ней."
     draft_before = _newest_draft_stamp()      # снимок ДО письма — чтобы поймать отказ scope

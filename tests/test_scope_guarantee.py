@@ -91,3 +91,36 @@ def test_all_blockers_are_reachable_from_the_linter():
     src = inspect.getsource(ct._lint)
     for mark in ct._PUBLISH_BLOCKERS:
         assert mark in src or mark in inspect.getsource(ct._finale_defects), f"запрет-сирота: {mark}"
+
+
+# ── повторные попытки вместо отказа (16.09) ─────────────────────────────────────────────────────
+
+def test_writer_failure_gets_one_retry():
+    """Писатель падает почти всегда по внешней причине — сеть, 429, таймаут. До этого любой сбой
+    означал день без поста."""
+    src = open(rp.__file__, encoding="utf-8").read()
+    assert "Пробую ещё раз" in src
+    assert "и со второй попытки" in src, "второй сбой обязан честно завершать прогон"
+    assert 'panel["♻️ писатель"]' in src
+
+
+def test_unsaved_draft_gets_one_retry():
+    """Частая причина «нет драфта» — модель выдала пост текстом и не вызвала save_draft. Для
+    конвейера это неотличимо от отказа писать, а отказываться нельзя (правило 22.07)."""
+    src = open(rp.__file__, encoding="utf-8").read()
+    assert "НЕ СОХРАНИЛ ДРАФТ" in src and "nudge=" in src
+    from core import scope_writer
+    assert "nudge" in inspect.signature(scope_writer.write).parameters
+
+
+def test_replacement_topic_is_checked_too():
+    """Судья понятия смотрел только ПЕРВЫЙ выбор — замена уходила непроверенной."""
+    src = inspect.getsource(rp._choose_scope_topic)
+    assert src.count("concept_repeat") >= 2, "замена темы не проверяется судьёй понятия"
+    assert "И замена повторяет понятие" in src
+
+
+def test_second_check_does_not_loop():
+    """Третьего круга нет намеренно: на бедном брифе можно ходить бесконечно."""
+    src = inspect.getsource(rp._choose_scope_topic)
+    assert src.count("concept_repeat") == 2, "появился третий круг — это риск зацикливания"
