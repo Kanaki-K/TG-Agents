@@ -1208,13 +1208,30 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     _final = verify.latest_draft("scope" if scope else "") or post or ""
     _blockers = creator_tools.publish_blockers(_final, "scope" if scope else "")
     if _blockers:
-        out("\n⛔ В ОТЛОЖКУ НЕ СТАВЛЮ — в готовом тексте остались дефекты, которые владелец бракует:")
+        # ЗАПРЕТ ОБЯЗАН БЫТЬ ПОЧИНЯЕМЫМ (16.09). Первая версия гейта была ТУПИКОМ: пост не ставился,
+        # прогон кончался ничем, владелец за день не получил ни одного поста. Дефекты тут механические
+        # (длина, обращение, жанр-обзор) — автор устраняет их одним кругом, не трогая мысль. Круг ОДИН:
+        # не помогло — честно говорим и не публикуем, потому что брак в канале дороже пустого дня.
+        out("\n🔧 ГЕЙТ ПУБЛИКАЦИИ: в готовом тексте дефекты, с которыми пост в канал не уйдёт —")
         for _b in _blockers:
             out("   • " + _b)
-        out("\n   Драфт сохранён — поправь его и поставь вручную (/schedule), либо запусти прогон снова.")
-        panel["публикация"] = "⛔ заблокировано: " + _clip(_blockers[0], 44)
-        report.append(_panel_block())
-        return "\n".join(report)
+        out("   Даю автору ОДИН прицельный круг на исправление.\n")
+        try:
+            post, _bsaved = _threaded(scope_writer.fix_blockers, _blockers, fkey)
+            _final = verify.latest_draft("scope" if scope else "") or post or ""
+            _blockers = creator_tools.publish_blockers(_final, "scope" if scope else "")
+        except Exception:
+            logging.exception("круг починки запретов упал — публикую по прежнему правилу")
+        if _blockers:
+            out("\n⛔ В ОТЛОЖКУ НЕ СТАВЛЮ — после круга правок дефекты остались:")
+            for _b in _blockers:
+                out("   • " + _b)
+            out("\n   Драфт сохранён — поправь его и поставь вручную (/schedule), либо запусти снова.")
+            panel["публикация"] = "⛔ заблокировано: " + _clip(_blockers[0], 44)
+            report.append(_panel_block())
+            return "\n".join(report)
+        out("✅ Дефекты устранены — пост идёт в отложку.")
+        panel["🔧 гейт публикации"] = "дефекты были, исправлены одним кругом"
     out("\n🗓 [3/3] Ставлю в отложенные канала...")
     # receipt — опознаватель поставленного поста (номер сообщения, время, отправленный текст). Зовём
     # _publish_now напрямую, а не через dispatch: dispatch отдаёт только строку отчёта, номер терялся.

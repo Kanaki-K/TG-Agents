@@ -1014,8 +1014,16 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     LAST_POOL_NOTE = "; ".join(notes) or "источников не было"
     logging.info("scope: пул обложки — %s", LAST_POOL_NOTE)
     if not imgs:
-        logging.error("scope: НИ ОДНОГО кадра не скачалось (страницы и поиск по объекту пусты) — "
-                      "пост уйдёт голым. Это единственный случай, когда обложки нет, и он аварийный")
+        # ПУСТОЙ ПУЛ — ТОЖЕ ПОВОД ДЛЯ ВТОРОГО КРУГА (16.09.2026). Второй круг поиска существовал только
+        # для случая «судья забраковал ВСЁ», а при пустом пуле мы сдавались сразу — хотя это ровно та
+        # ситуация, где искать шире нужнее всего: страницы отдали 429/403, и первый маршрут провалился
+        # целиком. Владелец: «обложка всегда должна быть». Дешевле один лишний поиск, чем голый пост.
+        logging.info("scope: пул пуст (страницы ничего не отдали) — иду вторым кругом поиска")
+        imgs = _second_cover_round(subject, post_body, source_urls, prints, routes) or []
+        LAST_POOL_NOTE += f"; пул был пуст → второй круг поиска: {len(imgs)} кадр(а)"
+    if not imgs:
+        logging.error("scope: НИ ОДНОГО кадра не скачалось (страницы, поиск по объекту и второй круг "
+                      "пусты) — пост уйдёт голым. Это единственный случай, когда обложки нет")
         return ""
     picked = _vision_pick(imgs, post_body, subject, key, routes)
     if not picked:
@@ -1382,6 +1390,44 @@ def fix_echo(flags: list, api_key: str | None = None) -> tuple[str, bool]:
     before = _newest_draft_stamp()
     listed = "\n".join(f"  • {f}" for f in flags)
     fixed = _turn(ECHO_FIX.format(flags=listed, post=post), model, key, SCOPE_THINKING)
+    saved = verify.latest_draft("scope")
+    if saved and _newest_draft_stamp() != before:
+        return saved, True
+    return (post or fixed), False
+
+
+# ══ ПОЧИНИТЬ ЗАПРЕТЫ ПЕРЕД ОТЛОЖКОЙ (16.09.2026) ════════════════════════════════════════════════
+# Гейт публикации (creator_tools.publish_blockers) не пускает в отложку пост с дефектом, который
+# владелец бракует руками. Но первая его версия была ТУПИКОМ: пост не ставился, и прогон кончался
+# ничем. Владелец в тот день не получил ни одного поста и сказал ровно это.
+# Запрет обязан быть починяемым: дефекты тут механические (длина, обращение, жанр-обзор), автор
+# устраняет их одним кругом, не трогая мысль. Круг ОДИН: не помогло — честно говорим и не публикуем.
+BLOCKERS_FIX = (
+    "ГЕЙТ ПУБЛИКАЦИИ (scope 🔭). В готовом посте остались дефекты, с которыми он НЕ уйдёт в канал:\n"
+    "{defects}\n\n"
+    "Сделай РОВНО это, одним вызовом save_draft(kind='scope'):\n"
+    "1) Устрани КАЖДЫЙ названный дефект. Это механика, а не переосмысление: длину снимай ЦЕЛЫМИ "
+    "кусками (абзац, пример, лишний факт), а не ужимая слова внутри строки; обращение на «ты» "
+    "переписывай на «Вы» или в безличное, проверяя согласование глаголов; «обзор токена» лечится "
+    "переворотом несущей конструкции — тема становится МЕХАНИЗМОМ, проект остаётся примером, тикер "
+    "уходит из заголовка, устройство сворачивается до одной строки.\n"
+    "2) НЕ трогай то, на что не жаловались: мысль, едж, факты, цифры, имена и даты оставь как есть. "
+    "Мету после [[SPLIT]] сохрани; сменил несущий вывод — перепиши [[УЗЕЛ]] и [[ВЫХОД]] под него.\n"
+    "3) Футер вставь ДОСЛОВНО из memory/footer.md — по памяти он выходит не тот.\n"
+    "Ответь владельцу ОДНОЙ строкой, что изменил.\n\nПОСТ:\n{post}")
+
+
+def fix_blockers(defects: list, api_key: str | None = None) -> tuple:
+    """ОДИН круг автора по запретам гейта публикации. (пост, сохранён_ли_новый_драфт).
+
+    Панель обязана сказать правду, если правка не легла в драфт: в канал уходит драфт с диска."""
+    cfg = config.load_agent(AGENT_NAME)
+    key = api_key or config.agent_api_key(cfg)
+    model = runmode.resolve(SCOPE_MODEL, ceiling=SCOPE_MODEL)
+    post = verify.latest_draft("scope") or ""
+    before = _newest_draft_stamp()
+    listed = "\n".join(f"  • {d}" for d in defects)
+    fixed = _turn(BLOCKERS_FIX.format(defects=listed, post=post), model, key, SCOPE_THINKING)
     saved = verify.latest_draft("scope")
     if saved and _newest_draft_stamp() != before:
         return saved, True
