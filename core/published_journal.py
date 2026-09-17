@@ -134,7 +134,7 @@ def _keep_cover(path: str, kind: str, tg: dict) -> str:
 
 
 def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "",
-           tg: dict | None = None) -> None:
+           tg: dict | None = None, service: str = "") -> None:
     """Дописать вышедший пост (текст + формат + тема + дата + путь к обложке) в журнал.
 
     Мету после [[SPLIT]] отбрасываем (в Threads уходит только тело). cover — файл обложки, с которой
@@ -156,7 +156,10 @@ def record(text: str, theme: str = "", kind: str = "flagship", cover: str = "",
         entry = {"date": date.today().isoformat(), "kind": content_plan.norm_kind(kind),
                  "theme": (theme or "").strip(), "text": body,
                  "cover": _keep_cover(cover, content_plan.norm_kind(kind), tg),
-                 "nodes": nodes_of(text), "service": service_of(text),
+                 # ТИП УСЛУГИ: сначала мета поста, потом — то, что назвал пикер прогона. Фолбэк не
+                 # роскошь: замер 17.09 дал 40 записей подряд с пустым типом (писатель меты не давал
+                 # вовсе), и ротация «два поста одного типа подряд запрещены» жила без единых данных.
+                 "nodes": nodes_of(text), "service": service_of(text) or (service or "").strip(),
                  "exit": _meta(text, _EXIT)}
         if tg.get("msg_id") is not None:
             entry.update({"tg_channel": tg.get("channel") or "", "tg_msg_id": tg["msg_id"],
