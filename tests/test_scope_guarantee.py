@@ -30,9 +30,12 @@ def test_blockers_get_one_repair_round_before_refusal():
 
 
 def test_repair_round_is_rechecked():
-    """Круг правок без перепроверки — это вера на слово, а автор её уже подводил (07.08)."""
-    src = open(rp.__file__, encoding="utf-8").read()
-    after = src[src.index("fix_blockers"):]
+    """Круг правок без перепроверки — это вера на слово, а автор её уже подводил (07.08).
+
+    Якорь — САМ ВЫЗОВ круга, а не первое слово «fix_blockers» в файле: с 18.09 у флагмана свой круг
+    (`_run_creator_blockers`), и его докстрока поминает scope-круг раньше, чем тот вызывается."""
+    src = inspect.getsource(rp.run_cycle)
+    after = src[src.index("scope_writer.fix_blockers, _blockers"):]
     assert "publish_blockers" in after[:900], "после круга правок гейт не перепроверяется"
 
 

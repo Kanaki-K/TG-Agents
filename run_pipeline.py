@@ -420,6 +420,25 @@ def _run_creator_fix(post: str, verdict: str) -> str:
     return text or post
 
 
+def _run_creator_blockers(post: str, defects: list) -> tuple:
+    """ФЛАГМАН: один круг автора по запретам гейта публикации. (пост, сохранён_ли_новый_драфт).
+
+    Зеркало scope_writer.fix_blockers, но на СВОЕЙ персоне и СВОЁМ драфте. Общий круг тут невозможен
+    по устройству: тот читает latest_draft('scope') и правит по скоуп-своду — на флагмане он взял бы
+    чужой пост. Панель обязана сказать правду, если правка не легла в драфт: в канал уходит драфт с диска."""
+    cfg, model, key, thinking = _agent("creator")
+    cost.set_context("creator-blockers")
+    before = _latest_draft_mtime()
+    user = creator_bot.FIX_BLOCKERS.format(defects="\n".join(f"  • {d}" for d in defects),
+                                           post=post or verify.latest_draft("flagship") or "")
+    text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
+                        list(creator_tools.TOOLS), creator_tools.dispatch, key, thinking)
+    saved = verify.latest_draft("flagship")
+    if saved and _latest_draft_mtime() != before:
+        return saved, True
+    return (text or post), False
+
+
 def _run_creator_meta(post: str, defects: list) -> str:
     """ОДИН круг Криейтора: дописать мету после [[SPLIT]], НЕ трогая тело поста.
 
@@ -1354,7 +1373,12 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
                 return "\n".join(report)
     except Exception:
         logging.exception("сверка с отложкой упала — публикую по прежнему правилу")
-    _blockers = creator_tools.publish_blockers(_final, "scope" if scope else "")
+    # ФОРМАТ В ГЕЙТ ПЕРЕДАЁТСЯ ЯВНО (18.09.2026). Здесь стояло `"scope" if scope else ""`, а все
+    # флагманские проверки линтера включены условием «формат содержит „флагман“». То есть у флагмана
+    # гейт публикации не проверял НИЧЕГО, и единственный его жёсткий запрет — «>4096, Telegram порвёт
+    # пост на два сообщения» — не мог сработать ни разу. Замер на посте 18.09: с пустым форматом
+    # линтер даёт 1 замечание, с «флагман» — 2, включая «у СТЕНЫ: 4044 знака» (запас до разрыва — 52).
+    _blockers = creator_tools.publish_blockers(_final, "scope" if scope else "флагман")
     if _blockers:
         # ЗАПРЕТ ОБЯЗАН БЫТЬ ПОЧИНЯЕМЫМ (16.09). Первая версия гейта была ТУПИКОМ: пост не ставился,
         # прогон кончался ничем, владелец за день не получил ни одного поста. Дефекты тут механические
@@ -1365,9 +1389,14 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             out("   • " + _b)
         out("   Даю автору ОДИН прицельный круг на исправление.\n")
         try:
-            post, _bsaved = _threaded(scope_writer.fix_blockers, _blockers, fkey)
-            _final = verify.latest_draft("scope" if scope else "") or post or ""
-            _blockers = creator_tools.publish_blockers(_final, "scope" if scope else "")
+            # КАЖДЫЙ ФОРМАТ ЧИНИТ СВОЙ ПОСТ СВОЕЙ ПЕРСОНОЙ. Раньше тут на оба формата звался
+            # scope_writer.fix_blockers, а он читает latest_draft('scope'): на флагмане круг взял бы
+            # последний СКОУП и переписал бы его скоуп-сводом, а флагман уехал бы в канал как был.
+            # Не всплыло только потому, что гейт выше флагману ничего не находил (см. формат).
+            post, _bsaved = (_threaded(scope_writer.fix_blockers, _blockers, fkey) if scope
+                             else _run_creator_blockers(_final, _blockers))
+            _final = verify.latest_draft("scope" if scope else "flagship") or post or ""
+            _blockers = creator_tools.publish_blockers(_final, "scope" if scope else "флагман")
         except Exception:
             logging.exception("круг починки запретов упал — публикую по прежнему правилу")
         if _blockers:
@@ -1403,7 +1432,13 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # draft-only/тест сюда не доходят (вышли выше), журнал тестами не засоряется.
         # service= — ФОЛБЭК от пикера: если мета так и не собралась, ротация типов всё равно
         # получит данные (иначе пикер следующего прогона снова увидит «нет данных»).
-        published_journal.record(post, theme, tg=receipt, service=meas.get("тип услуги", ""))
+        # МЕТУ БЕРЁМ ИЗ ДРАФТА, А НЕ ИЗ ОТВЕТА В ЧАТ (18.09.2026). record() читает [[УЗЕЛ]]/[[ТИП]]/
+        # [[ВЫХОД]] из первого аргумента, а сюда шла реплика модели — при том что круг меты САМ велит
+        # писателю ответить «ОДНОЙ строкой, какой тип поставил». То есть мета не могла доехать до
+        # журнала ни разу, сколько бы кругов её ни дописывали: 18.09 запись получила тип от пикера
+        # («линза») вместо реального («механизм»), пустой узел — и Threads-ветка осталась без входа.
+        published_journal.record(_final or post, theme, tg=receipt,
+                                 service=meas.get("тип услуги", ""))
         out("🧵 Флагман записан в журнал вышедших — доступен мини-флагману Threads (run_threads_pipeline).")
         if dedup.mark_theme_used(theme):
             out(f"🧭 Тема помечена [вышло] в банке — вернётся в ротацию через ~{dedup.BANK_REUSE_DAYS//30} мес.")
@@ -1412,7 +1447,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     # На сам пост и публикацию это не влияет — только запись строки в журнал (сбой её проглатывается).
     if receipt and scope:
         # Обложку кладём В ЖУРНАЛ: мини-скоуп для Threads берёт ту же картинку, что уже вышла в ТГ.
-        published_journal.record(post, scope_rec, kind="scope", cover=cover_path, tg=receipt)
+        published_journal.record(_final or post, scope_rec, kind="scope", cover=cover_path, tg=receipt)
         out("🧵 Скоуп записан в журнал вышедших — доступен мини-скоупу Threads "
             "(run_threads_pipeline.py --scope).")
     out("\n=== Готово. Проверь пост в нативных «Отложенных» канала. ===" if receipt else
