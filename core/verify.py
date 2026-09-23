@@ -666,6 +666,16 @@ def latest_draft(kind: str = "") -> str:
     скоупа проверит драфт флагмана, в отложку уйдёт чужой пост, а гейт «появился ли новый драфт»
     увидит чужой файл и решит, что писатель отработал, хотя тот отказался. Формат зашит в имя файла
     (`...-scope.md` у скоупа) — фильтруем по нему, а не по времени."""
+    p = latest_draft_path(kind)
+    return p.read_text(encoding="utf-8") if p else ""
+
+
+def latest_draft_path(kind: str = ""):
+    """Путь свежего драфта формата kind (правила — как у latest_draft) или None.
+
+    Нужен, чтобы сверять не только ТЕКСТ, но и ВОЗРАСТ файла: «свежий драфт скоупа» и «свежий драфт
+    вообще» — разные вещи. 23.09.2026 скоуп-драфт лёг без суффикса, latest_draft('scope') вернул пост
+    17.09, и конвейер отработал по нему как по своему (см. scope_writer._dispatch)."""
     from core import creator_tools
     files = creator_tools._md_files(creator_tools.DRAFTS_DIR)
     k = (kind or "").strip().lower()
@@ -673,7 +683,7 @@ def latest_draft(kind: str = "") -> str:
         files = [f for f in files if f.stem.endswith("-scope") or f.stem.endswith("-short")]
     elif k:
         files = [f for f in files if not (f.stem.endswith("-scope") or f.stem.endswith("-short"))]
-    return files[0].read_text(encoding="utf-8") if files else ""
+    return files[0] if files else None
 
 
 def _web_context(scope: bool, web: bool) -> tuple[str, dict]:

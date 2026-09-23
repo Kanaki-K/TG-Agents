@@ -411,8 +411,22 @@ def _system() -> str:
     return llm.build_system(persona, ctx)
 
 
+def _dispatch(name: str, args: dict) -> str:
+    """dispatch ветки скоупа: формат драфта ставит КОД, а не модель.
+
+    ЧУЖОЙ ПОСТ В КАНАЛЕ (23.09.2026). Писатель сохранил пост про BitMEX с kind не 'scope' — файл лёг как
+    `bitmex-close.md`, без суффикса `-scope`. Весь конвейер ищет свой пост через latest_draft('scope'),
+    то есть по суффиксу, — и нашёл драфт 17.09 про резерв H.R. 8957. Веб-сверка, правки фактов и речи
+    пошли по НЕМУ, и в канал ушёл третий пост про резерв за неделю, под темой BitMEX и с обложкой BitMEX.
+    Просьба «save_draft(kind='scope')» стоит в каждом промпте, но просьба — не гарантия; всё, что
+    сохраняется из этой ветки, по определению скоуп."""
+    if name == "save_draft":
+        args = {**(args or {}), "kind": "scope"}
+    return creator_tools.dispatch(name, args)
+
+
 def _turn(user_text: str, model: str, key: str, thinking, tools: list = TOOLS) -> str:
-    text, _ = llm.reply(model, _system(), [], user_text, tools, creator_tools.dispatch, key, thinking)
+    text, _ = llm.reply(model, _system(), [], user_text, tools, _dispatch, key, thinking)
     return text or ""
 
 
@@ -1054,7 +1068,8 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     # от «прошлая тема в этом же прогоне». Кладём вторую строкой имя драфта — сверка станет точной.
     _own = ""
     try:
-        _own = (verify.latest_draft_path("scope") or "").name if hasattr(verify, "latest_draft_path") else ""
+        _p = verify.latest_draft_path("scope")
+        _own = _p.name if _p else ""
     except Exception:
         _own = ""
     if not _own:
@@ -1467,7 +1482,7 @@ def fix_facts(verdict: str, api_key: str | None = None) -> str:
     # («Линтер поймал "крупнейшем" — это факт из S&P, оставляю»), и эта преамбула попадала в `post`,
     # который пайплайн печатает владельцу как «ГОТОВЫЙ ПОСТ». В канал при этом уходит save_draft —
     # чистый текст. Сохранила новый драфт → он и есть результат; не сохранила → отдаём что было.
-    saved = verify.latest_draft()
+    saved = verify.latest_draft("scope")   # СВОЙ формат: любой свежий драфт мог оказаться чужим (23.09)
     if saved and _newest_draft_stamp() != before:
         return saved
     return fixed or post

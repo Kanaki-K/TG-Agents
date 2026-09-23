@@ -124,7 +124,7 @@ TOOLS = [
             "properties": {
                 "content": {"type": "string", "description": "полный текст драфта поста (markdown)"},
                 "slug": {"type": "string", "description": "короткий ярлык темы, напр. 'ai-stablecoins' (необязательно)"},
-                "kind": {"type": "string", "description": "формат для линтера/имени: флагман|обучающий|психология|личный|короткий|light"},
+                "kind": {"type": "string", "description": "формат для линтера/имени: флагман|обучающий|психология|личный|короткий|light|scope"},
             },
             "required": ["content"],
         },
