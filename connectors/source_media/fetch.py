@@ -321,6 +321,62 @@ def _to_channel_format(im):
     return canvas
 
 
+# ПОЛЯ ВОКРУГ КАДРА СРЕЗАЕМ ДО ОТБОРА (23.09.2026). Владелец: «с двух сторон обрезано, сама по себе
+# картинка маленькая — подборщик не видит, картинка должна занимать всё пространство». Судья видит
+# кадр целиком и полосы по краям дефектом не считает, а размер и пропорцию код мерил ВМЕСТЕ с полями:
+# снимок в рамке проходил как полноразмерная горизонталь.
+# Режем только ПОЛЯ, а не фон дизайна. Поле — это ПАРА: однотонные полосы одного цвета и почти одной
+# ширины с двух противоположных сторон, за которыми начинается картинка (так кадр по центру кладут и
+# издания, и наша старая достройка). Замер на 39 принятых обложках: одностороннее правило «однотонная
+# полоса с ровным краем» резало ORANGE JUICE и Threat Intelligence — там однотонный фон и есть дизайн.
+# С требованием пары не тронута ни одна.
+_BAR_TOL = 14          # отклонение цвета (сумма по каналам), ниже которого пиксель = цвет поля
+_BAR_MIN = 0.01        # поле уже 1% стороны — шум сжатия, не трогаем
+_BAR_EDGE = 0.6        # доля «не-поля» у края картинки: ровный край снимка, а не буква лого
+_BAR_SKEW = 0.2        # поля пары расходятся по ширине не больше чем на 20% (кадр по центру)
+
+
+def _trim_bars(im):
+    """Срезать парные однотонные поля по краям кадра (рамка издания или старая достройка). RGB → RGB."""
+    w, h = im.size
+    px = im.load()
+
+    def run(n_lines, line_len, at):
+        """(ширина поля от края, его цвет). Ширина 0 — поля нет."""
+        bg = at(0, line_len // 2)
+        step = max(1, line_len // 60)
+        samples = range(0, line_len, step)
+
+        def off(i):
+            if i >= n_lines:
+                return 0.0
+            bad = sum(1 for j in samples if sum(abs(a - b) for a, b in zip(at(i, j), bg)) > _BAR_TOL)
+            return bad / len(samples)
+        k = 0
+        while k < n_lines // 3 and off(k) <= 0.02:
+            k += 1
+        # край снимка после JPEG размыт на пару пикселей — смотрим чуть глубже самой границы
+        if k < max(2, round(n_lines * _BAR_MIN)) or max(off(k + d) for d in range(5)) < _BAR_EDGE:
+            return 0, bg
+        return k, bg
+
+    def pair(a, b):
+        (ka, ca), (kb, cb) = a, b
+        if not (ka and kb) or sum(abs(x - y) for x, y in zip(ca, cb)) > _BAR_TOL:
+            return 0, 0
+        if abs(ka - kb) > max(4, _BAR_SKEW * max(ka, kb)):
+            return 0, 0
+        return ka, kb
+
+    left, right = pair(run(w, h, lambda i, j: px[i, j]), run(w, h, lambda i, j: px[w - 1 - i, j]))
+    top, bottom = pair(run(h, w, lambda i, j: px[j, i]), run(h, w, lambda i, j: px[j, h - 1 - i]))
+    if not (left or top):
+        return im
+    logging.info("source_media: срезаю поля кадра (л%d п%d в%d н%d) — картинка должна занимать всё поле",
+                 left, right, top, bottom)
+    return im.crop((left, top, w - right, h - bottom))
+
+
 def _normalize(path: Path, min_side: int = _MIN_SIDE) -> Path | None:
     """Привести к Telegram-safe ФОТО В ФОРМАТЕ КАНАЛА: RGB (прозрачность — на фон кадра, не в чёрный),
     пропорция 1.5-2.0 как у 23 опубликованных обложек, макс сторона 1600px, JPEG q88. Так Telegram не
@@ -348,6 +404,8 @@ def _normalize(path: Path, min_side: int = _MIN_SIDE) -> Path | None:
                     im = plate
                 else:
                     im = im.convert("RGB")
+                im = _trim_bars(im)                 # мерим КАРТИНКУ, а не картинку с рамкой
+                w, h = im.size
                 _ORIG_RATIO[str(path.with_suffix(".jpg"))] = w / h if h else 0.0
                 _LONG_SIDE[str(path.with_suffix(".jpg"))] = max(w, h)
                 im = _to_channel_format(im)

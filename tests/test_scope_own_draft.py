@@ -85,3 +85,46 @@ def test_selection_and_normalization_share_bounds():
     """Одна граница на двоих: всё, что отбор считает горизонталью, нормализация не трогает."""
     assert fetch.LANDSCAPE_MIN == fetch._RATIO_MIN
     assert fetch.LANDSCAPE_MAX == fetch._RATIO_MAX
+
+
+# ── Обложка 23.09, вторая часть: «картинка должна занимать всё пространство» ─────────────────────
+
+def _photo(w, h):
+    """Кадр со структурой, как снимок: без однотонных краёв."""
+    from PIL import ImageDraw
+    im = Image.new("RGB", (w, h), (30, 90, 160))
+    d = ImageDraw.Draw(im)
+    for i in range(0, w, 40):
+        d.rectangle([i, 0, i + 20, h], fill=(200, 60 + i % 150, 40))
+    return im
+
+
+def test_framed_photo_loses_its_bars(tmp_path):
+    """Снимок 1345x900 в серых полях до 1600x900 (ровно кадр 23.09) → меряется и уходит без полей."""
+    canvas = Image.new("RGB", (1600, 900), (86, 81, 75))
+    canvas.paste(_photo(1345, 900), (127, 0))
+    p = tmp_path / "framed.png"
+    canvas.save(p)
+    out = fetch._normalize(p, min_side=400)
+    with Image.open(out) as im:
+        assert abs(im.size[0] - 1345) <= 2 and im.size[1] == 900
+    assert abs(fetch.orig_ratio(out) - 1345 / 900) < 0.01
+
+
+def test_design_background_is_not_a_bar():
+    """Однотонный фон ДИЗАЙНА (с одной стороны, как у ORANGE JUICE / Threat Intelligence) не режем."""
+    im = Image.new("RGB", (1600, 900), (255, 255, 255))
+    im.paste(_photo(1400, 300), (100, 60))           # полоса сверху, текст-подвал снизу: поле не парное
+    assert fetch._trim_bars(im).size == (1600, 900)
+
+
+def test_judge_self_rejection_is_not_a_pick():
+    """«3 | нет подходящей фотографии» — судья сам отказал; номер брать нельзя."""
+    for label in ("нет подходящей фотографии", "банкомат BMEX — другая компания"):
+        assert scope_writer._SELF_REJECT.search(label)
+    assert not scope_writer._SELF_REJECT.search("вывеска BitMEX")
+
+
+def test_photo_round_checks_the_name_letter_by_letter():
+    src = inspect.getsource(scope_writer._vision_pick)
+    assert "БУКВА В БУКВУ" in src
