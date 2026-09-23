@@ -190,3 +190,71 @@ def test_language_is_rechecked_after_the_length_round():
     import inspect
     src = inspect.getsource(tc.write)
     assert src.index("_enforce_length(posts") < src.rindex("_enforce_language(posts")
+
+
+def test_typography_follows_the_62_published_posts():
+    assert tc._typo("Он сказал «нет» — и ушёл") == 'Он сказал "нет" - и ушёл'
+
+
+def test_colon_and_parentheses_go_to_the_fix_round():
+    got = " ".join(tl.language(CLEAN + "\n\nБутерин признал: адрес не прячет (ни один). Итог: связки"))
+    assert "двоеточий" in got and "скобках" in got
+    assert tl.language(OWNER_23_09) == []          # одно двоеточие владелец оставил сам
+
+
+def test_threads_measure_minuses_go_to_the_fix_round():
+    rest = CLEAN.split("\n\n", 1)[1]
+    got = " ".join(tl.language("Как устроен отпечаток кошелька в блокчейне\n\n" + rest + "\n\nА ты проверь свой кошелёк"))
+    assert "«ты»" in got and "устройство" in got
+
+
+def test_vy_in_headline_is_allowed_like_the_owner_did():
+    assert not any("ЗАГОЛОВКЕ" in x for x in tl.virality(OWNER_23_09))
+
+
+def test_leading_emoji_is_stripped():
+    assert tc._typo("🔒 Кошелёк выдаёт владельца\n\nТекст") == "Кошелёк выдаёт владельца\n\nТекст"
+
+
+def test_published_posts_do_not_trigger_the_new_hard_rules():
+    """Жёсткие правила Threads не должны спорить с тем, что владелец уже опубликовал (кроме v3-антитезы)."""
+    import json
+    posts = json.load(open("data/threads_posts.json", encoding="utf-8"))
+    fm = json.load(open("data/threads_factory_map.json", encoding="utf-8"))
+    pub = [p["text"] for p in posts if (fm.get(str(p["id"])) or {}).get("by") not in (None, "не опознан")
+           and len(p.get("text") or "") > 150 and not tl._TY.search(p.get("text") or "")]
+    hits = [t for t in pub if any(x.startswith(("заголовок обещает", "⛔ ссылка")) for x in tl.language(t))]
+    assert len(hits) <= 1, hits
+
+
+def test_single_newlines_become_beats():
+    assert tc._beats("Сказал простую вещь\nПрятать имя больше не работает") == \
+        "Сказал простую вещь\n\nПрятать имя больше не работает"
+
+
+def test_antithesis_across_undotted_lines_is_caught():
+    """Прогон 23.09: «Модель собирает не имя» / «Она собирает привычки» — строки без точек."""
+    t = CLEAN + "\n\nМодель собирает не имя\nОна собирает привычки"
+    assert tl._anti_count(t) == 1
+    assert any("ФИНАЛЕ" in x for x in tl.language(t))
+
+
+def test_service_word_in_headline():
+    assert any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок про биткоин\n\n" + CLEAN.split("\n\n", 1)[1]))
+
+
+def test_scrap_post_in_a_series_is_dropped(monkeypatch):
+    series = "Я нашёл его нужную сумму денег\n[[POST]]\n" + CLEAN
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (series, None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    monkeypatch.setattr(tc, "_save", lambda *a, **k: None)
+    src = {"text": "исходный пост", "theme": "t", "date": "2026-09-23"}
+    out = tc.write("flagship", src=src, record=False)
+    assert "нужную сумму" not in out and "Бутерин" in out
+
+
+def test_too_fragmented_post_goes_to_the_fix_round():
+    """Живой прогон 23.09: 10 абзацев по фразе. У опубликованных 5-6, больше 7 — у 3 из 62."""
+    t = "\n\n".join(["Приватность в блокчейне кончилась"] + [f"Короткая фраза номер {i}" for i in range(9)])
+    assert any("дробно" in x for x in tl.language(t))
+    assert not any("дробно" in x for x in tl.language(OWNER_23_09))

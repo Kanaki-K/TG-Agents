@@ -166,6 +166,7 @@ FIX_LENGTH = (
 )
 
 LAST_LENGTH_NOTE = ""   # что случилось с длиной в последнем прогоне — для панели пайплайна
+MIN_POST = 120          # короче — обрывок, а не пост (у опубликованных минимум 463)
 LENGTH_ROUNDS = 3       # кругов сжатия максимум (следующий — только если прошлый не дотянул; 23.09: 564 после двух)
 
 # ЯЗЫК v3 — ОДИН КРУГ ПРАВКИ (23.09.2026). Раньше линтер Threads только показывал претензии владельцу
@@ -213,9 +214,21 @@ BEAT_MAX = 140
 _SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[А-ЯЁA-Z«\"0-9])")
 
 
+def _typo(post: str) -> str:
+    """Типографика Threads по 62 опубликованным заводским постам (замер 23.09.2026): кавычки прямые
+    ("…" в 24%, «ёлочки» — 0 из 62), тире короткое с пробелами («-» в 97%, длинное «—» — 0 из 62),
+    эмодзи в начале заголовка снимается (÷1.6 охвата по замеру Threads — читается как рубрика)."""
+    t = re.sub(r"[«»“”„]", '"', post or "")
+    t = re.sub(r"[ \t]*[—–][ \t]*", " - ", t)
+    return re.sub(r"^[\s\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F\u200d]+(?=\w)", "", t)
+
+
 def _beats(post: str) -> str:
     out = []
-    for para in [q.strip() for q in (post or "").split("\n\n") if q.strip()]:
+    # Одиночный перенос = тоже бит (23.09: после правила «предложение — строка» писатель начал ставить
+    # одиночные переносы внутри абзаца; у опубликованных постов их 0 из последних 20). Каждая строка —
+    # свой абзац через пустую строку, как публикует владелец.
+    for para in [q.strip() for q in re.split(r"\n+", post or "") if q.strip()]:
         parts = _SENT_SPLIT.split(para) if len(para) > BEAT_MAX else [para]
         out += [q.strip() for q in parts if q.strip()]
     # точка в конце строки — снять; многоточие, «?» и «!» — оставить
@@ -371,21 +384,30 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
     text, _ = llm.reply(model, _system(k), [], task, [], lambda _n, _a: "", key, THREADS_THINKING,
                         cache_system=False)
     posts, guide = split_output(text)
+    # ОБРЫВОК ВМЕСТО ПОСТА (23.09.2026): мини-флагман выдал первым «постом» строку «Я нашёл его нужную
+    # сумму денег» (30 знаков), и круги правки отказывались работать — «вернул не те посты». У 62
+    # опубликованных самый короткий — 463 знака. Обрывок короче MIN_POST в серии из нескольких постов
+    # выбрасываем и говорим об этом; единственный пост не трогаем — пусть владелец увидит.
+    if len(posts) > 1 and any(len(p) < MIN_POST for p in posts):
+        logging.warning("threads: выброшен обрывок вместо поста: %s", [p for p in posts if len(p) < MIN_POST])
+        posts = [p for p in posts if len(p) >= MIN_POST] or posts
     if not posts:
         return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
     posts = _enforce_language(posts, k, key, model)   # до длины: правка может удлинить пост
     posts = _enforce_length(posts, k, key, model)
-    posts = [_beats(_capital_vy(p)) for p in posts]    # последним: круги правок пишут «вас» и точки заново
+    posts = [_beats(_typo(_capital_vy(p))) for p in posts]   # последним: круги правок пишут это заново
     if any(len(p) > MAX_LEN for p in posts):            # разрез добавляет переносы — перебор возможен
-        posts = [_beats(_capital_vy(p)) for p in _enforce_length(posts, k, key, model)]
+        posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_length(posts, k, key, model)]
     # ФИНАЛЬНАЯ ПЕРЕПРОВЕРКА ЯЗЫКА (23.09.2026): круг сжатия длины идёт ПОСЛЕ круга языка и переписывает
     # текст — живой прогон вернул так антитезу в заголовок («никогда не была про имя» / «Она была про…»).
     # Нашлось — ещё один круг языка по итоговому тексту; отчёт пайплайна скажет, что осталось.
     from core import threads_lint
     if any(threads_lint.language(p) for p in posts):
         _note = LAST_LANGUAGE_NOTE
-        posts = [_beats(_capital_vy(p)) for p in _enforce_language(posts, k, key, model)]
+        posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_language(posts, k, key, model)]
         globals()["LAST_LANGUAGE_NOTE"] = (_note + "; после сжатия — " + LAST_LANGUAGE_NOTE).strip("; ")
+        if any(len(p) > MAX_LEN for p in posts):        # правка языка могла удлинить (живой прогон: 502)
+            posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_length(posts, k, key, model)]
     body = ("\n" + POST_SEP + "\n").join(posts)
     _save(body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else ""), src, k)
     # Журнал переработок: связь «ТГ-пост → его Threads-версия» + категория (вход петли само-обучения).
