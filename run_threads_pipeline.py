@@ -199,6 +199,8 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         out(f"🧵 [THREADS {i}/{len(posts)}]  ({len(p)} симв.{over})")
         out(p)
         out("")
+    if threads_creator.LAST_STAKE_NOTE:
+        out(f"🎯 Ставка: {threads_creator.LAST_STAKE_NOTE}\n")
     if threads_creator.LAST_LANGUAGE_NOTE:
         out(f"✍️ Язык: {threads_creator.LAST_LANGUAGE_NOTE}\n")
     if threads_creator.LAST_LENGTH_NOTE:

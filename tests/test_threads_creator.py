@@ -154,7 +154,7 @@ def test_writer_uses_the_source_it_was_given(monkeypatch):
     seen = {}
 
     def _fake_reply(model, system, history, task, *a, **kw):
-        seen["task"] = task
+        seen.setdefault("task", task)       # первое задание — писателю; дальше идут судья ставки и круги
         return "Готовый тред", None
 
     monkeypatch.setattr(threads_creator.llm, "reply", _fake_reply)

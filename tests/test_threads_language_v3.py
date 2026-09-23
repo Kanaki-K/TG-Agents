@@ -268,3 +268,47 @@ def test_first_owner_test_run_24_09_escapes_are_caught():
         assert any("ЗАГОЛОВКЕ" in x for x in tl.language(head + "\n\n" + rest)), head
     fin = CLEAN + "\n\nОн говорит, сколько монет родится. Не говорит, сколько за них заплатят"
     assert any("ФИНАЛЕ" in x for x in tl.language(fin))
+
+
+def _stake_llm(monkeypatch, answers):
+    it = iter(answers)
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(it), None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+
+
+def test_stakeless_thread_is_rewritten_from_the_source(monkeypatch):
+    _stake_llm(monkeypatch, ["1 | да | майнеры теряют половину\n2 | нет | механика без потерь",
+                             CLEAN, "1 | да | x\n2 | да | y"])
+    out = tc._enforce_stake([POST_23_09, "Механика без ставки " * 10], "flagship", "k", "m", "ИСТОЧНИК")
+    assert out == [POST_23_09, CLEAN] and "ставка появилась" in tc.LAST_STAKE_NOTE
+
+
+def test_series_drops_a_thread_that_still_has_no_stake(monkeypatch):
+    _stake_llm(monkeypatch, ["1 | да | x\n2 | нет | механика", "НЕТ СТАВКИ", "1 | да | x\n2 | нет | механика"])
+    out = tc._enforce_stake([POST_23_09, "Механика без ставки " * 10], "flagship", "k", "m", "ИСТОЧНИК")
+    assert out == [POST_23_09] and "выбросил" in tc.LAST_STAKE_NOTE
+
+
+def test_single_post_is_only_marked_never_rewritten(monkeypatch):
+    """Одиночный пост: судья строже владельца (его принятый заголовок — «без ставки» 3/3), поэтому
+    только пометка. Threads всегда при ТГ-посте (решение 11.09)."""
+    calls = []
+
+    def reply(*a, **k):
+        calls.append(1)
+        return "1 | нет | абстракция", None
+    monkeypatch.setattr(tc.llm, "reply", reply)
+    out = tc._enforce_stake([POST_23_09], "scope", "k", "m", "ИСТОЧНИК")
+    assert out == [POST_23_09] and "⚠" in tc.LAST_STAKE_NOTE and len(calls) == 1
+
+
+def test_stake_judge_failure_does_not_block(monkeypatch):
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("сеть")))
+    assert tc.stake_verdicts(["a", "b"], "k", "m") == [(True, "судья недоступен")] * 2
+
+
+def test_service_word_is_markup_not_a_bitcoin_term():
+    rest = CLEAN.split("\n\n", 1)[1]
+    assert not any("СЛУЖЕБНОЕ" in x for x in tl.language("Строка кода 15-летней давности решает за банки\n\n" + rest))
+    assert not any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок блока стоит больше выплаты\n\n" + rest))
+    assert any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок про биткоин не сдался\n\n" + rest))

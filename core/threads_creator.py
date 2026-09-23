@@ -236,6 +236,103 @@ def _beats(post: str) -> str:
     return "\n\n".join(out)
 
 
+# ══ СТАВКА В ЗАГОЛОВКЕ — СУДЬЯ-МОДЕЛЬ (24.09.2026) ═══════════════════════════════════════════════
+# Замер Threads 09.09: ставка в заголовке (кто что теряет/выигрывает и на сколько) — самый сильный рычаг:
+# ×3.6 охвата, заходы в профиль 1.40% против 0.76%, 14 подписок против 4. Свод говорит «нет ставки — нет
+# треда», но держала его только регулярка по словарю, и она ошибалась на 39 из 62 принятых постов
+# («предаст», «упала вдвое» — потери, которых нет в словаре). Поэтому в круг правки её не пускали, и
+# первый тест-прогон владельца 24.09 (халвинг из строки банка «словарь механики») дал три треда без
+# ставки — «умно, но холодно». Ставку судит модель: одна дешёвая реплика на серию.
+STAKE_JUDGE = (
+    "Ты редактор ленты Threads. Для КАЖДОГО поста ниже ответь, есть ли в его ЗАГОЛОВКЕ (первая строка) "
+    "СТАВКА: конкретный кто-то (человек, компания, майнеры, держатели, читатель) теряет или выигрывает "
+    "деньги, власть или веру — и видно, насколько это больно или крупно (сумма, доля, «вдвое», «всё»).\n"
+    "НЕ ставка: объяснение устройства, определение, факт без потерявшего, абстракция («самая точная "
+    "вещь»), загадка без потери, общий тезис про рынок.\n"
+    "Формат СТРОГО по строке на пост, без вступлений:\n"
+    "N | да | <кто что теряет или выигрывает — до 8 слов>\n"
+    "N | нет | <почему — до 8 слов>\n\n{posts}"
+)
+FIX_STAKE = (
+    "Судья не нашёл в постах ниже СТАВКИ — никто в заголовке не теряет и не выигрывает (причина рядом). "
+    "Замер ленты: посты со ставкой берут в 1.6 раза больше охвата и втрое больше подписок.\n"
+    "Пришивать ставку заголовком НЕЛЬЗЯ — так рождаются выдуманные факты («полгода майнеры нагоняли…», "
+    "живой прогон 24.09). Для КАЖДОГО помеченного поста найди в ИСТОЧНИКЕ ниже другой узел, где кто-то "
+    "конкретный теряет или выигрывает и видно насколько, и напиши пост ЗАНОВО вокруг него — по всем "
+    "правилам формата, ≤{max} знаков, только факты источника. Узел не должен повторять соседние посты "
+    "серии. В источнике такого узла нет — ответь для этого поста одной строкой «НЕТ СТАВКИ».\n"
+    "ВЫВОД: переписанные посты в том же порядке, разделённые ОТДЕЛЬНОЙ строкой «" + POST_SEP + "».\n\n"
+    "ПОМЕЧЕННЫЕ ПОСТЫ:\n{posts}\n\nСОСЕДНИЕ ПОСТЫ СЕРИИ (не трогать, не повторять):\n{others}\n\n"
+    "ИСТОЧНИК:\n{source}"
+)
+LAST_STAKE_NOTE = ""
+STAKE_SYSTEM = "Ты строгий редактор ленты Threads крипто-канала. Отвечаешь только в заданном формате."  # пустой system API не принимает
+_STAKE_LINE = re.compile(r"^\s*(\d+)\s*\|\s*(да|нет)\s*\|\s*(.*)$", re.IGNORECASE | re.MULTILINE)
+
+
+def stake_verdicts(posts: list[str], key: str, model: str) -> list[tuple[bool, str]]:
+    """[(есть ставка, пояснение)] по каждому посту. Сбой судьи → «да» (не мешаем выпуску без основания)."""
+    block = "\n\n".join(f"ПОСТ {i}:\n{p}" for i, p in enumerate(posts, 1))
+    try:
+        cost.set_context("threads-stake")
+        text, _ = llm.reply(model, STAKE_SYSTEM, [], STAKE_JUDGE.format(posts=block), [], lambda _n, _a: "", key,
+                            THREADS_THINKING, cache_system=False)
+    except Exception:
+        logging.exception("threads: судья ставки упал — считаю, что ставка есть")
+        return [(True, "судья недоступен")] * len(posts)
+    got = {int(m.group(1)): (m.group(2).lower() == "да", m.group(3).strip()) for m in _STAKE_LINE.finditer(text or "")}
+    return [got.get(i, (True, "судья не ответил")) for i in range(1, len(posts) + 1)]
+
+
+def _enforce_stake(posts: list[str], kind: str, key: str, model: str, source: str = "") -> list[str]:
+    """Нет ставки → ОДИН круг: автор пишет помеченный пост заново вокруг узла СО ставкой из источника.
+    Не нашёл такого узла или судья и после этого говорит «нет»: в серии из нескольких постов тред без
+    ставки ВЫПАДАЕТ (свод: «нет ставки — нет треда»); одиночный пост остаётся с пометкой — Threads всегда
+    при ТГ-посте (решение владельца 11.09)."""
+    global LAST_STAKE_NOTE
+    LAST_STAKE_NOTE = ""
+    verdicts = stake_verdicts(posts, key, model)
+    miss = [i for i, (ok, _) in enumerate(verdicts) if not ok]
+    if not miss:
+        LAST_STAKE_NOTE = "ставка в заголовке у всех"
+        return posts
+    # ОДИНОЧНЫЙ ПОСТ — ТОЛЬКО ПОМЕТКА (аудит 24.09). Судья строже владельца: принятый им заголовок
+    # «Приватность будущего Вас предаст, но не сегодня» он 3 из 3 раз назвал «без ставки», а на 62
+    # опубликованных — 34 «без ставки». Переписывание одиночного поста спорит с владельцем и, по аудиту,
+    # плодит дефекты (8 замечаний языка после круга, ставка так и не появилась). В СЕРИИ судья работает:
+    # выбросил тред «блок против даты» и оставил тред про Runes — ровно как оценил владелец.
+    if len(posts) == 1:
+        LAST_STAKE_NOTE = f"⚠ судья не видит ставки в заголовке ({verdicts[0][1]}) — проверь, пост не переписывал"
+        return posts
+    block = "\n\n".join(f"ПОСТ {i + 1} (нет ставки: {verdicts[i][1]}):\n{posts[i]}" for i in miss)
+    others = "\n\n".join(posts[i] for i in range(len(posts)) if i not in miss) or "(других нет)"
+    fixed = list(posts)
+    try:
+        cost.set_context("threads-stake")
+        text, _ = llm.reply(model, _system(kind), [], FIX_STAKE.format(max=MAX_LEN, posts=block, others=others,
+                                                                        source=source or "(нет)"),
+                            [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
+        new, _ = split_output(text)
+        new = [_unmark(x) for x in new]
+        if len(new) == len(miss):
+            for i, x in zip(miss, new):
+                if "НЕТ СТАВКИ" not in x.upper() and len(x) >= MIN_POST:
+                    fixed[i] = x
+    except Exception:
+        logging.exception("threads: круг ставки упал — оставляю посты как были")
+    ok_after = [ok for ok, _ in stake_verdicts(fixed, key, model)]
+    still = [i for i, ok in enumerate(ok_after) if not ok]
+    if still and len(fixed) > 1 and len(still) < len(fixed):
+        kept = [x for i, x in enumerate(fixed) if i not in still]
+        LAST_STAKE_NOTE = (f"нет ставки в {len(miss)} из {len(posts)} → переписал из источника; без ставки "
+                           f"осталось {len(still)} — выбросил из серии, ушло {len(kept)}")
+        return kept
+    LAST_STAKE_NOTE = (f"нет ставки в {len(miss)} из {len(posts)} → переписал из источника; "
+                       + (f"⚠ без ставки: {len(still)} (одиночный пост уходит — проверь)" if still
+                          else "ставка появилась у всех"))
+    return fixed
+
+
 def _enforce_language(posts: list[str], kind: str, key: str, model: str) -> list[str]:
     """Дефекты языка v3 → круг автора → перепроверка кодом, до LANGUAGE_ROUNDS кругов. Сбой/не тот
     ответ → последние целые посты. Живой прогон 23.09: антитеза в финале пережила один круг (1 → 1),
@@ -393,6 +490,7 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         posts = [p for p in posts if len(p) >= MIN_POST] or posts
     if not posts:
         return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
+    posts = _enforce_stake(posts, k, key, model, src.get("text") or "")  # первым: пост проверит круг языка
     posts = _enforce_language(posts, k, key, model)   # до длины: правка может удлинить пост
     posts = _enforce_length(posts, k, key, model)
     posts = [_beats(_typo(_capital_vy(p))) for p in posts]   # последним: круги правок пишут это заново
@@ -401,6 +499,9 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
     # ФИНАЛЬНАЯ ПЕРЕПРОВЕРКА ЯЗЫКА (23.09.2026): круг сжатия длины идёт ПОСЛЕ круга языка и переписывает
     # текст — живой прогон вернул так антитезу в заголовок («никогда не была про имя» / «Она была про…»).
     # Нашлось — ещё один круг языка по итоговому тексту; отчёт пайплайна скажет, что осталось.
+    # ИТОГОВАЯ СТАВКА ДЛЯ ОТЧЁТА (аудит 24.09): круги языка и длины идут ПОСЛЕ круга ставки и могут
+    # переписать заголовок — живой прогон заменил годный на «Приватность будущего кода не обещает…».
+    # Переделывать ещё раз не будем (круги кончатся), но отчёт обязан сказать, что ушло на самом деле.
     from core import threads_lint
     if any(threads_lint.language(p) for p in posts):
         _note = LAST_LANGUAGE_NOTE
@@ -408,6 +509,14 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         globals()["LAST_LANGUAGE_NOTE"] = (_note + "; после сжатия — " + LAST_LANGUAGE_NOTE).strip("; ")
         if any(len(p) > MAX_LEN for p in posts):        # правка языка могла удлинить (живой прогон: 502)
             posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_length(posts, k, key, model)]
+    try:
+        _final = stake_verdicts(posts, key, model)
+        _no = sum(1 for ok, _ in _final if not ok)
+        if _no:
+            globals()["LAST_STAKE_NOTE"] = (LAST_STAKE_NOTE + f"; ⚠ в итоговом тексте без ставки: {_no} из "
+                                            f"{len(posts)}").strip("; ")
+    except Exception:
+        logging.exception("threads: итоговая проверка ставки не удалась")
     body = ("\n" + POST_SEP + "\n").join(posts)
     _save(body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else ""), src, k)
     # Журнал переработок: связь «ТГ-пост → его Threads-версия» + категория (вход петли само-обучения).
