@@ -258,3 +258,13 @@ def test_too_fragmented_post_goes_to_the_fix_round():
     t = "\n\n".join(["Приватность в блокчейне кончилась"] + [f"Короткая фраза номер {i}" for i in range(9)])
     assert any("дробно" in x for x in tl.language(t))
     assert not any("дробно" in x for x in tl.language(OWNER_23_09))
+
+
+def test_first_owner_test_run_24_09_escapes_are_caught():
+    """Тест-прогон владельца 24.09 (халвинг): три антитезы прошли проверку как «чисто»."""
+    rest = CLEAN.split("\n\n", 1)[1]
+    for head in ("Здоровье халвинга не в дате - в блоке 1 050 000",
+                 "Халвинг предсказывает эмиссию, не цену"):
+        assert any("ЗАГОЛОВКЕ" in x for x in tl.language(head + "\n\n" + rest)), head
+    fin = CLEAN + "\n\nОн говорит, сколько монет родится. Не говорит, сколько за них заплатят"
+    assert any("ФИНАЛЕ" in x for x in tl.language(fin))
