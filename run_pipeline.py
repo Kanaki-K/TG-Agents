@@ -288,6 +288,25 @@ def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str,
                                                forbid_why="гейт сам признал: " + stale)
         out("🎯 [Выбор темы] после запрета формальной точки:\n" + str(verdict) + "\n")
         panel["⏸ нет сдвига"] = _clip(stale, 40) + " → пере-выбор"
+    # ИНСТРУМЕНТ ЧИТАТЕЛЮ (23.09.2026) — критерий v1: лучшие посты канала отдавали проверку/правило/
+    # линзу для своих денег независимо от повода (16 флагманов v1 из 16; скоупы v3 — 7 из 30). Прогон
+    # 23.09 взял BitMEX за драму и отклонил MVRV с «докупать/держать»; владелец: «пользы практически нет».
+    # Гейт обязан назвать инструмент; не назвал — один пере-выбор с запретом. Замена тоже без него —
+    # ОСТАВЛЯЕМ исходную тему: день без поста невозможен (правило владельца), панель говорит правду.
+    lack = topic_gate.no_tool(verdict)
+    if lack:
+        out(f"🧰 Выбор отклонён: {lack}. Новость без инструмента читателю — пересказ; пере-выбираю.")
+        _r0, _w0, _v0 = rec, weak, verdict
+        rec, weak, verdict = topic_gate.select(
+            brief, api_key=gkey, recent=recent, forbid=(rec or lack),
+            forbid_why=lack + " — нужен повод, из которого читатель унесёт проверку для своих денег")
+        out("🎯 [Выбор темы] после запрета «без инструмента»:\n" + str(verdict) + "\n")
+        lack2 = topic_gate.no_tool(verdict)
+        if not rec or lack2 or topic_gate.is_exhausted(verdict) or topic_gate.is_offbrand(verdict):
+            out("↩️ Замены с инструментом нет — возвращаю исходную тему (день без поста хуже); "
+                "писатель обязан найти инструмент сам.")
+            rec, weak, verdict = _r0, _w0, _v0
+            panel["🧰 инструмент"] = "⚠ нет у темы, замены нет — проверь пользу глазами"
     # СУДЬЯ ПОНЯТИЯ (16.09). Владелец: «антиповтор не поймал, что недавно флагман или скоуп ровно про
     # это же писал» — речь про ТРЕТИЙ пост об одном механизме (#482 реализованная цена → #501 уровень
     # безубытка фондов → «кластеры себестоимости»). Гейт ВИДЕЛ обе строки в своей сводке и написал
@@ -345,7 +364,26 @@ def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str,
             brief, api_key=gkey, recent=recent, forbid=(rec or repeat), forbid_why=repeat)
         out("🎯 [Выбор темы] после запрета повтора:\n" + str(verdict) + "\n")
         panel["🔁 повтор"] = _clip(repeat, 58) + " → пере-выбор"
+    # ИНСТРУМЕНТ В ПАНЕЛЬ — ПО ИТОГОВОЙ ТЕМЕ. Пере-выборы ниже проверки инструмента (понятие, уже
+    # написано, повтор) меняют тему, и панель показывала бы инструмент отклонённой (реплей 23.09: Хейс).
+    if not panel.get("🧰 инструмент", "").startswith("⚠"):
+        _tool = topic_gate.parse_tool(verdict)
+        panel["🧰 инструмент"] = (_clip(_tool, 58) if _tool and not topic_gate.no_tool(verdict)
+                                 else "⚠ у итоговой темы инструмента нет — писатель ищет сам, проверь")
     return rec, weak, verdict
+
+
+def _tool_note(verdict: str) -> str:
+    """Писателю — инструмент, который читатель обязан унести (критерий v1, 23.09.2026). Гейт его
+    назвал — пост его оплачивает: механизм, так уже было, как применить к своим деньгам."""
+    tool = topic_gate.parse_tool(verdict)
+    if not tool or topic_gate.no_tool(verdict):
+        return ("ИНСТРУМЕНТ ЧИТАТЕЛЮ: гейт его не назвал. Найди сам в материале повода проверку, правило "
+                "или линзу, которую читатель применит к СВОИМ деньгам, даже забыв новость, — и построй "
+                "пост так, чтобы он её унёс. Голая новость = пересказ.")
+    return (f"ИНСТРУМЕНТ ЧИТАТЕЛЮ (выбран гейтом): {tool}. Пост обязан его ОТДАТЬ: читатель уходит с этой "
+            "проверкой/линзой и знает, как применить её к своим деньгам. Новость — вход, инструмент — "
+            "то, ради чего пост читают. Не пиши его ярлыком «что это значит для Вас» — вплети в ход мысли.")
 
 
 def _prior_post_note(verdict: str) -> str:
@@ -732,7 +770,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         gkey = config.agent_api_key(config.load_agent("creator"))
         tg_verdict = ""
         try:
-            out("🎯 [Выбор темы] один суд: деньги криптана → свежесть ДЕЙСТВИЯ → повтор → польза и драма "
+            out("🎯 [Выбор темы] один суд: деньги криптана → свежесть ДЕЙСТВИЯ → повтор → ИНСТРУМЕНТ читателю → драма "
                 "→ тип и бренд...")
             scope_rec, scope_weak, tg_verdict = _choose_scope_topic(gkey, _recent, panel, out)
         except Exception:
@@ -855,7 +893,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
     try:
         # scope — ОТДЕЛЬНАЯ ветка (свой лёгкий контекст/модель + встроенный 2FA), флагман — Криейтор.
         post = _run_scope(avoid, scope_rec, scope_weak, _prior_post_note(tg_verdict),
-                          topic_gate.entry_kind(tg_verdict)) if scope else _run_creator("post", avoid, hint,
+                          topic_gate.entry_kind(tg_verdict), _tool_note(tg_verdict)) if scope else _run_creator("post", avoid, hint,
                                                 theme, evergreen=evergreen, no_image=no_image,
                                                 angle=theme_angle)
     except Exception as e:
@@ -867,7 +905,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         out(f"⚠️ Писатель упал: {e}\n   Пробую ещё раз — сбои здесь обычно разовые (сеть/лимит).")
         try:
             post = _run_scope(avoid, scope_rec, scope_weak, _prior_post_note(tg_verdict),
-                              topic_gate.entry_kind(tg_verdict)) if scope else _run_creator(
+                              topic_gate.entry_kind(tg_verdict), _tool_note(tg_verdict)) if scope else _run_creator(
                 "post", avoid, hint, theme, evergreen=evergreen, no_image=no_image, angle=theme_angle)
             panel["♻️ писатель"] = "упал один раз, со второй попытки написал"
         except Exception as e2:
@@ -884,7 +922,7 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         try:
             post = _run_scope(avoid, scope_rec, scope_weak, _prior_post_note(tg_verdict),
                               topic_gate.entry_kind(tg_verdict),
-                              nudge=("⛔ В ПРОШЛЫЙ РАЗ ТЫ НЕ СОХРАНИЛ ДРАФТ. Пост существует только "
+                              nudge=(_tool_note(tg_verdict) + "\n\n" + "⛔ В ПРОШЛЫЙ РАЗ ТЫ НЕ СОХРАНИЛ ДРАФТ. Пост существует только "
                                      "после вызова save_draft(kind='scope') — текст в ответе чате "
                                      "в канал не попадает и для конвейера равен отказу писать. "
                                      "Отказываться нельзя (правило 22.07): нет идеального повода — "
