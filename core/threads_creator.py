@@ -169,6 +169,25 @@ LAST_LENGTH_NOTE = ""   # что случилось с длиной в посл�
 MIN_POST = 120          # короче — обрывок, а не пост (у опубликованных минимум 463)
 LENGTH_ROUNDS = 3       # кругов сжатия максимум (следующий — только если прошлый не дотянул; 23.09: 564 после двух)
 
+# ЛЁГКАЯ СИСТЕМА ДЛЯ КРУГОВ ПРАВКИ (цена, 24.09.2026). Каждый круг языка/длины отправлял модели ВЕСЬ
+# свод + персону Криейтора + бренд (~35–40 тыс. знаков, ~20 тыс. токенов, $0.045 за круг), без кэша, и
+# прогон мини-скоупа доходил до $0.34 (10 вызовов). Владелец: «0.35 — дохуя». Круг правки не пишет пост
+# — он чинит НАЗВАННЫЕ места в готовом тексте, и голос несёт сам текст. Ему нужны форма, язык v3 и
+# красные линии — это ниже, ~1 тыс. знаков. Писатель и переписывание треда (новый пост) — на полном
+# своде, но через кэш: один прогон читает его несколько раз.
+FIX_SYSTEM = (
+    "Ты автор канала KANAKI CRYPTO (крипта, макро-оптика, долгосрочный инвестор). Правишь ГОТОВЫЕ посты "
+    "для Threads: только названное, остальное оставляешь дословно — голос уже в тексте.\n"
+    "ФОРМА (как у опубликованных постов): абзацы через пустую строку, в абзаце 1-2 коротких предложения, "
+    "5-6 абзацев, точек в конце строк нет, тире короткое «-», кавычки прямые \"…\", скобок нет, двоеточие "
+    "максимум одно, «Вы» с заглавной, «ты» никогда, пост ≤499 знаков.\n"
+    "ЯЗЫК v3: заголовок — одно утверждение со ставкой (кто что теряет или выигрывает), без антитезы и без "
+    "вопроса; финал — простое следствие обычными словами; «не X, а Y» / «это не X. Это Y» — не в "
+    "заголовке и не в финале, в теле максимум одна; без штампов и выдуманных образов.\n"
+    "КРАСНЫЕ ЛИНИИ: не сигнал «покупай/продавай», без политики и России, биткоин не проигравший. Факты, "
+    "цифры и имена не добавляешь и не меняешь."
+)
+
 # ЯЗЫК v3 — ОДИН КРУГ ПРАВКИ (23.09.2026). Раньше линтер Threads только показывал претензии владельцу
 # («правки НЕ вносил — решает автор»), и мини-скоуп 23.09 ушёл в ревью с антитезой в заголовке, середине
 # и финале. ТГ-скоуп в v3 чинит такое кругом АВТОРА: правит тот, кто писал, и только названное — голос
@@ -311,7 +330,7 @@ def _enforce_stake(posts: list[str], kind: str, key: str, model: str, source: st
         cost.set_context("threads-stake")
         text, _ = llm.reply(model, _system(kind), [], FIX_STAKE.format(max=MAX_LEN, posts=block, others=others,
                                                                         source=source or "(нет)"),
-                            [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
+                            [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=True)
         new, _ = split_output(text)
         new = [_unmark(x) for x in new]
         if len(new) == len(miss):
@@ -333,7 +352,7 @@ def _enforce_stake(posts: list[str], kind: str, key: str, model: str, source: st
     return fixed
 
 
-def _enforce_language(posts: list[str], kind: str, key: str, model: str) -> list[str]:
+def _enforce_language(posts: list[str], kind: str, key: str, model: str, rounds_max: int = 0) -> list[str]:
     """Дефекты языка v3 → круг автора → перепроверка кодом, до LANGUAGE_ROUNDS кругов. Сбой/не тот
     ответ → последние целые посты. Живой прогон 23.09: антитеза в финале пережила один круг (1 → 1),
     второй круг стоит копейки (Sonnet, 500 знаков) — дешевле, чем брак в ревью."""
@@ -345,14 +364,14 @@ def _enforce_language(posts: list[str], kind: str, key: str, model: str) -> list
     if not before:
         return posts
     cur, rounds = posts, 0
-    while rounds < LANGUAGE_ROUNDS and any(marks):
+    while rounds < (rounds_max or LANGUAGE_ROUNDS) and any(marks):
         rounds += 1
         block = [p + (("\n⛔ ДЕФЕКТЫ:\n" + "\n".join(f"  • {x}" for x in m)) if m else "")
                  for p, m in zip(cur, marks)]
         user = FIX_LANGUAGE.format(max=MAX_LEN, posts=("\n" + POST_SEP + "\n").join(block))
         try:
             cost.set_context("threads-language")
-            text, _ = llm.reply(model, _system(kind), [], user, [], lambda _n, _a: "", key, THREADS_THINKING,
+            text, _ = llm.reply(model, FIX_SYSTEM, [], user, [], lambda _n, _a: "", key, THREADS_THINKING,
                                 cache_system=False)
             fixed = [_unmark(x).split("⛔ ДЕФЕКТЫ")[0].strip() for x in split_output(text)[0]]
         except Exception:
@@ -420,7 +439,7 @@ def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[s
             (f"❌ [{len(p)} знаков — убрать минимум {len(p) - MAX_LEN + 20}] " if i in over else f"[{len(p)} знаков] ")
             + p for i, p in enumerate(cur))
         try:
-            text, _ = llm.reply(model, _system(kind), [], FIX_LENGTH.format(max=MAX_LEN, posts=marked),
+            text, _ = llm.reply(model, FIX_SYSTEM, [], FIX_LENGTH.format(max=MAX_LEN, posts=marked),
                                 [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
             fixed, _ = split_output(text)
             fixed = [_unmark(p) for p in fixed]
@@ -478,8 +497,9 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         task += f"\n\nПОЖЕЛАНИЕ ВЛАДЕЛЬЦА: {hint}"
     cost.set_context("threads")  # иначе расход пишется who='?' — аудит 15.07 не смог его атрибутировать
     # one-shot без инструментов → кэш системы не окупается (запись 1h = 2× без перечтений)
+    # КЭШ СВОДА (24.09): его же читает круг переписывания треда без ставки — запись 1.25×, чтение 0.1×
     text, _ = llm.reply(model, _system(k), [], task, [], lambda _n, _a: "", key, THREADS_THINKING,
-                        cache_system=False)
+                        cache_system=True)
     posts, guide = split_output(text)
     # ОБРЫВОК ВМЕСТО ПОСТА (23.09.2026): мини-флагман выдал первым «постом» строку «Я нашёл его нужную
     # сумму денег» (30 знаков), и круги правки отказывались работать — «вернул не те посты». У 62
@@ -505,7 +525,7 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
     from core import threads_lint
     if any(threads_lint.language(p) for p in posts):
         _note = LAST_LANGUAGE_NOTE
-        posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_language(posts, k, key, model)]
+        posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_language(posts, k, key, model, rounds_max=1)]
         globals()["LAST_LANGUAGE_NOTE"] = (_note + "; после сжатия — " + LAST_LANGUAGE_NOTE).strip("; ")
         if any(len(p) > MAX_LEN for p in posts):        # правка языка могла удлинить (живой прогон: 502)
             posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_length(posts, k, key, model)]

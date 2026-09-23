@@ -312,3 +312,11 @@ def test_service_word_is_markup_not_a_bitcoin_term():
     assert not any("СЛУЖЕБНОЕ" in x for x in tl.language("Строка кода 15-летней давности решает за банки\n\n" + rest))
     assert not any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок блока стоит больше выплаты\n\n" + rest))
     assert any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок про биткоин не сдался\n\n" + rest))
+
+
+def test_fix_rounds_use_the_light_system(monkeypatch):
+    """Цена 24.09: круг правки слал весь свод (~20 тыс. токенов, $0.045 за круг). Теперь лёгкая система."""
+    seen = []
+    monkeypatch.setattr(tc.llm, "reply", lambda model, system, *a, **k: (seen.append(system), (CLEAN, None))[1])
+    tc._enforce_language([POST_23_09], "scope", "k", "m")
+    assert seen and all(s == tc.FIX_SYSTEM for s in seen) and len(tc.FIX_SYSTEM) < 2000
