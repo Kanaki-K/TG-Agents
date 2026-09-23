@@ -72,8 +72,11 @@ def test_legacy_flagship_journal_is_migrated(tmp_path, monkeypatch):
 
 
 def test_pipeline_stops_on_empty_journal(tmp_path, monkeypatch):
+    """Отказ — только когда постов формата нет НИГДЕ: ни в журнале, ни в выгрузке канала (правило
+    владельца 24.09 «пост всегда»: пустой журнал сам по себе больше не отказ — берётся пост канала)."""
     import run_threads_pipeline as rtp
     _isolate(tmp_path, monkeypatch)
+    monkeypatch.setattr(rtp.threads_source, "from_channel", lambda kind, back: None)
     out = rtp.run_threads_cycle(emit=lambda *_: None)           # emit-заглушка: без вывода в терминал
     low = out.lower()
     assert "журнал" in low and "нечего" in low                  # штатный отказ, не падение/не вызов API
@@ -120,6 +123,7 @@ def test_split_output_separates_posts_and_owner_block():
 
 def test_length_round_compresses_only_when_needed(monkeypatch):
     """Перебор по знакам лечится ОДНИМ кругом сжатия; в норме круг не зовётся (деньги не тратим)."""
+    monkeypatch.setattr(threads_creator, "_same_post", lambda a, b: True)   # механика круга, не защита
     calls = []
 
     def _fake_reply(*a, **kw):
@@ -193,6 +197,7 @@ def test_writer_can_leave_the_journal_to_the_pipeline(monkeypatch):
 
 def test_length_round_strips_its_own_marks(monkeypatch):
     """Аудит 11.09: модель возвращала эхом «❌ [480 знаков]», и пометка уезжала в пост."""
+    monkeypatch.setattr(threads_creator, "_same_post", lambda a, b: True)   # механика круга, не защита
     monkeypatch.setattr(threads_creator.llm, "reply", lambda *a, **kw: ("❌ [480 знаков] сжатый пост", None))
     monkeypatch.setattr(threads_creator, "_system", lambda _k: "sys")
     out = threads_creator._enforce_length(["я" * (threads_creator.MAX_LEN + 10)], "flagship", "key", "model")

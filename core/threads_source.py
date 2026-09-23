@@ -253,3 +253,34 @@ def resolve(kind: str = "flagship", back: int = 0) -> dict | None:
     entry["skipped"] = notes
     entry["repeat"] = done          # непусто — этот пост уже перерабатывали: пайплайн предупредит
     return entry
+
+
+def resolve_always(kind: str = "flagship") -> dict | None:
+    """Исходник для боевого запуска: ПОСТ БУДЕТ ВСЕГДА, если хоть какой-то пост формата существует.
+
+    Правило владельца 24.09.2026: «мне нужен всегда пост без исключений, если круг запущен». resolve()
+    честно отвечает «живого поста нет» (сверка с каналом — её стерегут тесты, её не трогаем), а здесь
+    отказ превращается в выбор с пометкой — владелец увидит её в ревью и решит сам:
+      • сверка не нашла живого / остался уже переработанный → последний пост журнала + «повтор/не сверен»;
+      • журнал пуст → самый свежий пост формата из выгрузки канала.
+    None — постов формата нет нигде (ни в журнале, ни в канале): перерабатывать физически нечего."""
+    src = resolve(kind, 0)
+    if src and src.get("text"):
+        return src
+    k = content_plan.norm_kind(kind)
+    rows = [dict(e, text=_clean(e.get("text") or "")) for e in published_journal.entries(k)[-LOOKBACK:][::-1]]
+    rows = [r for r in rows if r.get("text")]
+    if rows:
+        entry = dict(rows[0])
+        entry["skipped"] = (src or {}).get("skipped") or []
+        entry["repeat"] = _distilled_on(entry)
+        entry["fallback"] = (src or {}).get("why") or "живой пост в канале не найден"
+        entry["origin"] = "журнал вышедших постов — ⚠️ сверка не нашла живого, беру последний (правило «пост всегда»)"
+        return entry
+    ch = from_channel(kind, 1)
+    if ch and ch.get("text"):
+        ch = dict(ch)
+        ch["origin"] = (ch.get("origin") or "выгрузка канала") + " — журнал пуст, беру самый свежий пост формата"
+        return ch
+    return None
+

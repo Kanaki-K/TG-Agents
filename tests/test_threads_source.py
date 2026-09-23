@@ -243,3 +243,26 @@ def test_repeat_is_flagged_even_when_channel_is_unreadable(tmp_path, monkeypatch
     _snap(monkeypatch, ok=False)
     src = ts.resolve("scope")
     assert src["unverified"] and src["repeat"] == "2026-09-11"
+
+
+def test_resolve_always_gives_a_post_when_the_live_check_finds_none(monkeypatch):
+    """Правило владельца 24.09: «всегда пост без исключений, если круг запущен»."""
+    monkeypatch.setattr(ts, "resolve", lambda kind, back=0: {"text": "", "why": "уже перерабатывали", "skipped": ["x"]})
+    monkeypatch.setattr(ts.published_journal, "entries", lambda k: [{"text": "Последний флагман", "date": "2026-09-22"}])
+    monkeypatch.setattr(ts, "_distilled_on", lambda e: "2026-09-23")
+    src = ts.resolve_always("flagship")
+    assert src["text"] == "Последний флагман" and src["repeat"] and src["fallback"]
+
+
+def test_resolve_always_falls_back_to_the_channel_when_the_journal_is_empty(monkeypatch):
+    monkeypatch.setattr(ts, "resolve", lambda kind, back=0: None)
+    monkeypatch.setattr(ts.published_journal, "entries", lambda k: [])
+    monkeypatch.setattr(ts, "from_channel", lambda kind, back: {"text": "Пост из канала", "origin": "выгрузка"})
+    assert ts.resolve_always("scope")["text"] == "Пост из канала"
+
+
+def test_pipeline_uses_resolve_always_and_retries_the_writer():
+    import inspect
+    import run_threads_pipeline as rtp
+    src = inspect.getsource(rtp.run_threads_cycle)
+    assert "resolve_always(kind)" in src and "for _try in range(2)" in src

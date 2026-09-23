@@ -88,6 +88,7 @@ def test_length_mark_names_the_cut_and_echo_is_stripped():
 
 def test_second_length_round_if_the_first_falls_short(monkeypatch):
     """Живой мини-скоуп 23.09: один круг дал 703 → 654, всё ещё за потолком 499."""
+    monkeypatch.setattr(tc, "_same_post", lambda a, b: True)   # механика кругов, не защита от подмены
     answers = iter(["я" * (tc.MAX_LEN + 100), "я" * (tc.MAX_LEN - 10)])
     monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(answers), None))
     monkeypatch.setattr(tc, "_system", lambda kind: "")
@@ -320,3 +321,38 @@ def test_fix_rounds_use_the_light_system(monkeypatch):
     monkeypatch.setattr(tc.llm, "reply", lambda model, system, *a, **k: (seen.append(system), (CLEAN, None))[1])
     tc._enforce_language([POST_23_09], "scope", "k", "m")
     assert seen and all(s == tc.FIX_SYSTEM for s in seen) and len(tc.FIX_SYSTEM) < 2000
+
+
+def test_fix_round_cannot_replace_the_post_with_a_request(monkeypatch):
+    """Аудит 24.09: круг сжатия ответил «Нужен сам пост - пришлите его текст» — и это стало постом."""
+    junk = "Нужен сам пост - пришлите его текст, пожалуйста\n\nДайте полный текст поста, и я сожму его"
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (junk, None))
+    long = POST_23_09 + "\n\n" + "Ещё абзац для длины поста. " * 10
+    assert tc._enforce_length([long], "flagship", "k", "m")[0] == long
+    assert tc._enforce_language([POST_23_09], "scope", "k", "m")[0] == POST_23_09
+    assert not tc._same_post(POST_23_09, junk)
+    assert tc._same_post(POST_23_09, POST_23_09.replace(".", "").replace(" Это подпись", ""))  # настоящая правка
+
+
+REASONING = ("Смотрю источник на предмет конкретного проигравшего\n\nЕдинственный кандидат со ставкой: день "
+             "халвинга\n\nВторой пост честно не имеет отдельной ставки - не буду её выдумывать\n\n" + CLEAN)
+
+
+def test_stake_round_cannot_turn_reasoning_into_a_post(monkeypatch):
+    """Аудит 24.09: круг ставки вернул рассуждения на 1530 знаков — и они стали постом."""
+    _stake_llm(monkeypatch, ["1 | да | x\n2 | нет | механика", REASONING, "1 | да | x\n2 | нет | механика"])
+    out = tc._enforce_stake([POST_23_09, CLEAN], "flagship", "k", "m", "ИСТОЧНИК")
+    assert all("Смотрю источник" not in p for p in out)
+
+
+def test_last_line_of_defence_keeps_a_real_post(monkeypatch):
+    """Что бы ни натворили круги — в ревью уходит пост, а не рассуждение."""
+    answers = iter([POST_23_09, "1 | да | x"] + ["1 | да | x"] * 5)
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(answers), None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    monkeypatch.setattr(tc, "_save", lambda *a, **k: None)
+    monkeypatch.setattr(tc, "_enforce_language", lambda posts, *a, **k: [REASONING * 2])
+    out = tc.write("scope", src={"text": "исходник", "theme": "t", "date": "2026-09-23"}, record=False)
+    body = out.split("[[КОММЕНТЫ]]")[0]
+    assert "Смотрю источник" not in body          # рассуждение в ревью не ушло
+    assert "Каждый перевод" in body               # ушла рабочая версия писателя

@@ -137,7 +137,9 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
         out("\n" + cost.summary())
         return "\n".join(report)
 
-    src = threads_source.resolve(kind, back)
+    # ПОСТ ВСЕГДА (владелец 24.09.2026): боевой запуск без --old не кончается «перерабатывать нечего», пока
+    # в журнале или канале есть хоть один пост формата — resolve_always выбирает с пометкой.
+    src = threads_source.resolve(kind, back) if back else threads_source.resolve_always(kind)
     # Записи журнала, отброшенные сверкой с каналом, показываем ДО источника: владелец должен видеть, что
     # удалённый из отложки пост заметили, а не проигнорировали молча.
     for note in (src or {}).get("skipped") or []:
@@ -163,17 +165,31 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     if src.get("unverified"):
         out("⚠️ КАНАЛ НЕ ПРОЧИТАН — не проверил, остался ли этот пост в ТГ-отложке. Если ты его удалил, "
             "удали и Threads-версию из ревью.")
+    if src.get("fallback"):
+        out(f"⚠️ ВЗЯТ БЕЗ СВЕРКИ (правило «пост всегда»): {src['fallback']}. Если этого поста в канале нет — "
+            "удали Threads-версию из ревью.")
     if src.get("repeat"):
         out(f"⚠️ ПОВТОР: этот пост уже перерабатывали в Threads {src['repeat']}. Нужна ли вторая версия — реши в ревью.")
     # Анти-повтор/домен/ориентир на мини-флагмане НЕ нужны: флагман уже прошёл все гейты (Скаут,
     # антиповтор темы, пикер, 2FA) ДО создания — мы его лишь дистиллируем. Эта машинерия — для Формата 2
     # (он originates контент), модули threads_dedup/orientation_digest ждут его, к мини-флагману не привязаны.
     out(f"✍️ Делаю {fmt['label']} (Sonnet, свой свод правил — без Скаута/2FA/обложки)...\n")
-    try:
-        # ровно тот источник, что показан выше; в журнал переработок пишем ниже — только поставленное в отложку
-        series = threads_creator.write(kind, hint, src=src, record=False)
-    except Exception as e:
-        out(f"❌ Дистилляция не удалась: {e}")
+    # ОДНА ПОВТОРНАЯ ПОПЫТКА (как у ТГ-писателя, 16.09): сбой почти всегда внешний (сеть, 429, разовый 400),
+    # а пустая серия — разовый срыв разбора. Правило «пост всегда»: без повтора прогон кончался ничем.
+    series, err = "", ""
+    for _try in range(2):
+        try:
+            # ровно тот источник, что показан выше; в журнал переработок пишем ниже — только поставленное
+            series = threads_creator.write(kind, hint, src=src, record=False)
+            err = ""
+        except Exception as e:
+            series, err = "", str(e)
+        if series and not series.startswith("⚠️") and threads_creator.split_output(series)[0]:
+            break
+        out(f"⚠️ Попытка {_try + 1}: {'писатель упал: ' + err if err else 'серия пустая'} — "
+            + ("повторяю." if _try == 0 else "и со второй раз не вышло."))
+    if err:
+        out(f"❌ Дистилляция не удалась и со второй попытки: {err}")
         out("\n" + cost.summary())
         return "\n".join(report)
 

@@ -233,6 +233,35 @@ BEAT_MAX = 140
 _SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[А-ЯЁA-Z«\"0-9])")
 
 
+# ПРАВКА ОБЯЗАНА ОСТАТЬСЯ ТЕМ ЖЕ ПОСТОМ (аудит 24.09.2026). Круг сжатия получил испорченный вход и ответил
+# «Нужен сам пост - пришлите его текст, пожалуйста» — этот ответ и стал постом. Любой круг правки (язык,
+# длина) может так подменить пост отказом, вопросом или огрызком. Правка — это тот же текст с исправленными
+# местами: сохраняет большую часть слов исходника и не короче его половины. Иначе — берём прежнюю версию.
+_SAME_MIN_COVER = 0.4
+_SAME_MIN_LEN = 0.5
+_META_REPLY = re.compile(r"пришлите|дайте (?:полный|сам)|нужен сам пост|я сожму|не вижу (?:поста|текста)|"
+                         r"предоставьте|к сожалению|"
+                         # рассуждения вслух вместо поста (аудит 24.09: круг ставки выдал 1530 знаков «Смотрю
+                         # источник на предмет конкретного проигравшего… не буду её выдумывать»)
+                         r"смотрю источник|проверяю ещё раз|единственный кандидат|не буду (?:её|его) выдумывать|"
+                         r"для второго поста|второй пост честно|узел со ставкой|в источнике по сути",
+                         re.IGNORECASE)
+
+
+def _looks_like_post(t: str) -> bool:
+    """Годится ли текст как пост Threads: не рассуждение/отказ, не обрывок, не простыня."""
+    t = (t or "").strip()
+    return bool(t) and not _META_REPLY.search(t) and MIN_POST <= len(t) <= int(MAX_LEN * 1.3)
+
+
+def _same_post(old: str, new: str) -> bool:
+    words = lambda t: set(re.findall(r"[а-яёa-z0-9]{3,}", (t or "").lower()))
+    wo, wn = words(old), words(new)
+    if not wn or _META_REPLY.search(new or ""):
+        return False
+    return len(wn & wo) / len(wn) >= _SAME_MIN_COVER and len(new) >= _SAME_MIN_LEN * len(old)
+
+
 def _typo(post: str) -> str:
     """Типографика Threads по 62 опубликованным заводским постам (замер 23.09.2026): кавычки прямые
     ("…" в 24%, «ёлочки» — 0 из 62), тире короткое с пробелами («-» в 97%, длинное «—» — 0 из 62),
@@ -273,6 +302,7 @@ STAKE_JUDGE = (
     "N | нет | <почему — до 8 слов>\n\n{posts}"
 )
 FIX_STAKE = (
+    "Отвечай ТОЛЬКО готовыми постами, без рассуждений, пояснений и слов о том, что ищешь или проверяешь.\n"
     "Судья не нашёл в постах ниже СТАВКИ — никто в заголовке не теряет и не выигрывает (причина рядом). "
     "Замер ленты: посты со ставкой берут в 1.6 раза больше охвата и втрое больше подписок.\n"
     "Пришивать ставку заголовком НЕЛЬЗЯ — так рождаются выдуманные факты («полгода майнеры нагоняли…», "
@@ -335,7 +365,7 @@ def _enforce_stake(posts: list[str], kind: str, key: str, model: str, source: st
         new = [_unmark(x) for x in new]
         if len(new) == len(miss):
             for i, x in zip(miss, new):
-                if "НЕТ СТАВКИ" not in x.upper() and len(x) >= MIN_POST:
+                if "НЕТ СТАВКИ" not in x.upper() and _looks_like_post(x):
                     fixed[i] = x
     except Exception:
         logging.exception("threads: круг ставки упал — оставляю посты как были")
@@ -378,6 +408,8 @@ def _enforce_language(posts: list[str], kind: str, key: str, model: str, rounds_
             logging.exception("threads: круг языка упал — оставляю последние целые посты")
             LAST_LANGUAGE_NOTE = "⚠ круг правки языка упал — дефекты ниже остались"
             return cur
+        if len(fixed) == len(cur):
+            fixed = [f if _same_post(c, f) else c for c, f in zip(cur, fixed)]   # подмена поста → прежний
         if len(fixed) != len(cur) or not all(fixed):
             LAST_LANGUAGE_NOTE = ("⚠ круг правки языка вернул не те посты — оставил "
                                   + ("исходные" if cur is posts else "итог прошлого круга") + ", дефекты ниже")
@@ -446,6 +478,8 @@ def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[s
         except Exception:
             logging.exception("threads_creator: круг сжатия по длине упал — отдаю посты как есть")
             fixed = []
+        if len(fixed) == len(cur):
+            fixed = [f if _same_post(c, f) else c for c, f in zip(cur, fixed)]   # подмена поста → прежний
         if len(fixed) != len(cur):    # модель потеряла/склеила пост — своим версиям верим больше
             LAST_LENGTH_NOTE = (f"перебор в {len(first_over)} посте(ах), круг сжатия вернул не тот состав — "
                                 + ("оставил исходные" if cur is posts else "оставил итог прошлого круга"))
@@ -510,6 +544,7 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         posts = [p for p in posts if len(p) >= MIN_POST] or posts
     if not posts:
         return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
+    originals = [_beats(_typo(_capital_vy(p))) for p in posts]   # версия писателя — последний рубеж, см. ниже
     posts = _enforce_stake(posts, k, key, model, src.get("text") or "")  # первым: пост проверит круг языка
     posts = _enforce_language(posts, k, key, model)   # до длины: правка может удлинить пост
     posts = _enforce_length(posts, k, key, model)
@@ -529,6 +564,17 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         globals()["LAST_LANGUAGE_NOTE"] = (_note + "; после сжатия — " + LAST_LANGUAGE_NOTE).strip("; ")
         if any(len(p) > MAX_LEN for p in posts):        # правка языка могла удлинить (живой прогон: 502)
             posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_length(posts, k, key, model)]
+    # ПОСЛЕДНИЙ РУБЕЖ (аудит 24.09.2026): что бы ни сделали круги, в ревью уходит ПОСТ. Нерабочий
+    # (рассуждение, отказ, обрывок, простыня) выбрасывается; не осталось ни одного — берём версию писателя
+    # до кругов. Правило владельца: пост всегда, без исключений.
+    bad = [p for p in posts if not _looks_like_post(p)]
+    if bad:
+        logging.warning("threads: круги правки испортили %d пост(а) — выбрасываю: %s", len(bad),
+                        [b[:60] for b in bad])
+        posts = [p for p in posts if _looks_like_post(p)] or [p for p in originals if _looks_like_post(p)] \
+            or originals[:1]
+        globals()["LAST_STAKE_NOTE"] = (LAST_STAKE_NOTE + f"; ⚠ круги испортили {len(bad)} пост(а) — "
+                                        "в ревью ушла рабочая версия").strip("; ")
     try:
         _final = stake_verdicts(posts, key, model)
         _no = sum(1 for ok, _ in _final if not ok)
