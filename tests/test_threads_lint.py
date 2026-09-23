@@ -19,13 +19,19 @@ SOPR = ("Цена говорит сколько монета стоит. Но н
 
 
 def test_leaders_pass_clean():
-    assert L.check(MANGO) == []
+    assert L.virality(MANGO) == []
+
+
+def test_leader_finale_is_the_antithesis_the_owner_banned():
+    """Конфликт, записанный честно (23.09.2026): лидер охвата кончается «Взломали не биржу. Взломали то,
+    что ей сказали». По замеру виральности чисто, по языку v3 — антитеза в финале. Решил владелец: v3."""
+    assert any("ФИНАЛЕ" in x for x in L.language(MANGO))
 
 
 def test_short_headline_with_a_stake_is_not_a_complaint():
     """«20% майнеров в убытке» — 21 знак и втрое выше типичного охвата. Линтер не спорит с лидером:
     короткий заголовок плох тем, что в него не влезает ставка, а здесь она влезла."""
-    assert L.check(MINERS) == []
+    assert L.virality(MINERS) == []
 
 
 def test_missing_stake_is_caught():
@@ -55,10 +61,10 @@ def test_link_and_hashtag_are_hard_stops():
 
 
 def test_series_report_counts_posts_without_a_stake():
-    report = L.check_series([MANGO, SOPR, ADVICE])
+    report = L.check_series([MINERS, SOPR, ADVICE])   # MANGO с 23.09 не чистый по языку v3 (см. выше)
     assert "Постов без своей ставки: 2 из 3" in report
     assert "[1/3]" not in report          # к чистому посту претензий нет
 
 
 def test_clean_series_says_nothing():
-    assert L.check_series([MANGO, MINERS]) == ""
+    assert L.check_series([MINERS]) == ""

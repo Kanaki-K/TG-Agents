@@ -157,14 +157,86 @@ def _save(series: str, src: dict, kind: str) -> None:
 
 FIX_LENGTH = (
     "Твои посты ниже переросли потолок площадки. Верни ВСЕ посты заново, в том же порядке и том же "
-    "голосе, но каждый помеченный ❌ сожми до ≤{max} знаков. Режь ВОДУ, не смысл: лишние прилагательные "
-    "→ уточнения в скобках → дублирующие пояснения → служебные слова («вдруг», «просто», «этот»). "
+    "голосе, но каждый помеченный ❌ сожми до ≤{max} знаков — в пометке сказано, СКОЛЬКО знаков убрать. "
+    "Слова внутри фраз столько не дадут: убирай ЦЕЛЫЕ предложения, которые пересказывают соседнее или "
+    "объясняют то, что читатель поймёт сам; потом уточнения в скобках. "
     "Мысль, заголовок и финал сохрани. Посты без пометки не трогай.\n"
     "ВЫВОД: только посты, разделённые ОТДЕЛЬНОЙ строкой «" + POST_SEP + "», без нумерации и комментариев.\n\n"
     "{posts}"
 )
 
 LAST_LENGTH_NOTE = ""   # что случилось с длиной в последнем прогоне — для панели пайплайна
+LENGTH_ROUNDS = 3       # кругов сжатия максимум (следующий — только если прошлый не дотянул; 23.09: 564 после двух)
+
+# ЯЗЫК v3 — ОДИН КРУГ ПРАВКИ (23.09.2026). Раньше линтер Threads только показывал претензии владельцу
+# («правки НЕ вносил — решает автор»), и мини-скоуп 23.09 ушёл в ревью с антитезой в заголовке, середине
+# и финале. ТГ-скоуп в v3 чинит такое кругом АВТОРА: правит тот, кто писал, и только названное — голос
+# остаётся его (урок 31.07: судьи-переписчики стачивали голос). Здесь так же: один круг, перепроверка
+# кодом, остаток — в отчёт владельцу.
+FIX_LANGUAGE = (
+    "Проверка языка (правила канала v3) нашла в постах ниже дефекты — они под каждым постом после "
+    "«⛔ ДЕФЕКТЫ». Верни ВСЕ посты заново, в том же порядке и в том же голосе, исправив ТОЛЬКО названное.\n"
+    "Антитезу («это не X. Это Y», «не X, а Y», «Y, а не X», «не по X - по Y», «вопрос не в X. Вопрос в Y») "
+    "чинят МЕХАНИЧЕСКИ: отрицаемую половину удаляешь ЦЕЛИКОМ вместе с «не»/«а не», оставшаяся половина и "
+    "есть фраза. Правки владельца: «Stripe купил не модель, а рубильник» → «Stripe купил рубильник»; "
+    "«ИИ находит человека по манере мыслить, а не по словам» → «ИИ находит человека по манере мыслить»; "
+    "«Вопрос не в том, знают ли имя. Вопрос в том, сколько связок осталось» → «До Вашего имени осталось "
+    "несколько связок». Переставить половины или заменить «а не» на тире — НЕ починка, это та же фигура. "
+    "Заголовок — одно утверждение со ставкой. Финал — простое следствие обычными словами, без перевёртыша "
+    "и без образа.\n"
+    "Мысль, факты, цифры и имена не меняй и не добавляй. Посты без дефектов не трогай. Длина ≤{max} знаков.\n"
+    "ВЫВОД: только посты, разделённые ОТДЕЛЬНОЙ строкой «" + POST_SEP + "», без пометок, нумерации и "
+    "комментариев.\n\n{posts}"
+)
+LAST_LANGUAGE_NOTE = ""   # что сделал круг языка — для отчёта пайплайна
+LANGUAGE_ROUNDS = 2       # кругов правки языка максимум (второй — только если первый не дочистил)
+
+
+# «Вы» С ЗАГЛАВНОЙ — КОДОМ, БЕЗ МОДЕЛИ (23.09.2026). Живой прогон мини-скоупа: «выдаёт вас», «против вас
+# самих», «о вас уже знают». Канал: за последние 30 постов (с 11.08) обращение строчными — 0 раз, с
+# заглавной — 55. Правка механическая и однозначная, модель тут не нужна (как тире и кавычки у ТГ-линтера).
+_VY_LOWER = re.compile(r"\b(вы|вас|вам|вами|ваш|ваша|ваше|ваши|вашего|вашей|вашему|вашим|ваших|вашими|вашу)\b")
+
+
+def _capital_vy(post: str) -> str:
+    return _VY_LOWER.sub(lambda m: m.group(1)[0].upper() + m.group(1)[1:], post or "")
+
+
+def _enforce_language(posts: list[str], kind: str, key: str, model: str) -> list[str]:
+    """Дефекты языка v3 → круг автора → перепроверка кодом, до LANGUAGE_ROUNDS кругов. Сбой/не тот
+    ответ → последние целые посты. Живой прогон 23.09: антитеза в финале пережила один круг (1 → 1),
+    второй круг стоит копейки (Sonnet, 500 знаков) — дешевле, чем брак в ревью."""
+    global LAST_LANGUAGE_NOTE
+    from core import threads_lint
+    LAST_LANGUAGE_NOTE = ""
+    marks = [threads_lint.language(p) for p in posts]
+    before = sum(len(m) for m in marks)
+    if not before:
+        return posts
+    cur, rounds = posts, 0
+    while rounds < LANGUAGE_ROUNDS and any(marks):
+        rounds += 1
+        block = [p + (("\n⛔ ДЕФЕКТЫ:\n" + "\n".join(f"  • {x}" for x in m)) if m else "")
+                 for p, m in zip(cur, marks)]
+        user = FIX_LANGUAGE.format(max=MAX_LEN, posts=("\n" + POST_SEP + "\n").join(block))
+        try:
+            cost.set_context("threads-language")
+            text, _ = llm.reply(model, _system(kind), [], user, [], lambda _n, _a: "", key, THREADS_THINKING,
+                                cache_system=False)
+            fixed = [_unmark(x).split("⛔ ДЕФЕКТЫ")[0].strip() for x in split_output(text)[0]]
+        except Exception:
+            logging.exception("threads: круг языка упал — оставляю последние целые посты")
+            LAST_LANGUAGE_NOTE = "⚠ круг правки языка упал — дефекты ниже остались"
+            return cur
+        if len(fixed) != len(cur) or not all(fixed):
+            LAST_LANGUAGE_NOTE = ("⚠ круг правки языка вернул не те посты — оставил "
+                                  + ("исходные" if cur is posts else "итог прошлого круга") + ", дефекты ниже")
+            return cur
+        cur = fixed
+        marks = [threads_lint.language(p) for p in cur]
+    after = sum(len(m) for m in marks)
+    LAST_LANGUAGE_NOTE = f"язык v3: замечаний {before} → {after} за {rounds} круг(а) автора"
+    return cur
 
 
 def split_output(text: str) -> tuple[list[str], str]:
@@ -188,7 +260,7 @@ def _unmark(post: str) -> str:
     s = (post or "").lstrip()
     if s.startswith("❌"):
         s = s[1:].lstrip()
-    head = s[:24]
+    head = s[:60]   # пометка с числом «[703 знаков — убрать минимум 224]» длиннее прежней (23.09)
     if s.startswith("[") and "]" in head and "знак" in head:
         s = s[s.index("]") + 1:].lstrip()
     return s
@@ -201,28 +273,38 @@ def _enforce_length(posts: list[str], kind: str, key: str, model: str) -> list[s
     и «на глаз» модель промахивается регулярно. Один круг — потолок цены; не помогло — отдаём как есть
     с пометкой, владелец видит перебор в отчёте и решает сам (пост не теряем)."""
     global LAST_LENGTH_NOTE
-    over = [i for i, p in enumerate(posts) if len(p) > MAX_LEN]
-    if not over:
+    # ДВА КРУГА С ЧИСЛОМ (23.09.2026). Был один круг «режь воду»: живой мини-скоуп 703 знака → 654, всё
+    # ещё за потолком. Модель не знала, СКОЛЬКО резать, и ужимала слова. Теперь пометка называет число,
+    # промпт разрешает целые предложения, и второй круг есть, если первого не хватило.
+    first_over = [i for i, p in enumerate(posts) if len(p) > MAX_LEN]
+    if not first_over:
         LAST_LENGTH_NOTE = ""
         return posts
-    marked = ("\n" + POST_SEP + "\n").join(
-        f"{'❌ ' if i in over else ''}[{len(p)} знаков] {p}" for i, p in enumerate(posts))
-    try:
-        text, _ = llm.reply(model, _system(kind), [], FIX_LENGTH.format(max=MAX_LEN, posts=marked),
-                            [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
-        fixed, _ = split_output(text)
-        fixed = [_unmark(p) for p in fixed]
-    except Exception:
-        logging.exception("threads_creator: круг сжатия по длине упал — отдаю посты как есть")
-        fixed = []
-    if len(fixed) != len(posts):      # модель потеряла/склеила пост — своим версиям верим больше
-        LAST_LENGTH_NOTE = (f"перебор в {len(over)} посте(ах), круг сжатия вернул не тот состав — "
-                            "оставил исходные")
-        return posts
-    still = [i for i, p in enumerate(fixed) if len(p) > MAX_LEN]
-    LAST_LENGTH_NOTE = (f"перебор в {len(over)} посте(ах) → сжал; всё ещё длинны: {len(still)}"
-                        if still else f"перебор в {len(over)} посте(ах) → сжал в норму")
-    return fixed
+    cur = posts
+    for _round in range(LENGTH_ROUNDS):
+        over = [i for i, p in enumerate(cur) if len(p) > MAX_LEN]
+        if not over:
+            break
+        marked = ("\n" + POST_SEP + "\n").join(
+            (f"❌ [{len(p)} знаков — убрать минимум {len(p) - MAX_LEN + 20}] " if i in over else f"[{len(p)} знаков] ")
+            + p for i, p in enumerate(cur))
+        try:
+            text, _ = llm.reply(model, _system(kind), [], FIX_LENGTH.format(max=MAX_LEN, posts=marked),
+                                [], lambda _n, _a: "", key, THREADS_THINKING, cache_system=False)
+            fixed, _ = split_output(text)
+            fixed = [_unmark(p) for p in fixed]
+        except Exception:
+            logging.exception("threads_creator: круг сжатия по длине упал — отдаю посты как есть")
+            fixed = []
+        if len(fixed) != len(cur):    # модель потеряла/склеила пост — своим версиям верим больше
+            LAST_LENGTH_NOTE = (f"перебор в {len(first_over)} посте(ах), круг сжатия вернул не тот состав — "
+                                + ("оставил исходные" if cur is posts else "оставил итог прошлого круга"))
+            return cur
+        cur = fixed
+    still = [i for i, p in enumerate(cur) if len(p) > MAX_LEN]
+    LAST_LENGTH_NOTE = (f"перебор в {len(first_over)} посте(ах) → сжал; всё ещё длинны: {len(still)}"
+                        if still else f"перебор в {len(first_over)} посте(ах) → сжал в норму")
+    return cur
 
 
 def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | None = None,
@@ -270,7 +352,9 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
     posts, guide = split_output(text)
     if not posts:
         return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
+    posts = _enforce_language(posts, k, key, model)   # до длины: правка может удлинить пост
     posts = _enforce_length(posts, k, key, model)
+    posts = [_capital_vy(p) for p in posts]            # последним: круги правок пишут «вас» заново
     body = ("\n" + POST_SEP + "\n").join(posts)
     _save(body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else ""), src, k)
     # Журнал переработок: связь «ТГ-пост → его Threads-версия» + категория (вход петли само-обучения).
