@@ -411,6 +411,9 @@ def _system() -> str:
     return llm.build_system(persona, ctx)
 
 
+_RUN_META = ""   # мета скоупа, написанная в текущем прогоне (сбрасывается в начале write)
+
+
 def _dispatch(name: str, args: dict) -> str:
     """dispatch ветки скоупа: формат драфта ставит КОД, а не модель.
 
@@ -420,8 +423,19 @@ def _dispatch(name: str, args: dict) -> str:
     пошли по НЕМУ, и в канал ушёл третий пост про резерв за неделю, под темой BitMEX и с обложкой BitMEX.
     Просьба «save_draft(kind='scope')» стоит в каждом промпте, но просьба — не гарантия; всё, что
     сохраняется из этой ветки, по определению скоуп."""
+    global _RUN_META
     if name == "save_draft":
         args = {**(args or {}), "kind": "scope"}
+        # МЕТА ПЕРЕЖИВАЕТ КРУГИ ПРАВОК (23.09.2026). Круги фактов и речи отдают модели пост БЕЗ меты
+        # (`post.partition("[[SPLIT]]")[0]`) и просят «мету сохрани» — модель её не видит и сохраняет
+        # пост без неё. Пост «Кошелёк узнают по привычкам» (владелец: «очень хороший») ушёл в журнал с
+        # пустыми узлом и выходом, Threads-ветка без входа. Кодом: мета, написанная в ЭТОМ прогоне,
+        # доезжает до каждого следующего сохранения, где её нет.
+        content = str(args.get("content", "") or "")
+        if "[[SPLIT]]" in content:
+            _RUN_META = content.partition("[[SPLIT]]")[2].strip()
+        elif _RUN_META:
+            args["content"] = content.rstrip() + "\n\n[[SPLIT]]\n" + _RUN_META
     return creator_tools.dispatch(name, args)
 
 
@@ -1149,6 +1163,8 @@ def write(theme: str = "", avoid: str = "", recommend: str = "", weak: str = "",
         task += "\n\n" + nudge
     if theme:
         task += f"\n\nТЕМА ОТ ВЛАДЕЛЬЦА: {theme} — пиши по ней."
+    global _RUN_META
+    _RUN_META = ""                            # мета прошлого поста не должна доехать до нового
     draft_before = _newest_draft_stamp()      # снимок ДО письма — чтобы поймать отказ scope
     post = _turn(task, model, key, thinking)
     # Гейт «свежий драфт ДО трат» (аудит расходов 15.07): если scope отказался писать (нет годного

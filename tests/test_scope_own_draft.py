@@ -128,3 +128,20 @@ def test_judge_self_rejection_is_not_a_pick():
 def test_photo_round_checks_the_name_letter_by_letter():
     src = inspect.getsource(scope_writer._vision_pick)
     assert "БУКВА В БУКВУ" in src
+
+
+def test_meta_survives_rounds_that_do_not_see_it(monkeypatch, tmp_path):
+    """23.09: круг речи/фактов сохранил пост без меты — «очень хороший» пост ушёл с пустыми узлом/выходом."""
+    _drafts(monkeypatch, tmp_path)
+    monkeypatch.setattr(scope_writer, "_RUN_META", "")
+    meta = "[[УЗЕЛ]] псевдонимность - не приватность\n[[ВЫХОД]] читатель посчитает свои связки биржа-кошелёк"
+    scope_writer._dispatch("save_draft", {"content": "**Пост**\n\nТекст\n\n[[SPLIT]]\n" + meta, "slug": "a"})
+    scope_writer._dispatch("save_draft", {"content": "**Пост**\n\nТекст после правки речи", "slug": "a"})
+    saved = verify.latest_draft("scope")
+    assert "после правки речи" in saved and "[[УЗЕЛ]] псевдонимность" in saved
+
+
+def test_meta_of_a_previous_post_does_not_leak(monkeypatch, tmp_path):
+    """Новый прогон начинает без чужой меты: write() обнуляет её до письма."""
+    src = inspect.getsource(scope_writer.write)
+    assert '_RUN_META = ""' in src.split("_turn(task")[0]
