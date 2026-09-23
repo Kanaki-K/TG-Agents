@@ -176,6 +176,10 @@ def reports(kind: str = "", limit: int = 5) -> list:
     # Импорт ЛЕНИВЫЙ и это не стиль, а необходимость: creator_tools тянет analytics_tools, а тот —
     # нас (там живёт инструмент edit_report). На уровне модуля получился бы цикл и падение импорта.
     from core import creator_tools
+    # Имя формата — оба языка (24.09.2026): пайплайн зовёт «флагман», а инструмент edit_report из чата
+    # получает от модели «flagship» — и молча отвечал «нет совпавших постов» при трёх готовых парах.
+    kind = {"flagship": "флагман", "flagman": "флагман", "short": "scope", "скоуп": "scope"}.get(
+        (kind or "").strip().lower(), kind)
     try:
         posts = [p for p in analytics._load_posts() if (p.get("text") or "").strip()]
     except Exception:                              # нет выгрузки — замер просто молчит

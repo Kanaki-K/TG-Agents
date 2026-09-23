@@ -145,3 +145,11 @@ def test_meta_of_a_previous_post_does_not_leak(monkeypatch, tmp_path):
     """Новый прогон начинает без чужой меты: write() обнуляет её до письма."""
     src = inspect.getsource(scope_writer.write)
     assert '_RUN_META = ""' in src.split("_turn(task")[0]
+
+
+def test_edit_report_understands_the_english_format_name():
+    """24.09: text_report('flagship') молчал при трёх готовых парах — пайплайн зовёт «флагман»."""
+    import inspect
+    from core import edit_delta
+    src = inspect.getsource(edit_delta.reports)
+    assert '"flagship": "флагман"' in src
