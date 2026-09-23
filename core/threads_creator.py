@@ -202,6 +202,27 @@ def _capital_vy(post: str) -> str:
     return _VY_LOWER.sub(lambda m: m.group(1)[0].upper() + m.group(1)[1:], post or "")
 
 
+# СТРОКИ-БИТЫ И БЕЗ ТОЧЕК — КОДОМ (23.09.2026). Владелец переделал мини-скоуп 23.09 ровно в двух местах:
+# «структуру и точки в конце предложения». Завод собрал пост в три абзаца (48 / 259 / 147 знаков), владелец
+# поставил каждое предложение отдельной строкой и снял точки. Замер его постов в Threads (203 поста, 1034
+# абзаца): медиана абзаца — ОДНО предложение и 66 знаков, 90-й перцентиль 150; опубликованные заводские
+# посты — точка в конце строки 0 из 332 абзацев (канон канала, у ТГ его ставит линтер). Порог 140: абзац
+# из 2+ предложений длиннее него режется на предложения — у владельца такие 9% абзацев, у черновика 23.09
+# оба длинных, и разрез даёт ровно его правку.
+BEAT_MAX = 140
+_SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[А-ЯЁA-Z«\"0-9])")
+
+
+def _beats(post: str) -> str:
+    out = []
+    for para in [q.strip() for q in (post or "").split("\n\n") if q.strip()]:
+        parts = _SENT_SPLIT.split(para) if len(para) > BEAT_MAX else [para]
+        out += [q.strip() for q in parts if q.strip()]
+    # точка в конце строки — снять; многоточие, «?» и «!» — оставить
+    out = [re.sub(r"(?<![.…])\.$", "", q) for q in out]
+    return "\n\n".join(out)
+
+
 def _enforce_language(posts: list[str], kind: str, key: str, model: str) -> list[str]:
     """Дефекты языка v3 → круг автора → перепроверка кодом, до LANGUAGE_ROUNDS кругов. Сбой/не тот
     ответ → последние целые посты. Живой прогон 23.09: антитеза в финале пережила один круг (1 → 1),
@@ -354,7 +375,17 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
     posts = _enforce_language(posts, k, key, model)   # до длины: правка может удлинить пост
     posts = _enforce_length(posts, k, key, model)
-    posts = [_capital_vy(p) for p in posts]            # последним: круги правок пишут «вас» заново
+    posts = [_beats(_capital_vy(p)) for p in posts]    # последним: круги правок пишут «вас» и точки заново
+    if any(len(p) > MAX_LEN for p in posts):            # разрез добавляет переносы — перебор возможен
+        posts = [_beats(_capital_vy(p)) for p in _enforce_length(posts, k, key, model)]
+    # ФИНАЛЬНАЯ ПЕРЕПРОВЕРКА ЯЗЫКА (23.09.2026): круг сжатия длины идёт ПОСЛЕ круга языка и переписывает
+    # текст — живой прогон вернул так антитезу в заголовок («никогда не была про имя» / «Она была про…»).
+    # Нашлось — ещё один круг языка по итоговому тексту; отчёт пайплайна скажет, что осталось.
+    from core import threads_lint
+    if any(threads_lint.language(p) for p in posts):
+        _note = LAST_LANGUAGE_NOTE
+        posts = [_beats(_capital_vy(p)) for p in _enforce_language(posts, k, key, model)]
+        globals()["LAST_LANGUAGE_NOTE"] = (_note + "; после сжатия — " + LAST_LANGUAGE_NOTE).strip("; ")
     body = ("\n" + POST_SEP + "\n").join(posts)
     _save(body + (f"\n\n{GUIDE_SEP}\n{guide}" if guide else ""), src, k)
     # Журнал переработок: связь «ТГ-пост → его Threads-версия» + категория (вход петли само-обучения).

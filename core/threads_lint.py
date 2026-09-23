@@ -72,6 +72,10 @@ _NE_V_TOM = re.compile(r"\b(?:вопрос|дело|суть|проблема|с
 _SAME_WORD = re.compile(r"\b([А-ЯЁ][а-яё]{2,})\s+(?:тут\s+|здесь\s+)?не\s+[^.!?\n]{1,60}[.!?]+\s+"
                         r"(?:Настоящ\w+\s+)?(?i:\1)\b")
 _NE_V = re.compile(r"\b(?:дело|вопрос|суть|проблема|смысл)\s+(?:тут\s+|здесь\s+|уже\s+)?не\s+в\b", re.IGNORECASE)
+# Обратный порядок (прогон после строк-битов 23.09): «Псевдоним прячет имя. Он не прячет то, как Вы думаете»
+# — утверждение, затем отрицание тем же глаголом. Заголовки/финалы канала: 0 из 326.
+_REV_PAIR = re.compile(r"\b([а-яё]{3,})\s+[^.!?\n]{1,60}[.!?]+\s+(?:Он|Она|Оно|Они|Это|Но)\s+не\s+(?i:\1)\b",
+                       re.IGNORECASE)
 # Шаблон вместо текста: тот же прогон выдал мини-флагману заголовок буквально «Не X. Это Y».
 _TEMPLATE = re.compile(r"\b(?:не|это)\s+[XYХ]\b", re.IGNORECASE)
 # «не взламывают - её вычисляют»: тире + местоимение/«это». Тире без местоимения не берём — замер: «Коду
@@ -90,7 +94,7 @@ def _anti_count(t: str) -> int:
     from core import creator_tools as ct
     return (len(ct._TITLE_ANTI.findall(t)) + len(_SPLIT_ANTI.findall(t + " "))
             + len(_DASH_ANTI.findall(t)) + len(_DASH_PRON.findall(t)) + len(_NE_V_TOM.findall(t))
-            + len(_SAME_WORD.findall(t)))
+            + len(_SAME_WORD.findall(t)) + len(_REV_PAIR.findall(t)))
 
 
 def language(text: str) -> list[str]:
@@ -106,15 +110,24 @@ def language(text: str) -> list[str]:
     head = headline(t)
     paras = [p.strip() for p in t.split("\n\n") if p.strip()]
     fin = paras[-1] if len(paras) >= 2 else ""
+    # Строки-биты режут финал на две короткие строки — пара «X. Он не X» оказывается по разные стороны
+    # переноса. Короткая последняя строка — финал вместе с предыдущей.
+    if fin and len(fin) < 70 and len(paras) >= 3:
+        fin = paras[-2].rstrip(".") + ". " + fin
     if _TEMPLATE.search(t):
         out.append("⛔ ШАБЛОН ВМЕСТО ТЕКСТА («не X» / «это Y» буквами) — напиши настоящую фразу")
-    if (ct._TITLE_ANTI.search(head) or _SPLIT_ANTI.search(head + " ") or _DASH_PRON.search(head)
-            or _NE_V_TOM.search(head) or _NE_V.search(head) or _SAME_WORD.search(head)):
+    # Заголовок, разрезанный строками-битами: «…никогда не была про имя» / «Она была про то…» (прогон
+    # 23.09). Короткий заголовок проверяем вместе со следующей строкой — только парные формы.
+    head2 = (head.rstrip(".") + ". " + paras[1]) if len(paras) >= 2 and len(head) < 70 else head
+    if (ct._TITLE_ANTI.search(head) or _SPLIT_ANTI.search(head2 + " ") or _DASH_PRON.search(head)
+            or _REV_PAIR.search(head2) or _SAME_WORD.search(head2)
+            or _NE_V_TOM.search(head) or _NE_V.search(head) or _SAME_WORD.search(head)
+            or _REV_PAIR.search(head)):
         out.append("⛔ АНТИТЕЗА В ЗАГОЛОВКЕ («не X, а Y» / «это не X. Это Y»): заголовок — одно утверждение. "
                    "Спроси, было ли отрицаемое X; не было — скажи Y прямо, с фактом")
     if fin and (ct._FIN_ANTI.search(fin) or _SPLIT_ANTI.search(fin + " ") or _DASH_ANTI.search(fin)
                 or _DASH_PRON.search(fin) or _NE_V_TOM.search(fin) or _NE_V.search(fin)
-                or _SAME_WORD.search(fin)):
+                or _SAME_WORD.search(fin) or _REV_PAIR.search(fin)):
         out.append("⛔ АНТИТЕЗА В ФИНАЛЕ — конструкция вместо мысли. Финал — простое следствие обычными "
                    "словами, одно утверждение")
     n = _anti_count(t)
