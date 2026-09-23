@@ -445,6 +445,19 @@ def _topic_shortfall(verdict: str, rec: str, brief: str, today=None) -> str:
     return ""
 
 
+def _panel_shortfall(panel: dict) -> str:
+    """Бриф беден так, что судьи уже ОСТАВИЛИ тему с пометкой ⚠ (23.09.2026). Реплей гейта на брифе
+    23.09: MVRV снят как повтор #484, замена (тезис BlackRock) тоже повторяет #490 и по правилу 16.09
+    «оставляется» — то есть в канал шёл повтор, а Скаут на второй круг не ходил: причины повтора
+    понятия и «нет инструмента» _topic_shortfall не видел, они жили только в панели. Второй круг —
+    ровно для бедного брифа; тема после него будет всё равно (лучшая из найденного)."""
+    if panel.get("🧠 понятие", "").startswith("⚠"):
+        return "и выбор, и замена повторяют то, что канал уже объяснял"
+    if panel.get("🧰 инструмент", "").startswith("⚠"):
+        return "у темы нет инструмента читателю"
+    return ""
+
+
 def _wider_scan_note(verdict: str, why: str) -> str:
     """Дописка к заданию Скаута на второй круг: шире, и без того, что суд темы уже отклонил."""
     chosen, weak = topic_gate.parse_choice(verdict)
@@ -786,15 +799,18 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # всё равно реальное событие, лучшее из найденного (баг 22.07 «скребли дно одного брифа» закрыт
         # тем же кругом).
         try:
-            _why = _topic_shortfall(tg_verdict, scope_rec, verify.latest_brief())
+            _why = _topic_shortfall(tg_verdict, scope_rec, verify.latest_brief()) or _panel_shortfall(panel)
             if _why and not skip_scout:
+                for _k in ("🧠 понятие", "🧰 инструмент"):   # пометки первого круга — не про новую тему
+                    panel.pop(_k, None)
                 out(f"♻️ {_why} — гоню Скаута на второй круг шире (отклонённое не приносить), тему не "
                     "выдумываю...")
                 _run_scout(_wider_scan_note(tg_verdict, _why))
                 scope_rec, scope_weak, tg_verdict = _choose_scope_topic(
                     gkey, _recent_made_titles(), panel, out)
                 panel["♻️ второй круг"] = f"{_clip(_why, 40)} → разведка шире → новый повод"
-                _still = _topic_shortfall(tg_verdict, scope_rec, verify.latest_brief())
+                _still = (_topic_shortfall(tg_verdict, scope_rec, verify.latest_brief())
+                          or _panel_shortfall(panel))
                 if _still and scope_rec:
                     panel["⚠️ тема"] = f"и после второго круга: {_clip(_still, 40)} — взят лучший, проверь"
         except Exception:

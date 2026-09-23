@@ -53,3 +53,12 @@ def test_writer_gets_the_tool():
         _v("ИНСТРУМЕНТ: сверять цену с реализованной\n"))
     assert "гейт его не назвал" in rp._tool_note(_v(""))
     assert "_tool_note(tg_verdict)" in inspect.getsource(rp.run_cycle)
+
+
+def test_poor_brief_sends_scout_wider_instead_of_publishing_a_repeat():
+    """Реплей 23.09: и MVRV, и замена повторяли понятия канала — тема «оставлялась», Скаут не ходил."""
+    assert rp._panel_shortfall({"🧠 понятие": "⚠ и замена повторяет: #490"})
+    assert rp._panel_shortfall({"🧰 инструмент": "⚠ нет у темы, замены нет"})
+    assert rp._panel_shortfall({"🧠 понятие": "повтор → пере-выбор", "🧰 инструмент": "сверять цену"}) == ""
+    src = inspect.getsource(rp.run_cycle)
+    assert "_topic_shortfall(tg_verdict, scope_rec, verify.latest_brief()) or _panel_shortfall(panel)" in src
