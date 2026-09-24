@@ -26,7 +26,9 @@ from datetime import date
 from core import config, content_plan, cost, llm, runmode, threads_distill_journal, threads_source
 
 AGENT_NAME = "creator"                    # голос автора тот же — переиспользуем персону Криейтера
-THREADS_MODEL = "claude-sonnet-5"        # короткий формат — Opus избыточен (как у scope); /test → Haiku
+THREADS_MODEL = "claude-opus-4-8"        # решение владельца 24.09: Threads пишет Opus, как ТГ-флагман — «лучше и
+# стабильней пишет». На Sonnet каждое правило свода закрывало одну дыру, писатель находил следующую (тред ETF:
+# кирпичи, выпавший узел). Круги правки на той же модели — иначе они переписывают голос обратно. /test → Haiku
 THREADS_THINKING = None                   # короткому дистилляту глубокое мышление не нужно (дёшево)
 
 THREADS_DRAFTS_DIR = config.ROOT / "memory" / "threads_drafts"  # ОТДЕЛЬНО от ТГ-драфтов (изоляция)
