@@ -140,3 +140,16 @@ def test_meta_type_wins_over_the_fallback(tmp_path, monkeypatch):
 def test_pipeline_passes_the_picked_type_to_the_journal():
     src = inspect.getsource(RP.run_cycle)
     assert 'service=meas.get("тип услуги", "")' in src
+
+
+def test_flagship_concept_judge_sees_a_year(monkeypatch):
+    """24.09.2026: флагман повторил #446 от 08.07 — судья понятия смотрел 8 недель, пост был 78 дней
+    назад. Флагман пишет вечные темы: окно судьи у него — год, и оно реально доезжает до сводки."""
+    from core import analytics, topic_gate
+    src = open("run_pipeline.py", encoding="utf-8").read()
+    assert "weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS" in src, "флагман зовёт судью с окном скоупа (8 нед)"
+    assert topic_gate.FLAGSHIP_REPEAT_WEEKS >= 26, "окно короче полугода пропустит вечную тему банка"
+    seen = {}
+    monkeypatch.setattr(analytics, "topics_digest", lambda weeks=None, **_: seen.setdefault("w", weeks) and "")
+    topic_gate.concept_repeat("тема", weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS)
+    assert seen["w"] == topic_gate.FLAGSHIP_REPEAT_WEEKS

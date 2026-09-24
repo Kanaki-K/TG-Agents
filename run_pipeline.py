@@ -878,7 +878,8 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
             for _round in (1, 2):
                 probe = f"{theme} — {theme_angle}" if theme_angle else theme
                 dup = (topic_gate.already_written(probe, _recent)
-                       or topic_gate.concept_repeat(probe, api_key=_fkey))
+                       or topic_gate.concept_repeat(probe, api_key=_fkey,
+                                                    weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS))
                 if not dup:
                     break
                 out(f"🔁 Повтор отклонён кодом: {dup}")
