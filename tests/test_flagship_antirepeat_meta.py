@@ -157,3 +157,27 @@ def test_flagship_concept_judge_sees_a_year(monkeypatch):
     monkeypatch.setattr(analytics, "topics_digest", lambda weeks=None, **_: seen.setdefault("w", weeks) and "")
     topic_gate.concept_repeat("тема", weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS)
     assert seen["w"] == topic_gate.FLAGSHIP_REPEAT_WEEKS
+
+
+# ── Цена без потери качества (24.09.2026) ───────────────────────────────────────────────────────
+
+def test_all_creator_rounds_share_one_toolset():
+    """Кэш свода держится на префиксе «инструменты + свод». Круг меты шёл без веб-поиска и каждый
+    прогон заново писал ~60 тыс. токенов Opus ($0.38). Один набор на всех — кэш общий."""
+    for fn in (RP._run_creator_fix, RP._run_creator_blockers, RP._run_creator_meta):
+        src = inspect.getsource(fn)
+        assert "_creator_toolset(cfg)" in src, f"{fn.__name__} собирает инструменты сам — кэш разъедется"
+        assert "list(creator_tools.TOOLS)" not in src
+
+
+def test_fact_fix_carries_the_meta():
+    """Правка фактов раньше получала пост БЕЗ меты и с приказом «без меты» — мета терялась всегда."""
+    from core import creator_bot
+    src = inspect.getsource(RP._run_creator_fix)
+    assert 'latest_draft("flagship")' in src and '"[[SPLIT]]" in draft' in src
+    assert "ДОСЛОВНО" in creator_bot.FIX_FACTS and "[[УЗЕЛ]]" in creator_bot.FIX_FACTS
+
+
+def test_writer_is_asked_for_meta_inside_save_draft():
+    from core import creator_bot
+    assert "МЕТА (§7.9) — ВНУТРИ save_draft" in creator_bot.COMMANDS["post"]

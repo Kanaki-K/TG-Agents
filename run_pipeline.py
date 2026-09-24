@@ -473,14 +473,31 @@ def _wider_scan_note(verdict: str, why: str) -> str:
             f"УЖЕ ОТКЛОНЕНО — не приноси снова:\n{listed}")
 
 
-def _run_creator_fix(post: str, verdict: str) -> str:
-    """Криейтор САМ правит факты по вердикту 2FA (конфликт→верное, неподтверждённое→убрать/смягчить)."""
-    cfg, model, key, thinking = _agent("creator")
+def _creator_toolset(cfg: dict) -> list:
+    """ОДИН набор инструментов на все круги Криейтора после писателя (правка/гейт/мета).
+
+    ЗАЧЕМ (замер расходов 24.09.2026). Кэш промпта держится на префиксе «инструменты + свод», и
+    ЛЮБОЕ отличие в инструментах = другой префикс = свод Криейтора (~62 тыс. токенов) пишется в кэш
+    ЗАНОВО по цене Opus. Правка фактов шла с веб-поиском и читала кэш писателя за $0.03, а круг меты
+    и круг гейта — без него и каждый раз платили $0.38 за повторную запись того же свода. Набор
+    одинаковый — качество не меняется ни на слово, меняется только цена."""
     tools = list(creator_tools.TOOLS)
     if cfg.get("web_search"):
         tools.append(creator_bot.WEB_SEARCH_TOOL)
+    return tools
+
+
+def _run_creator_fix(post: str, verdict: str) -> str:
+    """Криейтор САМ правит факты по вердикту 2FA (конфликт→верное, неподтверждённое→убрать/смягчить)."""
+    cfg, model, key, thinking = _agent("creator")
+    tools = _creator_toolset(cfg)
     cost.set_context("creator-fix")
-    user = creator_bot.FIX_FACTS.format(post=post.split("[[SPLIT]]")[0], verdict=verdict)
+    # Мету правке отдаём ВМЕСТЕ с постом (24.09): раньше её отрезали, правка сохраняла драфт без меты,
+    # и пайплайн гонял отдельный круг меты на Opus (~$0.50) на КАЖДОМ прогоне. `post` здесь — ответ
+    # писателя в чат, мета живёт в сохранённом драфте, поэтому берём драфт, если мета в нём есть.
+    draft = verify.latest_draft("flagship") or ""
+    src = draft if "[[SPLIT]]" in draft else post
+    user = creator_bot.FIX_FACTS.format(post=src, verdict=verdict)
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
                         tools, creator_tools.dispatch, key, thinking)
     return text or post
@@ -498,7 +515,7 @@ def _run_creator_blockers(post: str, defects: list) -> tuple:
     user = creator_bot.FIX_BLOCKERS.format(defects="\n".join(f"  • {d}" for d in defects),
                                            post=post or verify.latest_draft("flagship") or "")
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
-                        list(creator_tools.TOOLS), creator_tools.dispatch, key, thinking)
+                        _creator_toolset(cfg), creator_tools.dispatch, key, thinking)
     saved = verify.latest_draft("flagship")
     if saved and _latest_draft_mtime() != before:
         return saved, True
@@ -514,7 +531,7 @@ def _run_creator_meta(post: str, defects: list) -> str:
     cost.set_context("creator-meta")
     user = creator_bot.FIX_META.format(defects="; ".join(defects), post=(post or "").split("[[SPLIT]]")[0])
     text, _ = _threaded(llm.reply, model, creator_bot._system(), [], user,
-                        list(creator_tools.TOOLS), creator_tools.dispatch, key, thinking)
+                        _creator_toolset(cfg), creator_tools.dispatch, key, thinking)
     return text or post
 
 
