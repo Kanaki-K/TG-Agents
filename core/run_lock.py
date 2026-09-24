@@ -39,8 +39,37 @@ LOCK = config.ROOT / "data" / "pipeline.lock"
 STALE_SECONDS = 3600
 
 
+def _alive_windows(pid: int) -> bool:
+    """Windows: спросить систему напрямую — открыть процесс и посмотреть, не завершился ли он.
+
+    ⚠️ 24.09.2026, живой случай. На Windows `os.kill(pid, 0)` — НЕ проверка: 0 там = CTRL_C_EVENT,
+    и Python шлёт Ctrl+C группе процессов. Для мёртвого pid это падает с OSError (не
+    ProcessLookupError), общий except отвечал «жив» — и замок закрытого прогона держался час.
+    А для живого pid «проверка» слала бы ему Ctrl+C. Поэтому на Windows os.kill не зовём вообще."""
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE, ERROR_ACCESS_DENIED = 0x1000, 259, 5
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:                    # нет такого процесса — или он есть, но закрыт от нас (тогда жив)
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True               # не смогли спросить → считаем живым (осторожнее)
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _alive(pid: int) -> bool:
     """Жив ли процесс с этим pid НА ЭТОЙ машине. Проверять чужой хост нельзя — см. шапку."""
+    if pid <= 0:                      # битый замок без pid: os.kill(0) проверил бы НАШУ группу
+        return False
+    if os.name == "nt":
+        try:
+            return _alive_windows(pid)
+        except Exception:             # noqa: BLE001 — не смогли проверить → считаем живым
+            return True
     try:
         os.kill(pid, 0)               # сигнал 0 ничего не делает, только проверяет существование
     except ProcessLookupError:

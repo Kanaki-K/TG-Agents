@@ -109,3 +109,21 @@ def test_busy_message_names_who_and_when(lock):
     _write(lock)
     msg = run_lock.busy_message()
     assert "скоуп" in msg and "19:33" in msg
+
+
+# ── Windows: os.kill(pid, 0) там не проверка, а Ctrl+C (24.09.2026) ───────────────────────────────
+
+def test_windows_never_calls_os_kill(monkeypatch):
+    """На Windows сигнал 0 = CTRL_C_EVENT: для мёртвого pid os.kill падал OSError, общий except
+    отвечал «жив», и замок закрытого прогона держал конвейер час. Живому — слал бы Ctrl+C."""
+    def boom(*_a):
+        raise AssertionError("os.kill на Windows — это Ctrl+C, а не проверка")
+    monkeypatch.setattr(run_lock.os, "kill", boom)
+    monkeypatch.setattr(run_lock.os, "name", "nt")
+    monkeypatch.setattr(run_lock, "_alive_windows", lambda pid: pid == 42)
+    assert run_lock._alive(42) is True
+    assert run_lock._alive(999_999) is False
+
+
+def test_zero_pid_is_dead():
+    assert run_lock._alive(0) is False
