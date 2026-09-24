@@ -65,10 +65,14 @@ def test_flagship_has_a_code_gate_not_a_request():
     assert "topic_gate.concept_repeat(probe" in src, "нет судьи понятия"
 
 
-def test_second_repeat_drops_the_angle():
-    """Повод повторился дважды — пишем от темы: флагману новостной угол не обязателен."""
+def test_repeat_repicks_the_theme_twice_before_dropping_the_angle():
+    """24.09: второй круг снимал только угол и писал ТУ ЖЕ тему — при повторе самой темы банка это
+    дубль. Теперь два пере-выбора темы с накопленным запретом (включая саму тему), угол — лишь на 3-м."""
     src = inspect.getsource(RP.run_cycle)
-    assert 'theme_angle = ""' in src.split("for _round in (1, 2):")[1][:1400]
+    loop = src.split("for _round in (1, 2, 3):")[1][:2200]
+    assert "if _round < 3:" in loop and "_pick_timely_theme(_recent, forbid=" in loop
+    assert 'f"тема «{theme}»' in loop, "в запрет не попадает сама тема — пикер вернёт её же"
+    assert loop.index("if _round < 3:") < loop.index('theme_angle = ""'), "угол снимается раньше пере-выбора"
 
 
 def test_picker_takes_recent_and_forbid():

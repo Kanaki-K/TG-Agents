@@ -875,23 +875,29 @@ def run_cycle(scope: bool = False, skip_scout: bool = False, draft_only: bool = 
         # Фейл-открыто: сбой ключа/сети не должен стоить прогона — правило «пост обязан быть» (22.07).
         try:
             _fkey = config.agent_api_key(config.load_agent("creator"))
-            for _round in (1, 2):
+            # 24.09.2026: второй круг раньше снимал только УГОЛ и писал ту же тему. Для повтора, в котором
+            # повторяется сама тема банка (ремитансы = #446), это ровно дубль. Теперь два пере-выбора
+            # ТЕМЫ с накопленным запретом (в запрет идёт и сама тема, не только причина), и лишь третий
+            # повтор подряд — последнее средство: снимаем угол и громко предупреждаем владельца.
+            _forbid: list = []
+            for _round in (1, 2, 3):
                 probe = f"{theme} — {theme_angle}" if theme_angle else theme
                 dup = (topic_gate.already_written(probe, _recent)
                        or topic_gate.concept_repeat(probe, api_key=_fkey,
                                                     weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS))
                 if not dup:
                     break
-                out(f"🔁 Повтор отклонён кодом: {dup}")
-                if _round == 1:
-                    out("   Пере-выбираю тему и угол — этот повод больше не предлагать.\n")
-                    theme, theme_why, meas, theme_angle = _pick_timely_theme(_recent, forbid=dup)
-                    panel["🔁 повтор"] = _clip(dup, 52) + " → пере-выбор"
+                out(f"🔁 Повтор отклонён кодом: «{_clip(theme, 60)}» — {dup}")
+                if _round < 3:
+                    _forbid.append(f"тема «{theme}» — {dup}")
+                    out(f"   Пере-выбираю ДРУГУЮ тему (круг {_round + 1} из 3) — эту и её повод не предлагать.\n")
+                    theme, theme_why, meas, theme_angle = _pick_timely_theme(_recent, forbid="; ".join(_forbid))
+                    panel["🔁 повтор"] = _clip(dup, 52) + f" → пере-выбор ×{_round}"
                 else:
-                    out("   Повтор и со второго раза — снимаю УГОЛ из брифа и пишу от самой темы "
-                        "(флагману свежий повод не обязателен).\n")
+                    out("   ⚠️ Повтор и с третьего выбора — снимаю УГОЛ и пишу от самой темы. "
+                        "ПРОВЕРЬ ДРАФТ на дубль перед отложкой.\n")
                     theme_angle = ""
-                    panel["🔁 повтор"] = _clip(dup, 44) + " → угол снят, пишу от темы"
+                    panel["🔁 повтор"] = _clip(dup, 40) + " → ⚠️ 3-й раз, угол снят, проверь"
         except Exception:
             logging.exception("Анти-повтор флагмана упал — пишу выбранную тему (сбой не роняет прогон)")
         panel["🧭 тема"] = f"«{theme}»  ← {theme_why}"
