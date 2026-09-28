@@ -40,3 +40,17 @@ def test_reselect_catches_own_rejected_topic():
     rej = ["«Glassnode: альты 4x BTC объём» — тема уже закрыта", "«Vitalik: Hegota последний форк Ethereum»"]
     assert rp._returned_rejected("Спот-объём альтов 4x — Glassnode предупреждает", rej)
     assert not rp._returned_rejected("Ethereum стейкинг: ether.fi уходит от EigenLayer", rej)
+
+
+def test_new_lesson_lands_before_graduated_section_and_reaches_context(tmp_path):
+    """28.09: урок дописывался в КОНЕЦ файла — внутрь «📦 Выпущено», которая в контекст не грузится.
+    «Урок записан — учту» при этом звучало, а писатель его не видел."""
+    f = tmp_path / "scope_lessons.md"
+    f.write_text("# Уроки\n\n- (2026-07-01) СТАРОЕ ПРАВИЛО про заголовок и финал поста\n\n"
+                 f"{ct.GRADUATED_MARK} (в контекст не грузится)\n\n- (2026-06-01) выпущенное\n",
+                 encoding="utf-8")
+    rule = "СВЕЖИЙ ТЕСТОВЫЙ УРОК: абзац про банку огурцов держи одним ходом, zzqx"
+    ct._record_lesson({"lesson": rule, "confirm_new": True}, f)
+    assert "zzqx" in ct.load_lessons_for_context(f)
+    text = f.read_text(encoding="utf-8")
+    assert text.index("zzqx") < text.index(ct.GRADUATED_MARK)

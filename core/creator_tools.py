@@ -2740,8 +2740,18 @@ def _record_lesson(args: dict, lessons_path: Path = LESSONS) -> str:
             encoding="utf-8", newline="\n")
     ev = ev_raw
     line = f"- ({date.today().isoformat()}) {lesson}" + (f" — _из правки: {ev}_" if ev else "") + "\n"
-    with open(lessons_path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(line)
+    # НОВЫЙ УРОК — ПЕРЕД СЕКЦИЕЙ «ВЫПУЩЕНО», НЕ В КОНЕЦ ФАЙЛА (28.09.2026). В контекст грузится только
+    # то, что стоит ДО GRADUATED_MARK (load_lessons_for_context). С тех пор как у файлов появилась эта
+    # секция, дозапись в конец клала урок прямо в неё: «Урок записан — учту в следующих постах», а
+    # писатель его не видел. Нашлось по уроку скоупа 28.09 — размер активных уроков после записи не вырос.
+    text = lessons_path.read_text(encoding="utf-8")
+    if GRADUATED_MARK in text:
+        head, mark, tail = text.partition(GRADUATED_MARK)
+        head = head.rstrip("\n") + "\n" + line + "\n"
+        lessons_path.write_text(head + mark + tail, encoding="utf-8", newline="\n")
+    else:
+        with open(lessons_path, "a", encoding="utf-8", newline="\n") as f:
+            f.write(line)
     return (f"Урок записан в {rel} — учту в следующих постах. "
             "Отчитайся владельцу одной строкой, что усвоил.")
 
