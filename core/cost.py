@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 RATES = {
+    "claude-opus-5": (5.0, 25.0),        # скоуп-писатель; раньше шёл по _DEFAULT — цена та же, строка для ясности (28.09)
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
