@@ -569,6 +569,23 @@ _SELF_REJECT = re.compile(
     re.I)
 
 
+# ЧУЖОЙ БРЕНД НА ПОЛОТНЕ (28.09.2026). Пост про метрику Glassnode, снятых фото в пуле нет — круг Б
+# взял «Логотип KUCOIN на чёрном фоне со слоганом»: KuCoin — сайт, где лежала перепечатка, а не герой
+# повода. Владелец: «картинка - кукоин. Нахуй не подходящая абсолютно». Просьба в вопросе судье уже
+# была («бренда из повода») и не сработала — сверяем кодом: латинское имя на кадре обязано быть в посте.
+_BRAND_WORD = re.compile(r"\b[A-Za-z][A-Za-z0-9.\-]{2,}\b")
+_BRAND_STOP = {"logo", "the", "and", "trade", "trust", "first", "next", "crypto", "news", "app", "web"}
+
+
+def _foreign_brand(label: str, text: str) -> bool:
+    """True — на полотне назван бренд, которого нет ни в поводе, ни в посте. Имени в ярлыке нет → False."""
+    names = [w for w in _BRAND_WORD.findall(label or "") if w.lower() not in _BRAND_STOP]
+    if not names:
+        return False
+    low = (text or "").lower()
+    return not any(n.lower() in low for n in names)
+
+
 def _answer_index(ans: str, n: int) -> tuple:
     """Ответ судьи «НОМЕР | ярлык» → (индекс, ярлык). Номер берём из ПЕРВОГО поля до «|»: ярлык
     («лого Solana 2.0») тоже содержит цифры, и поиск по всей строке однажды выберет их."""
@@ -683,8 +700,13 @@ def _vision_pick(images: list, post_body: str, subject: str, key: str, routes: d
             "оформление САМОГО бренда, а не картинка издания про него.\n"
             "НЕ ГОДИТСЯ: 3D-рендер логотипа в пустом пространстве, изометрическая иконка, неоновая "
             "абстракция, лого на белом фоне, коллаж издания, маскот.\n"
+            "Бренд — это ГЕРОЙ повода из текста поста, а НЕ биржа, медиа или сайт, где нашлась статья: "
+            "логотип площадки-публикатора обложкой не бывает.\n"
             "Нашёл — назови НОМЕР. Не нашёл — 0. ОТВЕТ строго: «НОМЕР | что на кадре».")
         idx, label = _answer_index(brand, len(images))
+        if idx and _foreign_brand(label, f"{subject}\n{post_body}"):
+            logging.info("scope vision: полотно «%s» — бренд не из поста (сайт-публикатор?) — отклоняю", label[:60])
+            idx = 0
         if idx and not _SELF_REJECT.search(label):
             LAST_COVER_NOTE = "фирменное полотно бренда"
             return images[idx - 1], label

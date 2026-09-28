@@ -348,7 +348,7 @@ def test_pipeline_repicks_instead_of_advising():
     """Совет тут не годится: этот проект игнорирует советы с 31.07. Нужен пере-выбор с запретом."""
     src = inspect.getsource(rp._choose_scope_topic)
     assert "concept_repeat" in src
-    assert "forbid_why=concept" in src, "вердикт судьи обязан стать ЗАПРЕТОМ на пере-выборе"
+    assert "_why = concept" in src and "forbid_why=_why" in src, "вердикт судьи обязан стать ЗАПРЕТОМ на пере-выборе"
     assert 'panel["🧠 понятие"]' in src
 
 

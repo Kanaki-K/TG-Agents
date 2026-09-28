@@ -602,7 +602,7 @@ def test_confession_is_zero_on_any_round(monkeypatch, tmp_path):
     imgs = _fake_vision_seq(monkeypatch, tmp_path,
                             ["1 | ИИ-рисунок кита, по стоп-листу это ИИ-генерация",
                              "3 | вордмарк Bitmine на чёрном"])
-    got = sw._vision_pick(imgs, "тело", "Bitcoin", "key")
+    got = sw._vision_pick(imgs, "тело", "Bitmine", "key")   # полотно бренда = герой повода (28.09)
     assert got is not None and got[0] == imgs[2]
     assert sw.LAST_COVER_NOTE == "фирменное полотно бренда"
 

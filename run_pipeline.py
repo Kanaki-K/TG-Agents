@@ -251,6 +251,16 @@ def _run_scope(avoid: str = "", recommend: str = "", weak: str = "", prior: str 
     return text or ""
 
 
+def _returned_rejected(rec: str, rejected: list) -> str:
+    """Повод rec совпадает с одним из отклонённых гейтом раньше (по именам собственным)? Строка или ''."""
+    broad = {"etf", "sec", "usdc", "usdt", "ethereum", "eth", "solana", "sol", "bitcoin", "fed", "фрс"}
+    want = topic_gate._entities(rec or "") - broad     # общие слова рынка не делают поводы одним поводом
+    for r in rejected or []:
+        if want & (topic_gate._entities(r) - broad):
+            return r
+    return ""
+
+
 def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str, str, str]:
     """Суд темы scope + три кодовых предохранителя, каждый с ОДНИМ пере-выбором под запретом.
 
@@ -319,8 +329,22 @@ def _choose_scope_topic(gkey: str, recent: list, panel: dict, out) -> tuple[str,
         out(f"🧠 Выбор отклонён: {concept}. Канал это уже объяснял — третий заход на один механизм "
             "читатель считает повтором, даже когда повод свежий. Пере-выбираю.")
         _rec0, _weak0, _verdict0 = rec, weak, verdict      # запоминаем ДО запрета — см. ниже
+        # СВОИ ОТКАЗЫ ПЕРВОГО ПРОХОДА ТОЖЕ ЗАПРЕЩЕНЫ (28.09.2026). Гейт в первом проходе сам отклонил
+        # Glassnode как повтор («психологию рынка уже разбирали в #484, #493, #500»), а при пере-выборе
+        # видел только запрет на ПЕРВУЮ тему — и взял Glassnode, пометив её 🆕. Пост вышел на 0/10.
+        _rej0 = topic_gate.parse_rejected(verdict)
+        _why = concept + ("; ТЫ САМ УЖЕ ОТКЛОНИЛ в первом проходе (не возвращай): " + "; ".join(_rej0)
+                          if _rej0 else "")
         rec, weak, verdict = topic_gate.select(
-            brief, api_key=gkey, recent=recent, forbid=(rec or concept), forbid_why=concept)
+            brief, api_key=gkey, recent=recent, forbid=(rec or concept), forbid_why=_why)
+        _back = _returned_rejected(rec, _rej0)
+        if rec and _back:
+            out(f"🔁 Пере-выбор вернул повод, который гейт сам отклонил в первом проходе: «{_clip(_back, 70)}». "
+                "Выбираю ещё раз.")
+            rec, weak, verdict = topic_gate.select(
+                brief, api_key=gkey, recent=recent, forbid=(rec + "; " + _rec0), forbid_why=_why)
+            if _returned_rejected(rec, _rej0):
+                rec = ""          # и третий раз то же — считаем, что годного не осталось (откат ниже)
         out("🎯 [Выбор темы] после запрета повтора понятия:\n" + str(verdict) + "\n")
         # ⚠️ ОТКАТ, ЕСЛИ ЗАМЕНА ХУЖЕ ОТСУТСТВИЯ (16.09). Первый же живой прогон с этим судьёй кончился
         # НИЧЕМ: судья снял годную тему, пере-выбор упёрся в исчерпанный бриф, конвейер ушёл на второй
