@@ -1,0 +1,59 @@
+"""Аудит 29.09.2026: молчаливые дыры «ответ есть — эффекта нет»."""
+import inspect
+
+import run_pipeline as rp
+from core import creator_bot, verify
+
+
+# ── Сбой фактчека ≠ «чисто» ─────────────────────────────────────────────────────────────────────
+
+def test_failed_verdict_is_recognised():
+    assert verify.failed("(фактчек не удался: 529 overloaded)")
+    assert verify.failed("(пусто)") and verify.failed("")
+    assert not verify.failed("ИТОГ: 5✅ / 0⚠️ / 0❓\nСТАТУС: ЧИСТО")
+
+
+def test_verify_post_records_failure(monkeypatch):
+    verify.reset_failures()
+    def boom(*a, **k):
+        raise RuntimeError("529 overloaded")
+    monkeypatch.setattr(verify.llm, "reply", boom)
+    v = verify.verify_post("пост", "", api_key="k", web=True)
+    assert verify.failed(v) and verify.FAILURES and "529" in verify.FAILURES[0]
+
+
+def test_schedule_does_not_say_clean_on_failure(monkeypatch):
+    monkeypatch.setattr(creator_bot.runmode, "get", lambda: {"mode": "main"})
+    monkeypatch.setattr(creator_bot, "_run_2fa", lambda: ("(фактчек не удался: 401)", False))
+    called = []
+    monkeypatch.setattr(creator_bot.creator_tools, "dispatch", lambda *a, **k: called.append(a) or "ok")
+    out = creator_bot._schedule()
+    assert "НЕ отработал" in out and not called, "при сбое 2FA пост ушёл в отложку с «чисто»"
+
+
+def test_pipeline_panel_overrides_clean_on_failure():
+    src = inspect.getsource(rp.run_cycle)
+    assert "verify.reset_failures()" in src and "if verify.FAILURES:" in src
+
+
+# ── Гигиена Threads не висит на выключенном автопилоте ─────────────────────────────────────────
+
+def test_manual_run_does_threads_hygiene():
+    assert "_threads_daily_hygiene()" in inspect.getsource(rp.main)
+
+
+def test_token_expiry_alert(monkeypatch):
+    import time
+    import run_autopilot as ra
+    from connectors.threads import auth
+    sent = []
+    monkeypatch.setattr(auth, "load_token", lambda: {"expires_at": time.time() + 3 * 86400})
+    monkeypatch.setattr(ra.schedule, "warned_today", lambda k: False)
+    monkeypatch.setattr(ra.schedule, "mark_warned", lambda k: None)
+    monkeypatch.setattr(ra.bot_alert, "notify_owner", lambda t: sent.append(t))
+    ra._threads_token_expiry_alert()
+    assert sent and "истекает через 3" in sent[0]
+    sent.clear()
+    monkeypatch.setattr(auth, "load_token", lambda: {"expires_at": time.time() + 40 * 86400})
+    ra._threads_token_expiry_alert()
+    assert not sent

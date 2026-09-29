@@ -264,6 +264,33 @@ def _threads_token_keepalive() -> None:
         auth.valid_token()                            # внутри: продлит, если пора; иначе вернёт как есть
     except Exception:  # noqa: BLE001 — фоновая гигиена не роняет прогон
         log.warning("[автопилот] не смог проверить срок токена Threads", exc_info=True)
+    _threads_token_expiry_alert()
+
+
+TOKEN_WARN_DAYS = 10
+
+
+def _threads_token_expiry_alert() -> None:
+    """Токену Threads осталось меньше TOKEN_WARN_DAYS дней — сказать владельцу в Telegram, раз в сутки.
+
+    ЗАЧЕМ (аудит 29.09.2026). Продление могло не случиться по любой причине — закрытая сеть, сбой,
+    простой, — а узнавали мы об этом, когда токен уже умер (31.08: OAuth руками). Читаем срок с диска,
+    сети не нужно, поэтому предупреждение работает и при закрытом стоп-кране."""
+    try:
+        import time as _t
+        from connectors.threads import auth
+        tok = auth.load_token() or {}
+        exp = float(tok.get("expires_at") or 0)
+        if not exp:
+            return
+        left = (exp - _t.time()) / 86400
+        if left < TOKEN_WARN_DAYS and not schedule.warned_today("threads-token-expiry"):
+            schedule.mark_warned("threads-token-expiry")
+            bot_alert.notify_owner(
+                f"⚠️ Токен Threads истекает через {max(left, 0):.0f} дн. Продление не сработало — открой сеть "
+                "Threads (_guard.unlock) и запусти любой прогон, или обнови токен через OAuth, пока он жив.")
+    except Exception:  # noqa: BLE001
+        log.warning("[автопилот] не смог проверить срок токена Threads с диска", exc_info=True)
 
 
 def _threads_followers_daily() -> None:

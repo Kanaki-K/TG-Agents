@@ -340,6 +340,23 @@ ATTRIBUTION_NOTE = (
 )
 
 
+# СБОЙ ФАКТЧЕКА ≠ «ЧИСТО» (аудит 29.09.2026). При исключении (429/529/401, нет кредитов) или пустом
+# ответе verify_post отдаёт строку-заглушку, has_issues на ней — False, и панель писала «чисто — цифры
+# сверены с реальностью», а /schedule — «факты чисто». Красная линия канала при сбое показывала зелёный.
+# Пост по-прежнему не блокируем (fail-open), но сбой обязан быть виден: конвейер читает FAILURES.
+FAILURES: list = []
+
+
+def reset_failures() -> None:
+    FAILURES.clear()
+
+
+def failed(verdict: str) -> bool:
+    """Вердикт — не результат сверки, а заглушка сбоя (исключение или пустой ответ)."""
+    v = (verdict or "").strip()
+    return not v or v == "(пусто)" or v.startswith("(фактчек не удался")
+
+
 def has_issues(verdict: str) -> bool:
     """Есть ли КОНФЛИКТ (⚠️), требующий авто-правки. ❓ «не прослеживается» — НЕ блокирует
     (это флаг владельцу: он видит его в «Отложенных»; авто-правка не должна вырезать валидные числа).
@@ -735,6 +752,9 @@ def verify_post(post: str, brief: str = "", api_key: str | None = None, model: s
         # тут раздувал ВЫХОДНЫЕ токены — самую дорогую статью verify (~55% цены) — не добавляя точности.
         text, _ = llm.reply(mdl, VERIFIER_SYSTEM, [], user, [web_tool, market_tools.PRICE_TOOL],
                             lambda n, a: market_tools.handle(n, a) or "", api_key, None)
+        if not (text or "").strip():
+            FAILURES.append("пустой ответ")
         return (text or "(пусто)").strip()
     except Exception as e:  # noqa: BLE001 — фактчек не должен ронять конвейер
+        FAILURES.append(str(e)[:120])
         return f"(фактчек не удался: {e})"
