@@ -21,6 +21,7 @@ from __future__ import annotations
 import inspect
 
 from core import creator_tools as ct, llm, scope_writer as sw, topic_gate as tg
+from tests._realdata import needs_memory
 
 
 # ── модель писателя ─────────────────────────────────────────────────────────────────────────────
@@ -118,6 +119,7 @@ def test_contract_flags_read_the_last_occurrence():
     assert not tg.is_offbrand(verdict)
 
 
+@needs_memory
 def test_paragraph_aim_matches_the_measurement():
     """Код говорил 120, свод — «~124 знака» по замеру 17 принятых постов. Теперь одно число."""
     assert ct.SCOPE_PARA_AIM == 124

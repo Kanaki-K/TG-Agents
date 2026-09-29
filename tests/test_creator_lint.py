@@ -2,6 +2,7 @@
 import pytest
 
 from core import creator_tools
+from tests._realdata import needs_memory
 
 _FOOT = "🖥 [Канал](https://t.me/x) | ▶️ [Медиа](https://linktr.ee/y)"
 
@@ -452,6 +453,7 @@ def test_post_at_the_cap_is_advised_not_amputated():
 
 # --- ЭТАЛОН = ПРИЁМ, А НЕ СТРОКА: копия из мануала/банка/своего поста (владелец 03.08) ---
 
+@needs_memory
 def test_flags_finale_copied_from_manual_bank():
     # «Деньги меняют убеждения очень быстро» лежит в scope_manual §4.5 как ПРИМЕР приёма «афоризм»
     # (и была финалом поста про CLARITY 15.07). 03.08 машина взяла её дословно — линтер обязан вернуть.

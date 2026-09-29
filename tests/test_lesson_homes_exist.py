@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 
 from core import config
+from tests._realdata import needs_memory
 
 LESSONS = config.ROOT / "memory" / "scope_lessons.md"
 MANUAL = config.ROOT / "memory" / "scope_manual.md"
@@ -54,11 +55,13 @@ def _homes() -> list[str]:
     return [m.group(1).strip() for m in _HOME_RE.finditer(_read(LESSONS))]
 
 
+@needs_memory
 def test_lessons_file_declares_homes():
     """Сам формат «⟶ дом: …» должен быть жив — иначе тест молча проверяет пустоту."""
     assert _homes(), "в scope_lessons.md не осталось ни одной пометки «дом:» — страж ослеп"
 
 
+@needs_memory
 def test_every_declared_section_home_exists():
     """Дом вида «§1.5» обязан быть разделом свода."""
     manual = _read(MANUAL)

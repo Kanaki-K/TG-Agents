@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 from core import threads_creator
+from tests._realdata import needs_memory
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,6 +66,7 @@ def test_threads_formats_do_not_share_rule_files():
     assert (flagship | scope) <= THREADS_ONLY, "неизвестный файл в реестре форматов Threads"
 
 
+@needs_memory
 def test_threads_format_files_exist():
     # Свод может быть ПУСТЫМ (мануал ждёт правил владельца), но файл обязан существовать: иначе
     # ветка молча поехала бы на «(эталонов пока нет)» и никто бы не заметил опечатку в пути.

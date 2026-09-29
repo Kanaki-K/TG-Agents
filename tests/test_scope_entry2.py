@@ -16,6 +16,7 @@ import inspect
 
 import run_pipeline as rp
 from core import scope_writer, topic_gate as tg
+from tests._realdata import needs_memory
 
 BRIEF = "## Направление 1 [Веб]\nОтток ETF\n\n## Направление 2 [X]\nСтоп-лоссы и карты ликвидности\n"
 
@@ -93,6 +94,7 @@ def test_freshness_block_is_scoped_to_entry_1():
     assert "на входе 2 не применяется" in tg._SYSTEM
 
 
+@needs_memory
 def test_manual_has_both_entries_and_the_history_bone():
     from core import config
     manual = (config.ROOT / "memory" / "scope_manual.md").read_text(encoding="utf-8")

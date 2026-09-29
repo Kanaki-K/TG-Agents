@@ -16,7 +16,7 @@ import inspect
 
 import run_pipeline as rp
 from core import creator_tools as ct, scope_writer
-from tests._realdata import load_real
+from tests._realdata import load_real, needs_memory
 
 BAD = """**📉 Спрос, который развернулся за сутки на одном заголовке**
 
@@ -185,6 +185,7 @@ def test_no_false_hits_on_accepted_scopes():
             f"ложное срабатывание на принятом посте #{p['id']}"
 
 
+@needs_memory
 def test_rule_lives_in_brand_and_manual_too():
     """Линтер ловит после письма; гейт должен отсекать ДО — значит правило нужно и в сводах."""
     from core import config

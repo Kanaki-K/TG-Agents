@@ -11,6 +11,7 @@ import json
 
 from core import cover_variety as cv
 from core import creator_tools
+from tests._realdata import needs_memory
 
 
 BANK = """# Банк
@@ -56,6 +57,7 @@ def test_load_shots_missing_file_is_soft(tmp_path):
     assert cv.load_shots(tmp_path / "нет-такого.md") == []  # без банка обложка всё равно рисуется
 
 
+@needs_memory
 def test_real_bank_is_big_enough_for_veto():
     """Боевой банк обязан быть ≥ OFFER*(SHOT_WINDOW+1): иначе вето нечем исполнять и схемы вернутся
     раньше окна. Сторож на случай, если банк проредят при правке."""
@@ -197,12 +199,14 @@ def test_prompt_appends_blocks_when_template_has_no_markers():
     assert text.endswith("БЛОК")  # анти-повтор не теряется, даже если владелец переписал шаблон
 
 
+@needs_memory
 def test_real_template_has_markers():
     """Боевой memory/image_prompt.md должен иметь обе точки вставки — иначе блоки уедут в хвост."""
     tpl = creator_tools.IMAGE_PROMPT.read_text(encoding="utf-8")
     assert "[КАДР В ЭТОТ РАЗ]" in tpl and "[НЕ ПОВТОРЯТЬ]" in tpl
 
 
+@needs_memory
 def test_real_template_has_no_baked_frame():
     """Из шаблона убран зашитый кадр (он и был корнем повтора) — сторож против отката правки."""
     tpl = creator_tools.IMAGE_PROMPT.read_text(encoding="utf-8")

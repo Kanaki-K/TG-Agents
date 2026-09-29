@@ -11,6 +11,7 @@ import inspect
 
 import run_pipeline as rp
 from core import creator_tools as ct, scope_writer as sw, topic_gate as tg
+from tests._realdata import needs_memory
 
 FOOT = ("🖥 [Канал](https://t.me/+WZvj-M2zzt0xMjFi) | ▶️ [Медиа](https://linktr.ee/Kanaki.Crypto) | "
         "🥸 [Мемы](https://t.me/+isK3TfonMlYzNTAy) | 📱 [Notion](https://www.notion.so/Education-1711c6d11f3380f993e9d089e7eb724c?pvs=4)")
@@ -99,6 +100,7 @@ def test_gate_knows_the_quiet_splice():
     assert "ДАВНИЙ тезис" in tg._SYSTEM and "1+1 сплёл" in tg._SYSTEM
 
 
+@needs_memory
 def test_manual_finale_is_taught_on_owner_finals():
     manual = (ct.config.ROOT / "memory" / "scope_manual.md").read_text(encoding="utf-8")
     fin = manual.split("## 4.5", 1)[1].split("## 5.", 1)[0]

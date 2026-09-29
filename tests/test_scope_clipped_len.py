@@ -11,6 +11,7 @@ Crypto Assets).
 длине гаснет, а клип союза «а» ловится отдельно.
 Запуск: python -m pytest tests/test_scope_clipped_len.py"""
 from core import creator_tools as ct
+from tests._realdata import needs_memory
 
 HEAD = "**📊 SEC впервые показала токенам выход из-под статуса ценной бумаги**"
 
@@ -80,6 +81,7 @@ def test_real_ratio_not_flagged():
 
 # --- перекалибровка длины по замеру принятых постов ---
 
+@needs_memory
 def test_accepted_length_no_longer_flagged():
     # медиана 17 принятых постов с 01.07 — 1286 знаков с футером; такой пост длинным звать нельзя
     post = HEAD + "\n\n" + ("Механика повода объясняется здесь по-человечески. " * 20)

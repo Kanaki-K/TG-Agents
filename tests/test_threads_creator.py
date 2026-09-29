@@ -9,6 +9,7 @@
 import json
 
 from core import published_journal, threads_creator
+from tests._realdata import needs_memory
 
 
 def _isolate(tmp_path, monkeypatch):
@@ -71,6 +72,7 @@ def test_legacy_flagship_journal_is_migrated(tmp_path, monkeypatch):
     assert j.exists() and published_journal.latest("scope") is None
 
 
+@needs_memory
 def test_pipeline_stops_on_empty_journal(tmp_path, monkeypatch):
     """Отказ — только когда постов формата нет НИГДЕ: ни в журнале, ни в выгрузке канала (правило
     владельца 24.09 «пост всегда»: пустой журнал сам по себе больше не отказ — берётся пост канала)."""

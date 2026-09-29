@@ -6,7 +6,7 @@
 """
 from core import threads_creator as tc
 from core import threads_lint as tl
-from tests._realdata import load_real
+from tests._realdata import load_real, needs_memory
 
 POST_23_09 = (
     "Каждый перевод с биржи (где Вы подтвердили паспорт) на личный кошелёк - это не транзакция. Это подпись.\n\n"
@@ -76,6 +76,7 @@ def test_wrong_answer_keeps_the_originals(monkeypatch):
     assert "оставил исходные" in tc.LAST_LANGUAGE_NOTE
 
 
+@needs_memory
 def test_manuals_no_longer_teach_the_antithesis():
     for f in ("memory/threads_scope_manual.md", "memory/threads_flagship_manual.md"):
         t = open(f, encoding="utf-8").read()
@@ -244,6 +245,7 @@ def test_service_word_in_headline():
     assert any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок про биткоин\n\n" + CLEAN.split("\n\n", 1)[1]))
 
 
+@needs_memory
 def test_scrap_post_in_a_series_is_dropped(monkeypatch):
     series = "Я нашёл его нужную сумму денег\n[[POST]]\n" + CLEAN
     monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (series, None))
@@ -345,6 +347,7 @@ def test_stake_round_cannot_turn_reasoning_into_a_post(monkeypatch):
     assert all("Смотрю источник" not in p for p in out)
 
 
+@needs_memory
 def test_last_line_of_defence_keeps_a_real_post(monkeypatch):
     """Что бы ни натворили круги — в ревью уходит пост, а не рассуждение."""
     answers = iter([POST_23_09, "1 | да | x"] + ["1 | да | x"] * 5)

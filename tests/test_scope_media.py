@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from core import cost
 from core import scope_writer as sw
+from tests._realdata import needs_memory
 
 
 def test_parse_multiple_urls():
@@ -228,6 +229,7 @@ def test_panel_names_the_reason_when_pool_was_refused(monkeypatch, tmp_path):
 # Инструкция выведена из 23 опубликованных обложек, прочитанных вместе с ТЕКСТАМИ их постов, и
 # лежит в memory/scope_cover_manual.md — владелец правит её руками, как остальные мануалы.
 
+@needs_memory
 def test_cover_rules_come_from_memory():
     r = sw._cover_rules()
     assert "ПОРТРЕТ ГЕРОЯ ПОВОДА" in r, "главное правило замера пропало из инструкции"
@@ -235,6 +237,7 @@ def test_cover_rules_come_from_memory():
     assert "## 8." not in r, "каталог замера — материал для человека, в промпт его не тянем"
 
 
+@needs_memory
 def test_cover_manual_keeps_all_measured_routes():
     """Пять маршрутов = то, откуда обложки реально брались. Пропал маршрут — сузился поиск."""
     r = sw._cover_rules()
@@ -243,6 +246,7 @@ def test_cover_manual_keeps_all_measured_routes():
         assert route in r, f"маршрут «{route}» пропал из инструкции"
 
 
+@needs_memory
 def test_cover_manual_promises_a_cover_always():
     """§7 после правки владельца 07.09: «не почти всегда картинка, а всегда. Без исключений».
     Отказ остаётся только физическим — когда не скачалось ни одного кадра."""
@@ -257,6 +261,7 @@ def test_text_on_cover_is_not_a_defect():
     assert "Надпись на кадре — норма" in sw._cover_rules()
 
 
+@needs_memory
 def test_small_frame_is_not_a_reason_to_refuse():
     """Самая мелкая ПРИНЯТАЯ обложка канала — 499x281 (#440). Порог «мелко» бил по принятому."""
     assert "499×281" in sw._cover_rules()
@@ -615,6 +620,7 @@ def test_number_without_label_is_not_a_choice(monkeypatch, tmp_path):
     assert got is not None and got[0] == imgs[2] and got[1] == "фасад Citi с вывеской"
 
 
+@needs_memory
 def test_camera_shot_beats_drawing_is_in_the_prompt():
     """Ступень 0 «снято камерой бьёт нарисованное» — из провала 07.09 (3D-лого Ethereum, маскот)."""
     r = sw._cover_rules()
