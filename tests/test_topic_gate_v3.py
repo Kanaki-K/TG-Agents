@@ -113,6 +113,9 @@ def _fake_select(monkeypatch, verdicts: list[str]) -> list[dict]:
         return theme, weak, v
 
     monkeypatch.setattr(rp.topic_gate, "select", select)
+    # судья повтора понятия — тоже модель; без подмены тест ходил в API с ключом-заглушкой «k»
+    # (аудит 29.09: 401 при каждом pytest, а с новым алертом — сообщение владельцу в Telegram)
+    monkeypatch.setattr(rp.topic_gate, "concept_repeat", lambda *a, **k: "")
     monkeypatch.setattr(rp.verify, "latest_brief", lambda *a, **k: BRIEF)
     return calls
 

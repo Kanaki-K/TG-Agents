@@ -86,6 +86,7 @@ SCRATCH = [
     "data/threads_api_log.jsonl",        # лог вызовов API Threads (предохранитель квоты) — эфемерно
     "data/threads_insights_queue.txt", "data/threads_insights_request.txt",
     "data/threads_metric_watch.json",    # последний список метрик Meta — сторож спросит заново
+    "data/pipeline.lock",                # замок идущего прогона — восстанавливать его нельзя
 ]
 
 
