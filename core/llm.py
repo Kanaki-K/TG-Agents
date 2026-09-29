@@ -139,8 +139,38 @@ _clients: dict[str, Anthropic] = {}
 def _client(api_key: str | None = None) -> Anthropic:
     key = api_key or config.get_secret("ANTHROPIC_API_KEY")
     if key not in _clients:
-        _clients[key] = Anthropic(api_key=key)
+        # max_retries=4 (аудит 29.09): дефолт SDK — 2 повтора (~8 с), и короткий шторм 529 ронял стадии;
+        # четыре повтора с экспоненциальной паузой переживают типичную перегрузку.
+        _clients[key] = Anthropic(api_key=key, max_retries=4)
     return _clients[key]
+
+
+# КЛЮЧ ИЛИ БАЛАНС — ГРОМКО, ОДИН РАЗ (аудит 29.09.2026). Около 20 второстепенных ролей ловят любую ошибку
+# вызова и идут дальше («пропускаю»), чтобы не ронять прогон. Для перегрузки это правильно, для «ключ
+# недействителен» и «кончились кредиты» — нет: 05d942f воронка Скаута неизвестно сколько прогонов молча
+# падала на 401. Такие ошибки не проходят сами, поэтому владелец узнаёт о них в Telegram сразу.
+# Поведение вызывающих не меняем: исключение пробрасывается дальше как было.
+_ACCOUNT_ALERTED = False
+_ACCOUNT_MARKERS = ("credit balance", "billing", "invalid x-api-key", "authentication", "permission")
+
+
+def _alert_if_account_problem(e: Exception) -> None:
+    global _ACCOUNT_ALERTED
+    name = type(e).__name__
+    text = str(e).lower()
+    if not (name in ("AuthenticationError", "PermissionDeniedError") or any(m in text for m in _ACCOUNT_MARKERS)):
+        return
+    logging.error("Claude API: проблема ключа/баланса — %s: %s", name, str(e)[:200])
+    if _ACCOUNT_ALERTED:
+        return
+    _ACCOUNT_ALERTED = True
+    try:
+        from core import bot_alert
+        bot_alert.notify_owner(f"🚨 Claude API отказал по ключу или балансу ({name}): {str(e)[:200]}\n"
+                               "Проверь кредиты и ключи в консоли Anthropic — пока не починишь, роли "
+                               "завода будут молча пропускаться.")
+    except Exception:  # noqa: BLE001 — алерт не роняет прогон
+        logging.exception("Алерт о ключе/балансе не отправлен")
 
 
 def _system_cache_control() -> dict:
@@ -266,7 +296,11 @@ def reply(model: str, system: str, history: list[dict], user_text: str,
                 params["thinking"] = {"type": "disabled"}
         if effort and "output_config" not in params:
             params["output_config"] = {"effort": effort}
-        resp = client.messages.create(**params)
+        try:
+            resp = client.messages.create(**params)
+        except Exception as e:  # noqa: BLE001 — только замечаем и пробрасываем, решает вызывающий
+            _alert_if_account_problem(e)
+            raise
         cost.record(model, resp.usage)  # учёт расхода: лог в консоль + копим для итога (run_pipeline)
         # сохраняем ответ ассистента (включая блоки tool_use/server_tool_use) в историю
         messages.append({"role": "assistant", "content": resp.content})

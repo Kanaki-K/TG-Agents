@@ -138,7 +138,7 @@ def frozen_reason(write: bool = False) -> str:
     if not UNLOCK_FILE.exists():
         return (
             f"сеть Threads закрыта (нет файла {UNLOCK_FILE.name}). Это состояние ПО УМОЛЧАНИЮ "
-            f"после проверки аккаунта 14.07.2026. Открыть осознанно: threads_unlock('причина')"
+            f"после проверки аккаунта 14.07.2026. Открыть осознанно: _guard.unlock('причина')"
         )
     if write and not WRITE_UNLOCK_FILE.exists():
         return (

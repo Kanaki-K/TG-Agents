@@ -928,6 +928,7 @@ def _attach_media(source_urls: list, post_body: str, subject: str, key: str) -> 
     creator_tools.SCOPE_COVER.write_text("", encoding="utf-8")
     global LAST_POOL_NOTE, LAST_COVER_NOTE
     LAST_POOL_NOTE = ""
+    LAST_COVER_NOTE = ""   # аудит 29.09: ранний выход «кадров нет» оставлял причину ПРОШЛОГО прогона в панели
     imgs: list = []
     prints: list = []
     notes: list[str] = []

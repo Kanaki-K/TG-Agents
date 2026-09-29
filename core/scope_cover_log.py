@@ -49,7 +49,15 @@ def recent(n: int = WINDOW) -> list[str]:
     try:
         if not LOG.exists():
             return []
-        rows = [json.loads(ln) for ln in LOG.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        rows = []
+        for ln in LOG.read_text(encoding="utf-8").splitlines():
+            # ПОСТРОЧНО (аудит 29.09): одна битая строка раньше роняла весь разбор в except → [] →
+            # анти-повтор обложек тихо выключался навсегда. Битую пропускаем, остальные читаем.
+            if ln.strip():
+                try:
+                    rows.append(json.loads(ln))
+                except ValueError:
+                    logging.warning("scope_cover_log: битая строка пропущена: %s", ln[:80])
         return [r.get("label", "") for r in rows[-n:] if r.get("label")][::-1]
     except Exception:
         logging.exception("scope_cover_log: журнал не читается — иду без анти-повтора")

@@ -57,3 +57,32 @@ def test_token_expiry_alert(monkeypatch):
     monkeypatch.setattr(auth, "load_token", lambda: {"expires_at": time.time() + 40 * 86400})
     ra._threads_token_expiry_alert()
     assert not sent
+
+
+# ── Ключ/баланс — алерт владельцу, один раз ────────────────────────────────────────────────────
+
+def test_account_problem_alerts_once(monkeypatch):
+    from core import bot_alert, llm
+    sent = []
+    monkeypatch.setattr(bot_alert, "notify_owner", lambda t, *a, **k: sent.append(t) or True)
+    monkeypatch.setattr(llm, "_ACCOUNT_ALERTED", False)
+    llm._alert_if_account_problem(RuntimeError("Your credit balance is too low to access the Anthropic API"))
+    llm._alert_if_account_problem(RuntimeError("Your credit balance is too low"))
+    assert len(sent) == 1 and "балансу" in sent[0]
+
+
+def test_overload_is_not_an_account_problem(monkeypatch):
+    from core import bot_alert, llm
+    sent = []
+    monkeypatch.setattr(bot_alert, "notify_owner", lambda t, *a, **k: sent.append(t) or True)
+    monkeypatch.setattr(llm, "_ACCOUNT_ALERTED", False)
+    llm._alert_if_account_problem(RuntimeError("529 overloaded_error"))
+    assert not sent
+
+
+def test_cover_log_survives_a_broken_line(tmp_path, monkeypatch):
+    from core import scope_cover_log as scl
+    f = tmp_path / "log.jsonl"
+    f.write_text('{"label": "фасад SEC"}\n{битая\n{"label": "вывеска BitMEX"}\n', encoding="utf-8")
+    monkeypatch.setattr(scl, "LOG", f)
+    assert scl.recent() == ["вывеска BitMEX", "фасад SEC"]
