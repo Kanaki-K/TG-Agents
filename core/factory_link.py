@@ -24,7 +24,6 @@
 """
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date, timedelta
 
@@ -128,7 +127,7 @@ def build(since_days: int = 90, window: int = WINDOW_DAYS,
                             "shared": best_shared}
             personal.append(p)
     try:
-        MAP_FILE.write_text(json.dumps(new_map, ensure_ascii=False, indent=2), encoding="utf-8")
+        io_safe.dump_json(MAP_FILE, new_map)  # атомарно (аудит 29.09)
     except Exception:
         logging.exception("factory_link: карту не сохранил (в памяти она есть)")
     return {"map": new_map, "factory": factory, "personal": personal, "tg": tg}
@@ -141,7 +140,7 @@ def mark(threads_id: str, tg_id, kind: str = "") -> str:
     m = io_safe.load_json(MAP_FILE, {})
     m[str(threads_id)] = ({"tg_id": tg_id, "kind": content_plan.norm_kind(kind) if kind else "",
                            "by": "рука"} if tg_id else {"tg_id": None, "by": "рука"})
-    MAP_FILE.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    io_safe.dump_json(MAP_FILE, m)  # атомарно (аудит 29.09)
     return f"Связь записана рукой: {threads_id} → {tg_id or 'НЕ заводской'}"
 
 

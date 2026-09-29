@@ -44,3 +44,13 @@ def dump_json(path, data: Any) -> None:
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, p)
+
+
+def write_text_atomic(path, text: str) -> None:
+    """Текст — атомарно, как dump_json (аудит 29.09.2026): уроки и стандарт поста писались прямым
+    write_text, обрыв посреди записи оставлял обрезанный файл — и обученность молча терялась."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
+    os.replace(tmp, p)

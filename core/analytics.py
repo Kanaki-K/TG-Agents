@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -43,7 +42,7 @@ def _load_formats() -> dict:
 
 
 def _save_formats(formats: dict) -> None:
-    FORMATS_JSON.write_text(json.dumps(formats, ensure_ascii=False, indent=2), encoding="utf-8")
+    io_safe.dump_json(FORMATS_JSON, formats)  # атомарно (аудит 29.09)
 
 
 def _classify(p: dict) -> str:

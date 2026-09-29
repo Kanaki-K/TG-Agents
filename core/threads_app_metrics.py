@@ -23,7 +23,6 @@ shares, views) и на уровне аккаунта тоже (плюс follower
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 
@@ -181,7 +180,7 @@ def save(post_id: str, metrics: dict, post_date: str = "") -> None:
         except ValueError:
             pass
     store[str(post_id)] = row
-    STORE.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    io_safe.dump_json(STORE, store)  # атомарно (аудит 29.09)
 
 
 def ingest(raw: str) -> str:

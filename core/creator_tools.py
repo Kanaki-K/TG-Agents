@@ -2596,7 +2596,7 @@ def graduate_enforced(lessons_path: Path = LESSONS) -> tuple[int, int]:
                      "лежит для истории и обратимости)\n")
     new_active = "\n".join(keep).rstrip() + "\n\n"
     out = new_active + graduated.rstrip() + "\n" + "\n".join(m.strip() for m in moved) + "\n"
-    lessons_path.write_text(out, encoding="utf-8", newline="\n")
+    io_safe.write_text_atomic(lessons_path, out)   # атомарно (аудит 29.09)
     logging.info("уроки %s: выпущено под 📦 %d (правило держит код), активных осталось %d симв",
                  lessons_path.name, len(moved), len(new_active))
     return len(moved), len(new_active)
@@ -2748,7 +2748,7 @@ def _record_lesson(args: dict, lessons_path: Path = LESSONS) -> str:
     if GRADUATED_MARK in text:
         head, mark, tail = text.partition(GRADUATED_MARK)
         head = head.rstrip("\n") + "\n" + line + "\n"
-        lessons_path.write_text(head + mark + tail, encoding="utf-8", newline="\n")
+        io_safe.write_text_atomic(lessons_path, head + mark + tail)
     else:
         with open(lessons_path, "a", encoding="utf-8", newline="\n") as f:
             f.write(line)
@@ -2778,7 +2778,7 @@ def _apply_standard() -> str:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         (HISTORY / f"post_standard-{stamp}.md").write_text(
             STANDARD.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
-    STANDARD.write_text(STANDARD_PROPOSED.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    io_safe.write_text_atomic(STANDARD, STANDARD_PROPOSED.read_text(encoding="utf-8"))
     STANDARD_PROPOSED.unlink()
     return ("Стандарт обновлён: memory/post_standard.md (старый — в memory/.history/ для отката). "
             "Предложение очищено.")

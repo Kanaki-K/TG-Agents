@@ -103,3 +103,12 @@ def test_scheduled_read_failure_is_not_empty_list():
     from connectors.telegram_publish import publish as pub
     src = inspect.getsource(pub._scheduled_async)
     assert "return []" in src and src.count("return []") == 1, "сбой чтения снова маскируется под «свободно»"
+
+
+def test_write_text_atomic_replaces_whole_file(tmp_path):
+    from core import io_safe
+    f = tmp_path / "lessons.md"
+    f.write_text("старое", encoding="utf-8")
+    io_safe.write_text_atomic(f, "новое целиком\n")
+    assert f.read_text(encoding="utf-8") == "новое целиком\n"
+    assert not (tmp_path / "lessons.md.tmp").exists()
