@@ -6,6 +6,7 @@
 """
 from core import threads_creator as tc
 from core import threads_lint as tl
+from tests._realdata import load_real
 
 POST_23_09 = (
     "Каждый перевод с биржи (где Вы подтвердили паспорт) на личный кошелёк - это не транзакция. Это подпись.\n\n"
@@ -219,9 +220,8 @@ def test_leading_emoji_is_stripped():
 
 def test_published_posts_do_not_trigger_the_new_hard_rules():
     """Жёсткие правила Threads не должны спорить с тем, что владелец уже опубликовал (кроме v3-антитезы)."""
-    import json
-    posts = json.load(open("data/threads_posts.json", encoding="utf-8"))
-    fm = json.load(open("data/threads_factory_map.json", encoding="utf-8"))
+    posts = load_real("threads_posts.json")
+    fm = load_real("threads_factory_map.json")
     pub = [p["text"] for p in posts if (fm.get(str(p["id"])) or {}).get("by") not in (None, "не опознан")
            and len(p.get("text") or "") > 150 and not tl._TY.search(p.get("text") or "")]
     hits = [t for t in pub if any(x.startswith(("заголовок обещает", "⛔ ссылка")) for x in tl.language(t))]

@@ -19,6 +19,7 @@ import inspect
 
 import run_pipeline as rp
 from core import scope_writer, topic_gate as tg
+from tests._realdata import load_real
 
 # Реальная сводка канала: строки собраны из data/post_topics.json + data/channel_posts.json.
 DIGEST = (
@@ -213,10 +214,9 @@ def test_meta_is_not_judged():
 
 def test_channel_history_has_almost_no_false_hits():
     """Замер: 424 реальных поста против вышедших за 7 дней до них — 1 срабатывание, и то живая пара."""
-    import json, datetime
-    from core import config
-    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
-    topics = json.load(open(config.ROOT / "data" / "post_topics.json", encoding="utf-8"))
+    import datetime
+    posts = load_real("channel_posts.json")
+    topics = load_real("post_topics.json")
     rows = sorted((p for p in posts if str(p["id"]) in topics), key=lambda p: p["date"])
     hits = 0
     for i, p in enumerate(rows):

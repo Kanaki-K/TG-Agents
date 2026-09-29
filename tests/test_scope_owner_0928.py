@@ -1,8 +1,8 @@
 """Скоуп 28.09 (Glassnode, владелец 0/10): обложка KuCoin, источник ×3, гейт вернул свой же отказ."""
-import json
 
 from core import creator_tools as ct, scope_writer as sw
 import run_pipeline as rp
+from tests._realdata import load_real
 
 POST = ("**📊 Объём торгов альтами вчетверо обогнал биткоин и всё равно ему проигрывает**\n\n"
         "28 сентября Glassnode показал цифру: спот-объём альткоинов подошёл к 4x объёма биткоина\n\n"
@@ -25,7 +25,7 @@ def test_hero_name_repeats_are_not_sources():
 
 
 def test_channel_posts_never_hit_the_source_rule():
-    posts = json.load(open("data/channel_posts.json", encoding="utf-8"))
+    posts = load_real("channel_posts.json")
     assert [p.get("id") for p in posts if len(ct.source_mentions(p.get("text") or "")) >= 2] == []
 
 

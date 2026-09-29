@@ -16,9 +16,9 @@
 Запуск: python -m pytest tests/test_scope_flow.py"""
 from __future__ import annotations
 
-import json
 
-from core import config, creator_tools as ct, scope_writer
+from core import creator_tools as ct, scope_writer
+from tests._realdata import load_real
 
 # Реальный драфт 17.09 (сокращён до сути дефекта): лид — цитата из документа, повод с датой
 # четвёртым абзацем, склейка-перечислитель «Главное отличие».
@@ -72,7 +72,7 @@ def test_glue_only_at_paragraph_start():
 
 def test_channel_never_starts_a_paragraph_that_way():
     """Замер-замок: 427 постов канала, ноль срабатываний. Разойдётся — правило ловит автора."""
-    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    posts = load_real("channel_posts.json")
     hits = [p["id"] for p in posts if ct._LIST_GLUE.search(p.get("text") or "")]
     assert not hits, f"ложные срабатывания на принятых постах: {hits[:5]}"
 
@@ -104,7 +104,7 @@ def test_short_post_is_not_judged():
 
 def test_channel_2026_is_clean():
     """Замер: на принятых постах 2026 года правило молчит (дата события у автора и так в лиде)."""
-    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    posts = load_real("channel_posts.json")
     fresh = [p for p in posts if p.get("date", "") >= "2026-06"]
     assert fresh
     hits = [p["id"] for p in fresh if ct.buried_event(p.get("text") or "")]

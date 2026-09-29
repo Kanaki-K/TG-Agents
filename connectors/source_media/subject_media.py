@@ -41,7 +41,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import quote, urljoin
 
 from connectors.source_media import fetch
 from connectors.web_sources import feeds
@@ -158,12 +158,6 @@ _ONTOPIC = re.compile(
     r"politician|economist|stablecoin|token|network|blockchain|chain\b|startup|firm\b|trading|"
     r"payment|asset manager|central bank|commission|department|ministry|senator|chair\b|founder|"
     r"investment|securities|treasur|custodian|miner|mining)", re.I)
-
-
-def _is_acronym(entity: str) -> bool:
-    """«SEC», «FOMC», «MSTR» — короткое сокращение из одних заглавных, без пробелов."""
-    e = (entity or "").strip()
-    return len(e) <= 5 and e.isupper() and " " not in e
 
 
 def entity_id(entity: str) -> tuple[str, str]:
@@ -288,12 +282,11 @@ def commons_photo(entity: str) -> str | None:
 # ══ ОБЪЕКТ, КОТОРОГО НЕТ В СПРАВОЧНИКЕ (31.08) ══
 # Wikidata знает компании и институты, но не знает протокол, запущенный месяц назад: «Robinhood Chain»
 # там не опознаётся вовсе. Владелец: «если Я могу найти, значит и он должен уметь». Человек в этом
-# случае делает ровно две вещи, и обе воспроизводимы кодом:
-#   1) кликает в статье по ссылке на сам проект — издание почти всегда линкует первоисточник;
-#   2) если ссылки нет, набирает имя проекта доменом.
-# Домен не угадываем вслепую: страница обязана ОПОЗНАТЬ СЕБЯ — назвать объект в <title> или
-# og:site_name. Иначе поиск уводит на сквоттеров и однофамильцев.
-_SITE_TLDS = (".com", ".org", ".io", ".xyz", ".network", ".finance")
+# случае кликает в статье по ссылке на сам проект — издание почти всегда линкует первоисточник. Это
+# код и делает. (Второй ход человека — набрать имя проекта доменом — НЕ реализован: аудит 29.09 нашёл
+# мёртвый список доменных зон под него и убрал, комментарий обещал то, чего нет.)
+# Страница обязана ОПОЗНАТЬ СЕБЯ — назвать объект в <title> или og:site_name. Иначе ссылка уводит на
+# сквоттеров и однофамильцев.
 # Домены, которые линкуют все и всегда: соцсети, агрегаторы, сами издания. Официальным сайтом объекта
 # они не бывают, и без этого списка «ссылка из статьи» приводила бы в твиттер.
 _NOT_OFFICIAL = re.compile(

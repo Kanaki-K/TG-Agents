@@ -16,6 +16,7 @@ import inspect
 
 import run_pipeline as rp
 from core import creator_tools as ct, scope_writer
+from tests._realdata import load_real
 
 BAD = """**📉 Спрос, который развернулся за сутки на одном заголовке**
 
@@ -58,9 +59,7 @@ def test_quoted_speech_is_allowed():
 
 def test_channel_history_after_the_rule_is_clean():
     """Замер: на постах, вышедших ПОСЛЕ принятия правила 10.09, чек не срабатывает ни разу."""
-    import json
-    from core import config
-    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    posts = load_real("channel_posts.json")
     fresh = [p for p in posts if p.get("date", "") >= "2026-09-10"]
     assert fresh, "нет постов после 10.09 — замер не на чем сделать"
     for p in fresh:
@@ -177,9 +176,7 @@ def test_advice_points_at_the_fix_not_just_the_defect():
 
 def test_no_false_hits_on_accepted_scopes():
     """Замер-регресс: ни один принятый скоуп канала не должен получить это замечание."""
-    import json
-    from core import config
-    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    posts = load_real("channel_posts.json")
     scopes = [p for p in posts
               if p.get("date", "") >= "2026-06-24" and 700 <= len(p.get("text") or "") < 1700]
     assert scopes, "нечего мерить"
@@ -266,9 +263,7 @@ def test_threshold_matches_the_measurement():
 
 def test_almost_no_accepted_post_is_touched():
     """Замер-регресс: порог задевает ровно один принятый пост из тридцати."""
-    import json
-    from core import config
-    posts = json.load(open(config.ROOT / "data" / "channel_posts.json", encoding="utf-8"))
+    posts = load_real("channel_posts.json")
     def fin(t):
         b = (t or "").partition("[[SPLIT]]")[0]
         ps = [x.strip() for x in b.split("\n\n")
