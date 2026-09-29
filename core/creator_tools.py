@@ -2901,6 +2901,8 @@ def _publish_now(args: dict | None = None, receipt: dict | None = None) -> str:
     try:
         busy = {dt.astimezone(content_plan.tz()).date() for dt in publish.scheduled_times(channel)}
     except Exception:
+        logging.warning("Отложенные канала не прочитались — ставлю в ближайший слот ВСЛЕПУЮ (занятость "
+                        "не проверена)", exc_info=True)
         busy = set()
     slot = content_plan.next_slot(kind, busy_dates=busy)
     res = publish.publish(channel, text, cover or None, slot)

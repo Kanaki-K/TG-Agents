@@ -28,7 +28,7 @@ import logging
 import re
 from datetime import datetime
 
-from telethon.errors import MediaCaptionTooLongError, PhotoInvalidDimensionsError
+from telethon.errors import BadRequestError, MediaCaptionTooLongError, PhotoInvalidDimensionsError
 from telethon.tl import functions
 
 from connectors.telegram_export.collect import _client
@@ -141,11 +141,15 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
         # data/custom_emoji.json; премиум-аккаунт их шлёт). Сбой разметки → чистый текст (пост не теряем).
         html = tg_format.to_telegram_html(text, custom_emoji=True)
 
+        # ПОВТОР ДРУГИМ СПОСОБОМ — ТОЛЬКО НА ЯВНЫЙ ОТКАЗ TELEGRAM (400), аудит 29.09.2026. Раньше любой
+        # except повторял отправку: сетевой таймаут ПОСЛЕ того, как сервер принял сообщение, давал ВТОРОЙ
+        # пост в отложке (random_id новый — сервер дубль не схлопнет). Сетевые сбои теперь идут наверх:
+        # publish() вернёт {ok: False}, и прогон честно скажет «не поставил» — лучше, чем дубль в канале.
         async def _msg(target):
             try:
                 return await client.send_message(target, html, parse_mode="html",
                                                  link_preview=False, schedule=when)
-            except Exception:
+            except BadRequestError:
                 logging.exception("[публикатор] HTML отклонён — чистым текстом")
                 return await client.send_message(target, text, parse_mode=None,
                                                  link_preview=False, schedule=when)
@@ -165,7 +169,7 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
                 break  # подпись длиннее лимита Telegram — уходим на два сообщения
             except PhotoInvalidDimensionsError:
                 break  # неверные размеры для ФОТО — ниже пробуем документом (примет любые размеры)
-            except Exception:
+            except BadRequestError:
                 logging.exception("[публикатор] подпись (%s) отклонена — пробую дальше", pm)
         # Подпись не вместила текст → фото отдельным сообщением + текст (два отложенных; пост не теряем).
         if caption_too_long:
@@ -174,14 +178,14 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
                 return done("фото + текст (два сообщения — текст не влез в подпись)", await _msg(entity))
             except PhotoInvalidDimensionsError:
                 pass  # размеры невалидны для фото → уйдём документом ниже
-            except Exception:
+            except BadRequestError:
                 logging.exception("[публикатор] фото отдельным сообщением отклонено — пробую документом")
         # Крайний фолбэк: Telegram не принял картинку как ФОТО (кривые размеры и т.п.) → шлём её ДОКУМЕНТОМ
         # + текст (не теряем ни картинку, ни пост). Если и это не вышло — только текст. НИКОГДА не роняем прогон.
         try:
             await client.send_file(entity, cover, force_document=True, schedule=when)
             return done("картинка документом + текст (размеры не подошли под фото)", await _msg(entity))
-        except Exception:
+        except BadRequestError:
             logging.exception("[публикатор] и документом картинку не отправил — публикую только текстом")
             return done("только текст (картинку Telegram отклонил)", await _msg(entity))
     finally:
@@ -195,12 +199,10 @@ async def _scheduled_async(channel: str) -> list:
     try:
         if not await client.is_user_authorized():
             return []
-        try:
-            entity = await _resolve_entity(client, channel)
-            msgs = await client.get_messages(entity, scheduled=True, limit=100)
-        except Exception:
-            logging.exception("[публикатор] не смог прочитать отложенные")
-            return []
+        # Сбой чтения — ИСКЛЮЧЕНИЕ, а не [] (аудит 29.09): пустой список вызывающие читали как «все слоты
+        # свободны» и ставили второй пост на занятый день. Все вызывающие уже в try и сами решают, что делать.
+        entity = await _resolve_entity(client, channel)
+        msgs = await client.get_messages(entity, scheduled=True, limit=100)
         return [m.date for m in msgs if getattr(m, "date", None)]
     finally:
         await client.disconnect()

@@ -86,3 +86,20 @@ def test_cover_log_survives_a_broken_line(tmp_path, monkeypatch):
     f.write_text('{"label": "фасад SEC"}\n{битая\n{"label": "вывеска BitMEX"}\n', encoding="utf-8")
     monkeypatch.setattr(scl, "LOG", f)
     assert scl.recent() == ["вывеска BitMEX", "фасад SEC"]
+
+
+# ── Публикатор: повтор другим способом только на явный отказ Telegram ─────────────────────────────
+
+def test_publisher_retries_only_on_telegram_rejection():
+    """Сетевой таймаут после приёма сервером + повтор = второй пост в отложке. Ловим только 400."""
+    from connectors.telegram_publish import publish as pub
+    src = inspect.getsource(pub._publish_async) if hasattr(pub, "_publish_async") else inspect.getsource(pub)
+    send_part = src.split("async def _msg", 1)[1].split("async def _scheduled_async", 1)[0]
+    assert "except Exception" not in send_part, "повтор отправки на ЛЮБУЮ ошибку — путь к дублю"
+    assert "except BadRequestError" in send_part
+
+
+def test_scheduled_read_failure_is_not_empty_list():
+    from connectors.telegram_publish import publish as pub
+    src = inspect.getsource(pub._scheduled_async)
+    assert "return []" in src and src.count("return []") == 1, "сбой чтения снова маскируется под «свободно»"
