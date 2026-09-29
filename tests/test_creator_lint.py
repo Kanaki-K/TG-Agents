@@ -1,5 +1,24 @@
 """Код-линтер Криейтора (creator_tools._lint) — детерминированные авто-правки и предупреждения."""
+import pytest
+
 from core import creator_tools
+from tests._realdata import needs_memory
+
+_FOOT = "🖥 [Канал](https://t.me/x) | ▶️ [Медиа](https://linktr.ee/y)"
+
+
+@pytest.fixture(autouse=True)
+def _pin_canon_footer(monkeypatch, tmp_path):
+    """Канон-футер = ТЕСТОВЫЙ `_FOOT`, а не реальный memory/footer.md.
+
+    С 26.08 линтер приводит футер scope к каноническому ДОСЛОВНО. Без этой привязки он подменял
+    бы короткую тестовую заглушку настоящим футером (+155 знаков) — и фикстуры длины, честно
+    собранные от порогов, срывались бы в соседний диапазон. Заодно тесты не зависят от того,
+    лежит ли на машине приватная память (memory/ в код-репо не входит).
+    """
+    f = tmp_path / "footer.md"
+    f.write_text("# Канон-футер\n\n" + _FOOT + "\n", encoding="utf-8")
+    monkeypatch.setattr(creator_tools, "FOOTER_FILE", f)
 
 
 # --- авто-болд титульной строки (§5: заголовок всегда жирный) ---
@@ -33,9 +52,13 @@ def test_normalizes_dashes_and_quotes():
     assert "—" not in clean and "«" not in clean and "»" not in clean
 
 
-def test_warns_currency_before_number():
+def test_currency_before_number_is_not_a_defect():
+    """ЗАМЕР 12.09 по 339 постам канала: «$» перед числом — 193 случая (+50 при разряде, «$25 млн»),
+    после числа — 187 (+91, «25 млн$»). Обе формы живые, а 04.09 владелец своей рукой переписал
+    машинное «25 млн$» в «$25 млн». Чек ругался на половину нормальных постов и гонял писателя
+    переписывать то, что владелец переписывал обратно, — снят."""
     _, warns = creator_tools._lint("**Тест**\n\nцена $73 млн тут", "flagship")
-    assert any("валюта" in w.lower() for w in warns)
+    assert not any("валюта ПЕРЕД числом" in w for w in warns)
 
 
 # --- авто-болд ПОДЗАГОЛОВКОВ-разделов флагмана (§5: ВСЕ заголовки жирные); тело и футер — нет ---
@@ -269,3 +292,518 @@ def test_headline_personification_warns():
 def test_http_link_in_body_warns():
     _, warns = creator_tools._lint("**Тест**\n\nПодробности тут https://example.com в статье", "flagship")
     assert any("ссылка" in w.lower() for w in warns)
+
+
+# --- дословный ПОВТОР абзаца (баг Strategy 31.07: дубль ушёл в отложку) ---
+
+def test_cuts_duplicate_paragraph():
+    # судья финала продублировал абзац при сплайсе → линтер режет дубль на общем пути сохранения
+    post = ("**⚠️ Заголовок**\n\nТезис на BTC не сломался\n\nТезис на BTC не сломался\n\n"
+            "Но покупателя последней инстанции больше нет")
+    clean, warns = creator_tools._lint(post, "scope")
+    assert clean.count("Тезис на BTC не сломался") == 1        # осталось ПЕРВОЕ вхождение
+    assert "Но покупателя последней инстанции больше нет" in clean   # остальное цело
+    assert any("ПОВТОР абзаца" in w for w in warns)            # владелец видит, что резали
+
+
+def test_keeps_distinct_paragraphs():
+    post = "**⚠️ Заголовок**\n\nПервый абзац про механику\n\nВторой абзац про последствие"
+    clean, warns = creator_tools._lint(post, "scope")
+    # ⚠️ 14.08 счёт абзацев тут больше НЕ показатель: у scope линтер сам дописывает потерянный футер
+    # (баг «пост уехал в канал голым»), поэтому «\n\n» стало на один больше. Проверяем то, ради чего
+    # тест и писался: дедуп не тронул РАЗНЫЕ абзацы.
+    assert "Первый абзац про механику" in clean and "Второй абзац про последствие" in clean
+    assert not any("ПОВТОР абзаца" in w for w in warns)
+
+
+def test_short_repeat_line_kept():
+    # короткий рефрен (<15 знаков) — намеренный приём, не режем
+    post = "**⚠️ Заголовок**\n\nИ всё\n\nтело поста тут\n\nИ всё"
+    clean, warns = creator_tools._lint(post, "scope")
+    assert clean.count("И всё") == 2
+    assert not any("ПОВТОР абзаца" in w for w in warns)
+
+
+# --- шаблонные ИИ-связки (разбор 31.07: «подача как всегда ИИшная») ---
+
+def test_flags_template_connector():
+    post = "**⚠️ Заголовок**\n\nМеханика проста: обязательства тикают каждый квартал\n\n" + "х" * 400
+    _, warns = creator_tools._lint(post, "scope")
+    assert any("ШАБЛОННАЯ ИИ-СВЯЗКА" in w for w in warns)
+
+
+def test_clean_scope_has_no_connector_warn():
+    post = "**⚠️ Заголовок**\n\nОбязательства тикают каждый квартал, а продавать приходится на падении\n\n" + "х" * 400
+    _, warns = creator_tools._lint(post, "scope")
+    assert not any("ШАБЛОННАЯ ИИ-СВЯЗКА" in w for w in warns)
+
+
+# --- ФОРМА ФИНАЛА кодом (заменила снятого судью-модель, переработка 31.07) ---
+# Судья-модель переписывала концовку САМА — она же 31.07 продублировала абзац и вместе с двумя
+# другими судьями стачивала голос. Теперь форму меряет код и возвращает претензию АВТОРУ.
+
+def _n(s: str) -> int:
+    """Счёт Telegram (UTF-16 units) — как в линтере."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _filled_to(head: str, tail: str, target: int, filler: str = "детали механики ") -> str:
+    """Пост чуть ДЛИННЕЕ target — наполнитель считаем ОТ КОНСТАНТЫ, а не зашитым числом повторов.
+    Потолок scope за август менялся трижды (1250 → 1500 → 1350), и фикстура с магическим «×70»
+    падала при каждой правке, хотя поведение линтера было верным (падение 20.08)."""
+    need = max(target + 40 - _n(head + tail), len(filler))
+    return head + filler * (need // len(filler) + 1) + tail
+
+
+def _post_with_finale(fin: str) -> str:
+    return ("**⚠️ Заголовок поста**\n\nПервый абзац тела с фактом и цифрой\n\n"
+            "Второй абзац - механизм и вывод\n\n" + fin + "\n\n" + _FOOT)
+
+
+def test_finale_question_flagged():
+    _, warns = creator_tools._lint(_post_with_finale("А кто заплатит за это в итоге?"), "scope")
+    assert any("финал-ВОПРОС" in w for w in warns)
+
+
+def test_finale_hedge_flagged():
+    _, warns = creator_tools._lint(_post_with_finale("Посмотрим, что будет дальше"), "scope")
+    assert any("финал-ХЕДЖ" in w for w in warns)
+
+
+def test_finale_fused_with_caveat_flagged():
+    # реальный класс бага bStocks: вывод спрятан внутри абзаца после разворота
+    fin = "Честно, у медали две стороны. Но кто построил вход без порога, забирает клиента раньше"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert any("СЛИПСЯ С ОГОВОРКОЙ" in w for w in warns)
+
+
+def test_finale_long_flagged():
+    fin = "Первое предложение тут. Второе предложение тут. Третье предложение тоже тут"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert any("предложений" in w for w in warns)
+
+
+def test_good_kicker_clean():
+    # самостоятельный кикер: одно утверждение, стоит отдельно — претензий быть не должно
+    _, warns = creator_tools._lint(_post_with_finale("Годами строили под Биткоин, а первым выкупил AI"), "scope")
+    assert not any(w.startswith("scope: финал") for w in warns)
+
+
+def test_kicker_starting_with_turn_is_ok():
+    # кикер, НАЧИНАЮЩИЙСЯ с «Но» — это сам кикер, а не слипание: не трогаем
+    _, warns = creator_tools._lint(
+        _post_with_finale('Но покупателя последней инстанции больше нет'), "scope")
+    assert not any("СЛИПСЯ" in w for w in warns)
+
+
+def test_word_ending_in_no_is_not_a_turn():
+    # КОРЕНЬ провала 07.08: «но » ловилось внутри слов («имен-но », «нуж-но ») → ложная претензия
+    # «финал слипся с оговоркой» → автор перестал верить линтеру и отмахнулся заодно от ВЕРНОЙ.
+    fin = "Архитектура закладывается именно сейчас. Правила задаёт тот, кто держит ключи"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert not any("СЛИПСЯ" in w for w in warns)
+
+
+def test_finale_checked_even_if_writer_lost_footer():
+    """ПЕРЕСМОТРЕНО 14.08. Раньше без футера судья финала МОЛЧАЛ («структуру не угадать») — и ровно
+    это случилось в бою: писатель потерял футер, а вместе с ним тихо отключилась проверка САМОЙ
+    дорогой строки формата. Один пропущенный служебный блок гасил механизм, который владелец правит
+    руками 10+ сессий. Теперь футер возвращает код, а финал считается по последнему абзацу — то есть
+    финал-вопрос ловится в любом случае."""
+    _, warns = creator_tools._lint("**Заголовок**\n\nтело поста\n\nчто-то ещё?", "scope")
+    assert any("финал-" in w for w in warns)
+
+
+# --- ПОСТ-ИНСТРУКЦИЯ: формат уступает безопасности (случай Coldcard 31.07) ---
+# Завод выпустил пост об утечке 594 BTC с инструкцией по миграции: неверный номер исправленной
+# прошивки и НЕПОЛНЫЙ список затронутых устройств. Читатель с неназванной моделью решил бы, что
+# это не про него. Поймал владелец руками — 2FA сверил цифры поштучно и не спросил про полноту.
+
+def test_detects_advice_post():
+    assert creator_tools.is_advice_post("мигрируйте на новый seed") is True
+    assert creator_tools.is_advice_post("обновитесь на исправленную прошивку") is True
+    assert creator_tools.is_advice_post("считайте скомпрометированным") is True
+
+
+def test_plain_analysis_is_not_advice():
+    assert creator_tools.is_advice_post("фонд купил пакет, механика такая") is False
+    assert creator_tools.is_advice_post("") is False
+
+
+def test_long_advice_post_gets_soft_length_note():
+    post = _filled_to("**⚠️ Заголовок**\n\nКого касается: Mk3, Mk4, Mk5 и Q. ",
+                      "\n\nмигрируйте на новый seed, обновление уже созданный seed не спасает\n\n" + _FOOT,
+                      creator_tools.SCOPE_TOTAL_CAP)
+    assert _n(post) > creator_tools.SCOPE_TOTAL_CAP        # фикстура реально выше потолка
+    _, warns = creator_tools._lint(post, "scope")
+    assert not any("длинноват" in w or "РАЗДУЛСЯ" in w for w in warns)   # общего «режь» тут быть не должно
+    assert any("пост-ИНСТРУКЦИЯ" in w for w in warns)           # вместо него — «режь только воду»
+
+
+def test_post_at_the_cap_is_advised_not_amputated():
+    """v2.1 (10.09): зазор между советом и ⛔ убран — потолок 1500 стал пределом. Но СОВЕТ по-прежнему
+    приходит раньше ампутации: пост чуть ниже потолка слышит «длинновато», а не запрет. Жёсткий ⛔
+    в этой зоне заставлял писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110)."""
+    post = "**⚠️ Заголовок**\n\n" + ("разбор механики " * 78) + "\n\n" + _FOOT
+    n = len(post.encode("utf-16-le")) // 2
+    _, warns = creator_tools._lint(post, "scope")
+    assert n <= creator_tools.SCOPE_TOTAL_CAP, f"фикстура должна быть в пределах потолка: {n}"
+    assert not any("РАЗДУЛСЯ" in w for w in warns)
+
+
+# --- ЭТАЛОН = ПРИЁМ, А НЕ СТРОКА: копия из мануала/банка/своего поста (владелец 03.08) ---
+
+@needs_memory
+def test_flags_finale_copied_from_manual_bank():
+    # «Деньги меняют убеждения очень быстро» лежит в scope_manual §4.5 как ПРИМЕР приёма «афоризм»
+    # (и была финалом поста про CLARITY 15.07). 03.08 машина взяла её дословно — линтер обязан вернуть.
+    post = ("**⚡️ Заголовок теста**\n\n3 августа банк открыл счёт бирже - деньги клиентов отдельно\n\n"
+            "Деньги меняют убеждения очень быстро\n\n" + _FOOT)
+    _, warns = creator_tools._lint(post, "scope")
+    assert any("СПИСАН" in w for w in warns)
+    assert any("мануал" in w for w in warns)          # сказано, ОТКУДА списано
+
+
+def test_original_lines_are_not_flagged_as_copy():
+    post = ("**⚡️ Свой заголовок**\n\nЛицензированная площадка получила расчётный счёт под клиентские "
+            "средства\n\nСлова главы банка не поменялись - поменялось поведение банка\n\n" + _FOOT)
+    _, warns = creator_tools._lint(post, "scope")
+    assert not any("СПИСАН" in w for w in warns)
+
+
+def test_short_line_never_counts_as_copy():
+    # короткая общая фраза совпадает с эталонами по словам, но приёмом не является — ложняк дороже
+    assert creator_tools._reused_lines("**Заголовок**\n\nЦифры говорят обратное\n\n" + _FOOT) == []
+
+
+def test_reuse_check_survives_missing_sources(monkeypatch, tmp_path):
+    # выгрузки канала/мануала нет (чистая машина, первый запуск) — линтер не падает, просто не сверяет
+    monkeypatch.setattr(creator_tools.config, "ROOT", tmp_path)
+    creator_tools._REUSE_CACHE.clear()
+    out = creator_tools._reused_lines("**Заголовок**\n\nЛюбая строка поста про повод дня\n\n" + _FOOT)
+    assert isinstance(out, list)          # источников нет → сверять не с чем, но линтер живой
+    creator_tools._REUSE_CACHE.clear()
+
+
+# --- дыры в детекторах, найденные редактурой владельца 05.08 (пост про Cloudflare Wallets) ---
+# Ни одной фактической ошибки в посте не было (2FA дал 7✅/0⚠), но три правки владельца попадали в
+# классы, которые линтер УЖЕ умеет ловить и пропустил из-за узких мест — регистра и словарей.
+
+def test_eto_ne_x_eto_y_caught_after_dash():
+    # штамп сидел не в начале предложения, а в хвосте через тире — детектор требовал заглавной «Это»
+    # в ОБЕИХ половинах и такую форму пропускал: «...для агентного интернета - это не пилот. Это фундамент»
+    body = ("**⚡️ Заголовок поста тут**\n\nКогда такая компания выбирает платёжную архитектуру для "
+            "агентного интернета - это не пилот. Это фундамент\n\nхвост поста")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("Это не X. Это Y" in w for w in warns)
+
+
+def test_eto_ne_x_eto_y_still_caught_at_sentence_start():
+    body = "**⚡️ Заголовок**\n\nЭто не эксперимент. Это архитектура расчётов\n\nхвост"
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("Это не X. Это Y" in w for w in warns)
+
+
+def test_plain_negation_inside_one_sentence_not_flagged():
+    # обычное «это не так, это иначе» внутри фразы штампом не считаем (вторая часть без заглавной)
+    body = "**⚡️ Заголовок**\n\nДля инвестора это не мелочь, это меняет расклад\n\nхвост"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("Это не X. Это Y" in w for w in warns)
+
+
+def test_solo_label_lead_in_warns_for_scope():
+    # «Честно:» — тот же ярлык-раздел, только в одно слово; список ловил лишь составные («риск честно»)
+    body = ("**⚡️ Заголовок поста тут**\n\nтело поста\n\nЧестно: пока открылось только резервирование, "
+            "реальные платежи обещают позже\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("подводку-ярлык" in w for w in warns)
+
+
+def test_honest_inside_line_is_not_a_label():
+    # «честно» живой строкой — норма (мануал прямо велит вплетать оговорку в фразу)
+    body = ("**⚡️ Заголовок поста тут**\n\nповод честно позитивный, и оптика тут честно в плюс\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("подводку-ярлык" in w for w in warns)
+
+
+def test_handle_anglicism_warns():
+    body = "**⚡️ Заголовок**\n\nПока открылось только резервирование handle\n\nфинал"
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("англицизмы" in w and "handle" in w for w in warns)
+
+
+# --- ПОДАЧА: структура абзацев и скрытый вопрос в финале (правки владельца 07.08, MetaMask) ---
+# Пост уехал в отложку с абзацем на 415 знаков (четыре мысли через «;») и финалом-вопросом без «?».
+# Владелец разнёс абзацы и переписал финал руками — оба класса теперь меряет код.
+
+def test_finale_question_without_mark_flagged():
+    fin = "Архитектура закладывается именно сейчас. Чьи правила окажутся у AI в кармане - банка или Ваши"
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert any("БЕЗ знака вопроса" in w for w in warns)
+
+
+def test_finale_alternative_tail_flagged():
+    # хвост-выбор «- А или Б» — тот же вопрос, даже без вопросительного слова в начале
+    _, warns = creator_tools._lint(
+        _post_with_finale("Платит за это в итоге кто-то один - держатель токена или сама сеть"), "scope")
+    assert any("БЕЗ знака вопроса" in w for w in warns)
+
+
+def test_statement_kicker_with_ili_not_flagged():
+    # «или» внутри утверждения — норма, претензии быть не должно (0 ложных на 277 финалах канала)
+    _, warns = creator_tools._lint(
+        _post_with_finale("Такие сделки закрывают банки или биржи, а платит всегда клиент"), "scope")
+    assert not any("БЕЗ знака вопроса" in w for w in warns)
+
+
+def test_owner_rewritten_finale_is_clean():
+    # финал, который владелец написал взамен: утверждение, стоит само → линтер молчит
+    fin = ("Человеку в системе можно доверять или нет. Коду доверять не нужно - он либо пропускает "
+           "операцию, либо нет")
+    _, warns = creator_tools._lint(_post_with_finale(fin), "scope")
+    assert not any(w.startswith("scope: финал") for w in warns)
+
+
+def test_wall_paragraph_flagged():
+    wall = ("Два режима: Guard Mode - агент работает по одобренному списку протоколов и лимитам, выход "
+            "за правила - двухфакторка владельцу; Beast Mode - минимум прерываний, но принудительная 2FA "
+            "на транзакциях, помеченных как вредоносные, сохраняется. Каждая транзакция проходит "
+            "симуляцию и проверку угроз до исполнения. Убыток, если защита не сработала - покрывается "
+            "до 10 000$ в месяц. За кошельком - 100 млн пользователей MetaMask")
+    _, warns = creator_tools._lint(_post_with_finale(wall + "\n\nфинал строкой"), "scope")
+    assert any("ПРОСТЫНЯ" in w for w in warns)
+
+
+def test_semicolon_enumeration_flagged():
+    body = ("**⚡️ Заголовок**\n\nДва режима: Guard Mode - по списку протоколов; Beast Mode - без "
+            "остановок\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("СЛЕПЛЕНО В СТРОКУ" in w for w in warns)
+
+
+def test_normal_paragraphs_not_flagged_as_wall():
+    # разнесённая владельцем версия тех же фактов — претензий к структуре нет
+    body = ("**⚡️ AI получил кошелёк**\n\nДва режима:\n\nGuard Mode - агент работает по одобренному "
+            "списку протоколов и лимитам, выход за правила - 2FA владельцу\n\nBeast Mode - минимум "
+            "прерываний, но принудительная 2FA на вредоносных транзакциях\n\nКстати, у МетаМаск более "
+            "100 млн пользователей\n\nфинал строкой")
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("ПРОСТЫНЯ" in w or "СЛЕПЛЕНО" in w for w in warns)
+
+
+def test_list_block_not_counted_as_wall():
+    # маркированный список-блок (3+ строки в абзаце) длинный ПО ПРИРОДЕ — не простыня
+    lst = "\n".join("🔸 " + "пункт списка канала про архитектуру сети и экономику токена" for _ in range(4))
+    _, warns = creator_tools._lint("**⚡️ Заголовок**\n\n" + lst + "\n\nфинал", "scope")
+    assert not any("ПРОСТЫНЯ" in w for w in warns)
+
+
+def test_term_jitter_flagged():
+    body = ("**⚡️ Заголовок**\n\nВыход за правила - двухфакторка владельцу, а на вредоносных "
+            "транзакциях 2FA принудительная\n\nфинал")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("ДВУМЯ ИМЕНАМИ" in w for w in warns)
+
+
+def test_single_term_is_clean():
+    body = "**⚡️ Заголовок**\n\nВыход за правила - 2FA владельцу, на вредоносных 2FA принудительная\n\nфинал"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("ДВУМЯ ИМЕНАМИ" in w for w in warns)
+
+
+# --- код-жаргон без расшифровки (владелец 10.08: «не понятна сама проблема») ---
+
+def test_protocol_code_flagged():
+    """Пост 10.08 назвал BIP-110 четырежды и ни разу не сказал, что тот предлагал. Имя стандарта
+    читателю канала не говорит ничего — линтер возвращает автору вопрос, а не правит текст."""
+    body = ("**🌐 Заголовок поста**\n\n8 августа сеть раскололась. Правило BIP-110 включилось и "
+            "потребовало, чтобы майнеры под него подписались\n\nфинал стоит сам")
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("КОД-ЖАРГОН" in w and "BIP-110" in w for w in warns)
+
+
+def test_known_code_not_flagged():
+    # GPT-5 аудитория знает без расшифровки — на таком не дёргаем (замер: шаблон и так <1% постов)
+    body = "**⚡️ Заголовок**\n\nGPT-5 вышел вчера и стоит денег\n\nфинал стоит сам"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("КОД-ЖАРГОН" in w for w in warns)
+
+
+def test_no_code_no_warning():
+    body = "**⚡️ Заголовок**\n\nБиржа купила блокчейн-компанию за 400 млн usd\n\nфинал стоит сам"
+    _, warns = creator_tools._lint(body, "scope")
+    assert not any("КОД-ЖАРГОН" in w for w in warns)
+
+
+# --- длина scope: цель ≠ раздувание (правка 10.08) ---
+
+def test_over_target_is_advice_not_hard_stop():
+    """Между целью формата и раздуванием линтер СОВЕТУЕТ резать воду, но не запрещает: жёсткий ⛔
+    здесь заставлял писателя выбрасывать объяснение предмета, чтобы влезть (случай BIP-110)."""
+    body = "**⚡️ Заголовок**\n\n" + ("тело " * 285) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
+    _, warns = creator_tools._lint(body, "scope")
+    long_w = [w for w in warns if "длинноват" in w or "РАЗДУЛСЯ" in w]
+    assert long_w, "выше потолка линтер обязан сказать про длину"
+
+
+def test_bloat_is_hard_stop():
+    body = "**⚡️ Заголовок**\n\n" + ("тело " * 400) + "\n\nфинал стоит сам\n\n🖥 Канал | ▶️ Медиа"
+    _, warns = creator_tools._lint(body, "scope")
+    assert any("РАЗДУЛСЯ" in w for w in warns)
+
+
+# --- выдуманная сцена-свидетель (урок 16.07 → повтор 20.08, теперь в коде) ---
+
+def test_flags_invented_chat_quote():
+    """«Чат ожил: "развернулись, погнали"» — реплика, приписанная безымянной толпе (флагман SOPR 20.08)."""
+    body = '**📊 Заголовок**\n\nЧат ожил: "развернулись, погнали"\n\nдальше текст'
+    _, warns = creator_tools._lint(body, "флагман")
+    assert any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_flags_invented_witness_action():
+    body = "**📊 Заголовок**\n\nЕщё неделю назад было скучно, знакомые уходили из чата\n\nдальше"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_generalized_observation_not_flagged():
+    """Форма, на которую владелец САМ переписал сцену 16.07, — законная, её не трогаем."""
+    body = "**📊 Заголовок**\n\nРаньше присылали в чаты скрины с иксами\n\nдальше текст"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_share_with_friend_not_flagged():
+    body = "**📊 Заголовок**\n\nПост, которым хочется поделиться с другом и обсудить\n\nдальше"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+# --- флагман про метрику: где стрелка СЕГОДНЯ (правка владельца 20.08) ---
+
+def test_metric_post_without_today_reading():
+    body = ("**📊 SOPR - рынок в боли или в жадности?**\n\nSOPR сравнивает цену продажи с ценой покупки\n\n"
+            "Выше 1 - продают с прибылью, ниже 1 - в убыток\n\nВ медвежьем рынке SOPR упирается в 1")
+    _, warns = creator_tools._lint(body, "флагман")
+    assert any("БЕЗ ПОКАЗАНИЯ НА СЕГОДНЯ" in w for w in warns)
+
+
+def test_metric_post_with_today_reading_ok():
+    body = ("**📊 SOPR - рынок в боли или в жадности?**\n\nSOPR сравнивает цену продажи с ценой покупки\n\n"
+            "Сейчас SOPR у 1.007 - рынок продаёт в ноль\n\nВ медвежьем рынке SOPR упирается в 1")
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("БЕЗ ПОКАЗАНИЯ НА СЕГОДНЯ" in w for w in warns)
+
+
+def test_metric_mentioned_in_passing_not_flagged():
+    """Упоминание вскользь (<3 раз) — пост не ПРО метрику, показания не требуем."""
+    body = "**📊 Заголовок**\n\nЕсть ещё MVRV, но это тема другого поста\n\nдальше текст про другое"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("БЕЗ ПОКАЗАНИЯ НА СЕГОДНЯ" in w for w in warns)
+
+
+def test_generalization_frame_not_flagged():
+    """Живой оборот канала: персонаж внутри рамки обобщения («Вы наверняка ловили себя…») — законен.
+    Замер по 323 постам: это единственное срабатывание детектора на утверждённых текстах."""
+    body = ('**📊 Заголовок**\n\nВы наверняка ловили себя на этом: друг скинул "перспективный альт" - '
+            'неудобно отказать\n\nдальше текст')
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+def test_market_generalization_not_flagged():
+    """«Толпа продаёт» / «кто-то покупает» — обобщение РЫНКА, а не персонаж-свидетель."""
+    body = "**📊 Заголовок**\n\nТолпа продаёт на дне, а кто-то по другую сторону молча покупал\n\nдальше"
+    _, warns = creator_tools._lint(body, "флагман")
+    assert not any("ВЫДУМАННАЯ СЦЕНА" in w for w in warns)
+
+
+# --- МОСТИК-ПУСТЫШКА: предложение, которое только объявляет, что сейчас будет факт (26.08) ---
+
+def test_bridge_phrase_in_vacuum_is_flagged():
+    post = ("**⚠️ Заголовок**\n\nДалласу не пришлось моделировать в вакууме. Бразильский Pix - "
+            "мгновенные платежи: 200 млн пользователей\n\n" + _FOOT)
+    warns = creator_tools._lint(post, "scope")[1]
+    assert any("мостик-пустышка" in w and "в вакууме" in w for w in warns)
+
+
+def test_bridge_phrases_family():
+    for phrase in ("Это выросло не на пустом месте", "Цифра взята не с потолка",
+                   "Ответ не заставил себя ждать"):
+        warns = creator_tools._lint(f"**⚠️ Заголовок**\n\n{phrase}\n\n" + _FOOT, "scope")[1]
+        assert any("мостик-пустышка" in w for w in warns), phrase
+
+
+def test_normal_text_has_no_bridge_warning():
+    post = ("**⚠️ Заголовок**\n\nБразильский Pix - мгновенные платежи: 200 млн пользователей, "
+            "около 650 млрд$ в месяц\n\n" + _FOOT)
+    warns = creator_tools._lint(post, "scope")[1]
+    assert not any("мостик-пустышка" in w for w in warns)
+
+
+# ── МЕТА НЕ СУДИТСЯ КАК ТЕКСТ ПОСТА (12.09.2026) ────────────────────────────────────────────────
+# Пока [[УЗЕЛ]]/[[ВЫХОД]] писали редко, линтер спокойно мерил текст целиком. Как только гейт выхода
+# сделал мету обязательной, четыре проверки из пяти стали врать НА КАЖДОМ прогоне: замер живого
+# драфта 12.09 — тело 1371 знак, с метой 1710, и линтер выдал «⛔ РАЗДУЛСЯ 1710 при 1500», «передоз
+# антитезы ~3 шт» (считая антитезы внутри меты), «якорного жирного МАЛО ~7%» (мета разбавила долю) и
+# «вывод БЕЗ акцента» (за финальный блок принята строка [[ВЫХОД]]). Владельцу в панель ушло «поправь
+# жирный руками» по посту, где всё было в норме.
+
+META = ("\n[[SPLIT]]\n"
+        "[[УЗЕЛ]] когда покупаешь копию вещи, а не саму вещь, право распоряжаться остаётся у того, "
+        "кто держит оригинал, а не у тебя\n"
+        "[[ВЫХОД]] прежде чем купить токен акции, проверь, кто голосует базовой бумагой\n"
+        "[[MEDIA_SRC]] https://example.com/a\n")
+
+
+def _scope_post() -> str:
+    return ("**⚠️ Заголовок поста один**\n\n"
+            "11 сентября глава компании написал в X: вето у эмитента быть не должно\n\n"
+            "Токен - долговая бумага, обеспеченная **1:1** реальной акцией в залоге\n\n"
+            "Держатель получает цену и дивиденды, но в реестр не попадает и голосовать не может\n\n"
+            "Право голоса **переехало к платформе**, которая держит залог\n\n"
+            "🖥 [Канал](https://t.me/x) | ▶️ [Медиа](https://linktr.ee/x)")
+
+
+def test_meta_is_not_counted_in_length():
+    body = _scope_post()
+    n_body = len(creator_tools._lint(body, "scope")[0].partition("[[SPLIT]]")[0].encode("utf-16-le")) // 2
+    w_with = creator_tools._lint(body + META, "scope")[1]
+    assert not any("РАЗДУЛСЯ" in x or "длинноват" in x for x in w_with), w_with
+    # и сама длина считается по телу, а не по телу+мете
+    assert n_body < creator_tools.SCOPE_TOTAL_CAP
+
+
+def test_meta_survives_the_linter():
+    """Мету парсят пайплайн, журнал вышедших и Threads-ветка — терять её нельзя."""
+    clean = creator_tools._lint(_scope_post() + META, "scope")[0]
+    for mark in ("[[SPLIT]]", "[[УЗЕЛ]]", "[[ВЫХОД]]", "[[MEDIA_SRC]]", "https://example.com/a"):
+        assert mark in clean, mark
+
+
+def test_meta_does_not_dilute_bold_or_fake_the_finale():
+    plain = creator_tools._lint(_scope_post(), "scope")[1]
+    withm = creator_tools._lint(_scope_post() + META, "scope")[1]
+    assert [x for x in plain if "жирн" in x or "акцент" in x] == \
+           [x for x in withm if "жирн" in x or "акцент" in x]
+
+
+def test_yavlyaetsya_not_caught_inside_other_words():
+    """«явля» жило внутри «предъявляет»/«заявляет»/«появляется», и прогон 12.09 три круга подряд
+    получал «"является" — 1 шт» на тексте, где слова нет. Ложный чек учит не верить линтеру."""
+    for ok in ("а претензию предъявляет эмитенту токена",
+               "глава компании заявляет об этом прямо",
+               "на графике появляется разрыв"):
+        w = creator_tools._lint(f"**Заголовок**\n\n{ok}\n\n🖥 Канал", "scope")[1]
+        assert not any("является" in x for x in w), ok
+    # настоящее «является» по-прежнему ловим
+    w = creator_tools._lint("**Заголовок**\n\nЭто является проблемой рынка\n\n🖥 Канал", "scope")[1]
+    assert any("является" in x for x in w)
+
+
+def test_announce_phrase_variant_from_the_run_is_caught():
+    """«Но дальше начинается интересное» (прогон 12.09) — та же фраза-анонс важности, что «самое
+    интересное» из §5, только другими словами. Замер канала: 0 вхождений, то есть язык завода."""
+    w = creator_tools._lint("**Заголовок**\n\nНо дальше начинается интересное\n\n🖥 Канал", "scope")[1]
+    assert any("фраза-анонс" in x for x in w)

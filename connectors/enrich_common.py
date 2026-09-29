@@ -11,7 +11,7 @@ import json
 
 from anthropic import Anthropic
 
-from core import config, io_safe, post_angle, topic_category
+from core import config, cost, io_safe, post_angle, topic_category
 
 MODEL = "claude-haiku-4-5"   # классификация/заголовки — дёшево и достаточно
 BATCH = 12                   # меньше батч → ответ не упирается в лимит токенов
@@ -62,6 +62,13 @@ def _enrich_batch(client: Anthropic, batch: list[dict], preamble: str) -> list[d
     content = preamble + "\n" + _FIELDS.format(cats=_CATS, angles=_ANGLES, posts="\n".join(lines))
     msg = client.messages.create(model=MODEL, max_tokens=OUT_TOKENS,
                                  messages=[{"role": "user", "content": content}])
+    # В ЖУРНАЛ РАСХОДОВ (аудит кэша 28.09.2026): это были единственные вызовы Claude в проекте мимо
+    # data/cost_log.jsonl — в письме Anthropic они есть, у нас их не было. Метку возвращаем, чтобы не
+    # утащить под неё расход вызывающего.
+    _prev = cost.get_context()
+    cost.set_context("enrich")
+    cost.record(MODEL, msg.usage)
+    cost.set_context(_prev)
     out = "".join(b.text for b in msg.content if b.type == "text")
     return _parse_json(out)
 

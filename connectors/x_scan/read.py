@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from core import config, untrusted  # config грузит .env; untrusted — страж записи в леджер (N-6)
+from core import config, io_safe, untrusted  # config грузит .env; untrusted — страж записи в леджер (N-6)
 
 HERE = Path(__file__).resolve().parent
 LEADERS_FILE = HERE / "leaders.yaml"               # семя: курируемый владельцем стартовый ростер
@@ -62,7 +62,7 @@ def _load_ledger() -> dict:
 
 def _save_ledger(ledger: dict) -> None:
     LEDGER_FILE.parent.mkdir(exist_ok=True)
-    LEDGER_FILE.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
+    io_safe.dump_json(LEDGER_FILE, ledger)  # атомарно (аудит 29.09)
 
 
 def _ensure_seeded(ledger: dict) -> bool:

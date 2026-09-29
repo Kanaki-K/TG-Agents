@@ -10,7 +10,9 @@
   пост почти дословно). Сомневаешься → 🆕 (на Threads молчание дороже лишнего поста — враг РАЗРЫВ, §2).
 
 Поэтому у Threads СВОЙ судья (THREADS_DEDUP_SYSTEM), а не ТГ-строгий. Формат вердикта тот же (🆕/🔁 +
-РЕКОМЕНДУЮ/СТАТУС) — читается парсерами core.dedup (all_repeats/recommended_theme/failed).
+РЕКОМЕНДУЮ/СТАТУС). ⚠️ 31.07: парсеры этого формата в core.dedup УДАЛЕНЫ вместе с ТГ-анти-повтором
+(он слился в topic_gate). Модуль дормантный — в конвейере Threads не вызывается; когда будем поднимать
+Ф2, читать вердикт нужно своими парсерами либо переводить Threads на ту же схему одного суда.
 
 ⚠️ Свежесть: сверка идёт по выгрузке на диске (434 поста, последний collect 12.07). Токен Threads
 ЖИВОЙ (истекает ~сен-2026, авто-обновляется) — данные устаревают лишь оттого, что refresh_threads
@@ -98,7 +100,7 @@ def check(candidate: str, api_key: str | None = None, model: str | None = None) 
     if not candidate:
         return "(кандидата нет — нечего сверять)\nРЕКОМЕНДУЮ: «»\nСТАТУС: ОК"
     dg = digest()
-    mdl = model or runmode.resolve("claude-sonnet-4-6", ceiling="claude-sonnet-4-6")
+    mdl = model or runmode.resolve("claude-sonnet-5", ceiling="claude-sonnet-5")
     user = (f"ПОСТ-КАНДИДАТ (будущий пост Threads):\n{candidate}\n\n"
             f"НЕДАВНИЕ ПОСТЫ THREADS за {WINDOW_WEEKS} нед (дата | заголовок | тема — суть, свежие "
             f"сверху):\n{dg}\n\n"

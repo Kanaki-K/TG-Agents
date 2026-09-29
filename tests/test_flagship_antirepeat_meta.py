@@ -1,0 +1,183 @@
+"""АНТИ-ПОВТОР И МЕТА ФЛАГМАНА (17.09.2026) — две дыры, найденные на прогоне про сеть Arc.
+
+ЗАЧЕМ. 17.09 флагман вышел третьим заходом на одно событие: #472 от 05.08 в канале («Сеть Circle
+обслуживают те же, кто в неё вложил деньги»), три скоуп-черновика 16.09 и сам флагман 17.09.
+Владелец: «анти-повтор должен быть и у скоупа, и у флагмана, не важно чей, но ловить должен при том
+и том прогоне».
+
+ЧТО ПОКАЗАЛ АУДИТ КОДА:
+  1. `_recent_made_titles()` (отложка + черновики ОБОИХ форматов) вычислялся ВНУТРИ ветки скоупа —
+     флагман не видел ни вчерашних черновиков, ни очереди публикации;
+  2. `avoid` у флагмана был МЁРТВЫМ параметром: принимался `_run_creator` и нигде не использовался;
+  3. кодовых проверок повтора у флагмана не было вообще — только просьба в промпте пикера, а тема из
+     банка проверялась метками [вышло]; сам УГОЛ пикер сочинял из свежего брифа Скаута и не сверял
+     ни с чем;
+  4. мета §7.9 ([[УЗЕЛ]]/[[ТИП]]/[[ВЫХОД]]) не писалась НИ РАЗУ: 40 записей журнала подряд с пустым
+     `service`, то есть ротация типов услуги работала вслепую всё своё существование.
+
+Запуск: python -m pytest tests/test_flagship_antirepeat_meta.py"""
+from __future__ import annotations
+
+import inspect
+import json
+
+import run_pipeline as RP
+from core import creator_bot, creator_tools as ct, published_journal as PJ, topic_gate
+
+FLAGSHIP = """**🌐 Почему Уолл-стрит строит на эфире**
+
+16 сентября Circle включила Arc - сеть для расчётов в USDC
+
+Среди 11 валидаторов BlackRock, Visa, DTCC
+
+🖥 [Канал](https://t.me/x)
+"""
+
+
+# ── 1. Список «уже сделано» — общий для обоих форматов ──────────────────────────────────────────
+
+def test_recent_is_computed_before_the_branch():
+    """Реальная дыра 17.09: список жил внутри `if scope:` и до флагмана не доезжал."""
+    src = inspect.getsource(RP.run_cycle)
+    assert "_recent = _recent_made_titles()" in src
+    assert src.index("_recent = _recent_made_titles()") < src.index("    if scope:"), \
+        "список «уже сделано» снова считается только в ветке скоупа"
+
+
+def test_avoid_reaches_the_flagship_writer():
+    """`avoid` был мёртвым параметром: приходил в _run_creator и никуда не шёл."""
+    src = inspect.getsource(RP._run_creator)
+    assert "УЖЕ НАПИСАНО И ЖДЁТ ВЫХОДА" in src and "if avoid else" in src
+
+
+def test_avoid_is_set_for_both_formats():
+    """Отступ = принадлежность ветке: 4 пробела — тело run_cycle, 8 — снова «только для скоупа»."""
+    line = next(l for l in inspect.getsource(RP.run_cycle).splitlines()
+                if 'avoid = "; ".join(_recent[:6])' in l)
+    assert len(line) - len(line.lstrip()) == 4, "avoid снова собирается внутри ветки скоупа"
+
+
+# ── 2. Лестница анти-повтора у флагмана ─────────────────────────────────────────────────────────
+
+def test_flagship_has_a_code_gate_not_a_request():
+    src = inspect.getsource(RP.run_cycle)
+    assert "topic_gate.already_written(probe, _recent)" in src, "нет детерминированной проверки"
+    assert "topic_gate.concept_repeat(probe" in src, "нет судьи понятия"
+
+
+def test_repeat_repicks_the_theme_twice_before_dropping_the_angle():
+    """24.09: второй круг снимал только угол и писал ТУ ЖЕ тему — при повторе самой темы банка это
+    дубль. Теперь два пере-выбора темы с накопленным запретом (включая саму тему), угол — лишь на 3-м."""
+    src = inspect.getsource(RP.run_cycle)
+    loop = src.split("for _round in (1, 2, 3):")[1][:2200]
+    assert "if _round < 3:" in loop and "_pick_timely_theme(_recent, forbid=" in loop
+    assert 'f"тема «{theme}»' in loop, "в запрет не попадает сама тема — пикер вернёт её же"
+    assert loop.index("if _round < 3:") < loop.index('theme_angle = ""'), "угол снимается раньше пере-выбора"
+
+
+def test_picker_takes_recent_and_forbid():
+    sig = inspect.signature(RP._pick_timely_theme)
+    assert "recent" in sig.parameters and "forbid" in sig.parameters
+    src = inspect.getsource(RP._pick_timely_theme)
+    assert "УЖЕ НАПИСАНО И ЖДЁТ ВЫХОДА" in src and "ПРОШЛЫЙ ВЫБОР ОТКЛОНЁН КОДОМ" in src
+
+
+def test_real_case_17_09_would_be_caught():
+    """Замок на живом случае: гист вчерашнего скоуп-черновика против сегодняшнего угла флагмана."""
+    draft = (ct.DRAFTS_DIR / "2026-09-16-circle-arc-scope.md")
+    if not draft.exists():          # черновики локальные — на чужой машине тест не падает
+        return
+    gist = RP._post_gist(draft.read_text(encoding="utf-8"))
+    probe = "Стейблкоины — Circle включила сеть Arc, среди валидаторов BlackRock и DTCC"
+    assert topic_gate.already_written(probe, [gist]), "дубль Arc снова прошёл бы молча"
+
+
+# ── 3. Мета флагмана ────────────────────────────────────────────────────────────────────────────
+
+def test_missing_meta_is_a_defect():
+    assert ct.flagship_meta_defects(FLAGSHIP)
+
+
+def test_full_meta_is_clean():
+    ok = FLAGSHIP + ("\n\n[[SPLIT]]\n[[УЗЕЛ]] деньги в сети важнее цены её токена\n"
+                     "[[ТИП]] линза\n[[ВЫХОД]] смотреть на объём стейблкоинов сети, а не на курс токена")
+    assert ct.flagship_meta_defects(ok) == []
+
+
+def test_type_must_be_from_the_list():
+    bad = FLAGSHIP + "\n\n[[SPLIT]]\n[[УЗЕЛ]] деньги в сети важнее цены токена\n[[ТИП]] аналитика\n[[ВЫХОД]] смотреть на объём стейблкоинов сети"
+    assert any("не из списка" in d for d in ct.flagship_meta_defects(bad))
+
+
+def test_exit_of_knowledge_verbs_is_illusion():
+    bad = FLAGSHIP + "\n\n[[SPLIT]]\n[[УЗЕЛ]] деньги в сети важнее цены токена\n[[ТИП]] линза\n[[ВЫХОД]] читатель узнает про стейблкоины на эфире"
+    assert any("иллюзия знания" in d for d in ct.flagship_meta_defects(bad))
+
+
+def test_honest_no_exit_is_accepted():
+    ok = FLAGSHIP + "\n\n[[SPLIT]]\n[[УЗЕЛ]] деньги в сети важнее цены токена\n[[ТИП]] линза\n[[ВЫХОД]] выхода нет: пост даёт понимание, не защиту"
+    assert ct.flagship_meta_defects(ok) == []
+
+
+def test_meta_round_is_wired_and_does_not_touch_the_body():
+    src = inspect.getsource(RP.run_cycle)
+    assert "creator_tools.flagship_meta_defects" in src
+    assert "ни слова, ни цифры, ни заголовка не трогай" in creator_bot.FIX_META
+
+
+# ── 4. Ротация типов услуги получает данные даже без меты ───────────────────────────────────────
+
+def test_service_falls_back_to_the_picker(tmp_path, monkeypatch):
+    monkeypatch.setattr(PJ, "JOURNAL", tmp_path / "j.jsonl")
+    PJ.record("тело поста", "тема", kind="flagship", service="линза")
+    e = json.loads((tmp_path / "j.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert e["service"] == "линза"
+
+
+def test_meta_type_wins_over_the_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(PJ, "JOURNAL", tmp_path / "j.jsonl")
+    PJ.record("тело\n\n[[SPLIT]]\n[[ТИП]] инструмент", "тема", kind="flagship", service="линза")
+    e = json.loads((tmp_path / "j.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert e["service"] == "инструмент"
+
+
+def test_pipeline_passes_the_picked_type_to_the_journal():
+    src = inspect.getsource(RP.run_cycle)
+    assert 'service=meas.get("тип услуги", "")' in src
+
+
+def test_flagship_concept_judge_sees_a_year(monkeypatch):
+    """24.09.2026: флагман повторил #446 от 08.07 — судья понятия смотрел 8 недель, пост был 78 дней
+    назад. Флагман пишет вечные темы: окно судьи у него — год, и оно реально доезжает до сводки."""
+    from core import analytics, topic_gate
+    src = open("run_pipeline.py", encoding="utf-8").read()
+    assert "weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS" in src, "флагман зовёт судью с окном скоупа (8 нед)"
+    assert topic_gate.FLAGSHIP_REPEAT_WEEKS >= 26, "окно короче полугода пропустит вечную тему банка"
+    seen = {}
+    monkeypatch.setattr(analytics, "topics_digest", lambda weeks=None, **_: seen.setdefault("w", weeks) and "")
+    topic_gate.concept_repeat("тема", weeks=topic_gate.FLAGSHIP_REPEAT_WEEKS)
+    assert seen["w"] == topic_gate.FLAGSHIP_REPEAT_WEEKS
+
+
+# ── Цена без потери качества (24.09.2026) ───────────────────────────────────────────────────────
+
+def test_all_creator_rounds_share_one_toolset():
+    """Кэш свода держится на префиксе «инструменты + свод». Круг меты шёл без веб-поиска и каждый
+    прогон заново писал ~60 тыс. токенов Opus ($0.38). Один набор на всех — кэш общий."""
+    for fn in (RP._run_creator_fix, RP._run_creator_blockers, RP._run_creator_meta):
+        src = inspect.getsource(fn)
+        assert "_creator_toolset(cfg)" in src, f"{fn.__name__} собирает инструменты сам — кэш разъедется"
+        assert "list(creator_tools.TOOLS)" not in src
+
+
+def test_fact_fix_carries_the_meta():
+    """Правка фактов раньше получала пост БЕЗ меты и с приказом «без меты» — мета терялась всегда."""
+    from core import creator_bot
+    src = inspect.getsource(RP._run_creator_fix)
+    assert 'latest_draft("flagship")' in src and '"[[SPLIT]]" in draft' in src
+    assert "ДОСЛОВНО" in creator_bot.FIX_FACTS and "[[УЗЕЛ]]" in creator_bot.FIX_FACTS
+
+
+def test_writer_is_asked_for_meta_inside_save_draft():
+    from core import creator_bot
+    assert "МЕТА (§7.9) — ВНУТРИ save_draft" in creator_bot.COMMANDS["post"]

@@ -39,6 +39,38 @@ def test_non_provenance_iz_italic_kept(tmp_path):
     assert "из этого правила исключений нет" in ctx
 
 
+def test_strips_scope_style_provenance_tails(tmp_path):
+    # ЗАМЕР 17.08: у флагмана срезалось 35/35 хвостов, у scope 40/48 — восемь писались другими
+    # словами и белый список их не знал, то есть жир платился каждый прогон. Формы взяты из
+    # реальных строк scope_lessons.md.
+    f = tmp_path / "scope_lessons.md"
+    tails = ("— _похвала владельца Satsuma 22.07_",
+             "— _уточнение владельца 29.07 (расширяет урок SWIFT 09.07)_",
+             "— _разбор Coldcard-поста 31.07: владелец удалил опубликованное_",
+             "— _редактура владельца Cloudflare 05.08_",
+             "— _финальная редактура владельца Circle/Arc 05.08_")
+    f.write_text("".join(f"- (2026-08-01) Правило номер {i} про подачу {t}\n"
+                         for i, t in enumerate(tails)), encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    for i in range(len(tails)):
+        assert f"Правило номер {i} про подачу" in ctx      # ПРАВИЛА целы
+    for w in ("похвала владельца", "уточнение владельца", "разбор Coldcard",
+              "редактура владельца", "финальная редактура"):
+        assert w not in ctx, w                              # провенанс срезан
+
+
+def test_widened_whitelist_still_ignores_rule_italics(tmp_path):
+    # расширение белого списка не должно превратиться в «режем любой курсив в конце» —
+    # это была бы потеря ПРАВИЛА (нит ревью 20.07, ради которого якорь и сузили)
+    f = tmp_path / "scope_lessons.md"
+    f.write_text("- (2026-08-01) Финал делай самостоятельным — _и точка_\n"
+                 "- (2026-08-02) Не пиши «из коробки» — _из этого правила исключений нет_\n",
+                 encoding="utf-8")
+    ctx = creator_tools.load_lessons_for_context(f)
+    assert "и точка" in ctx
+    assert "из этого правила исключений нет" in ctx
+
+
 def test_flag_off_keeps_provenance(tmp_path, monkeypatch):
     f = tmp_path / "post_lessons.md"
     f.write_text("- (2026-06-17) Правило X — _из правки: было Y_\n", encoding="utf-8")
@@ -67,6 +99,78 @@ def test_missing_or_empty_file_returns_empty(tmp_path):
     assert creator_tools.load_lessons_for_context(empty) == ""
 
 
+# ── Страж дублей: сверка ПО СУТИ, а не по буквам (владелец 17.08) ────────────────────────────────
+# Замер 17.08: при пороге 0.6 по ВСЕМУ тексту максимальная похожесть среди всех пар уроков была
+# 0.26 (scope) и 0.40 (флагман) — страж не срабатывал ни разу и не мог. Разбор случая занимает 2/3
+# слов урока и у каждого свой, поэтому сравнивались истории, а не правила.
+
+_OLD = ("- (2026-07-01) ФИНАЛ — САМОСТОЯТЕЛЬНЫЙ КИКЕР, не вопрос и не хедж. Машина закрыла пост "
+        "вопросом «а что дальше?», владелец переписал строку руками. ПРАВИЛО: последний абзац "
+        "читается отдельно от поста и утверждает, а не спрашивает. — _из правки Chainlink 01.07_\n")
+
+
+def test_core_keeps_rule_drops_case(tmp_path):
+    core = creator_tools._lesson_core(_OLD)
+    assert "самостоятельный кикер" in core          # правило (первая фраза) цело
+    assert "последний абзац" in core                # клауза «ПРАВИЛО: …» цела
+    assert "машина закрыла" not in core             # разбор случая выброшен
+    assert "chainlink" not in core                  # провенанс выброшен
+
+
+_SAME_RULE = ("ЗАКРЫТИЕ поста обязано стоять само: последний абзац утверждать и читаться отдельно, "
+              "а не спрашивать читателя. Машина повесила в конце вопрос, владелец заменил его "
+              "прямым выводом")
+
+
+def test_same_rule_other_case_is_caught(tmp_path):
+    # ТО ЖЕ правило на другом посте и в других формах слов («утверждать» vs «утверждает»).
+    # Буквальная сверка тут даёт 0.35 при пороге 0.6 — то есть ловит именно сверка ПО СУТИ.
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    hit = creator_tools._lesson_duplicate(_SAME_RULE, f)
+    assert hit is not None
+    line, why = hit
+    assert "САМОСТОЯТЕЛЬНЫЙ КИКЕР" in line          # показываем КАКОЙ урок похож
+    assert "ПО СУТИ" in why and "абзац" in why      # …и ЧЕМ похож, чтобы автор назвал отличие
+
+
+def test_different_rule_not_caught(tmp_path):
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    assert creator_tools._lesson_duplicate(
+        "ОБЛОЖКУ бери из первоисточника повода — og:image страницы события, а не сток", f) is None
+
+
+def test_literal_repeat_still_caught(tmp_path):
+    # второй вид сверки (буквальный, порог 0.6) остаётся: перезапись слово в слово ловится как раньше
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    hit = creator_tools._lesson_duplicate(
+        "ФИНАЛ — САМОСТОЯТЕЛЬНЫЙ КИКЕР, не вопрос и не хедж. Последний абзац читается отдельно от "
+        "поста и утверждает, а не спрашивает", f)
+    assert hit is not None and "повтор" in hit[1]
+
+
+def test_record_lesson_blocks_until_difference_named(tmp_path, monkeypatch):
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(_OLD, encoding="utf-8")
+    monkeypatch.setattr(creator_tools.config, "ROOT", tmp_path)   # мануала нет — страж мануала молчит
+    same = _SAME_RULE
+    out = creator_tools._record_lesson({"lesson": same}, f)
+    assert "похоже уже есть" in out and "confirm_new" in out
+    assert f.read_text(encoding="utf-8").count("- (") == 1        # НЕ записан
+    # автор назвал отличие и подтвердил — урок ложится в файл
+    # confirm_new сам по себе больше не пропуск: страж всегда ТРЕБОВАЛ назвать границу словами,
+    # теперь это требование проверяется — иначе в файле копились два похожих урока подряд.
+    out2 = creator_tools._record_lesson({"lesson": same, "confirm_new": True}, f)
+    assert "граница" in out2.lower() and f.read_text(encoding="utf-8").count("- (") == 1
+    # автор назвал отличие и подтвердил — урок ложится в файл
+    named = same + ". В отличие от урока 01.07 речь не про форму финала, а про запрет вопроса"
+    out3 = creator_tools._record_lesson({"lesson": named, "confirm_new": True}, f)
+    assert "записан" in out3
+    assert f.read_text(encoding="utf-8").count("- (") == 2
+
+
 def test_manual_guard_flags_duplicate(tmp_path, monkeypatch):
     # урок, повторяющий строку мануала, ловится стражем (порог 0.6 по значимым словам)
     (tmp_path / "memory").mkdir()
@@ -78,3 +182,100 @@ def test_manual_guard_flags_duplicate(tmp_path, monkeypatch):
     assert hit is not None
     # непохожее правило страж НЕ трогает
     assert creator_tools._covered_by_manual("Закрывающий вопрос делай коротким и понятным") is None
+
+
+def test_manual_guard_catches_rule_said_differently(tmp_path, monkeypatch):
+    # То же, что со стражем дублей: мануал повторяют НЕ дословно. Замер 17.08 по живому файлу —
+    # буквальная сверка не нашла ничего, сверка по сути нашла 5 уроков scope из 48, дублирующих
+    # мануал (напр. «ОСЬ scope = НОВОСТЬ + ТВОЙ ЕДЖ» ↔ одноимённый заголовок мануала).
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "scope_manual.md").write_text(
+        "## 1. ГЛАВНАЯ ОСЬ рубрики scope: свежая новость плюс твой собственный едж, иначе это лента\n",
+        encoding="utf-8")
+    monkeypatch.setattr(creator_tools.config, "ROOT", tmp_path)
+    hit = creator_tools._covered_by_manual(
+        "ОСЬ scope — свежая новость и твой едж: без собственного еджа получается лента, а не разбор",
+        "memory/scope_manual.md")
+    assert hit is not None
+    assert creator_tools._covered_by_manual(
+        "ОБЛОЖКУ бери из первоисточника повода, а не рисуй генератором",
+        "memory/scope_manual.md") is None
+
+
+# ── Анти-обрастание: потолок урока, автовыпуск закрытых кодом, бюджет активных ───────────────────
+# АУДИТ 12.09.2026. Страж дублей работал (6 похожих пар из 1540 на живом файле), а файл всё равно
+# дорос до 44 368 знаков против 17 285 у флагмана. Причина не в повторах: медиана урока scope 701
+# знак против 439 у флагмана, тринадцать уроков длиннее 1000, и НИ ОДИН урок scope за всё время не
+# был выпущен под 📦, хотя его правило давно держал линтер. Ниже — три механизма, которые это лечат.
+
+
+def test_long_lesson_refused_but_evidence_tail_is_free(tmp_path):
+    f = tmp_path / "scope_lessons.md"
+    long_rule = "ФИНАЛ обязан стоять сам. " + "Разбор случая на этом посте показывает то же самое. " * 30
+    out = creator_tools._record_lesson({"lesson": long_rule}, f)
+    assert "длиннее потолка" in out and not f.exists()
+    # тот же разбор, унесённый в evidence, записи не мешает: в контекст он и так не грузится
+    ok = creator_tools._record_lesson(
+        {"lesson": "ФИНАЛ обязан стоять сам: последняя строка утверждает и читается отдельно",
+         "evidence": "разбор на 30 постов: " + "длинная цитата владельца. " * 30}, f)
+    assert "записан" in ok
+
+
+def test_graduate_enforced_moves_only_stamped(tmp_path):
+    """Выпуск идёт по ШТАМПУ 📦 в хвосте, а не по прозе. Оба контрпримера ниже — РЕАЛЬНЫЕ хвосты из
+    scope_lessons, на которых первая версия детектора ошиблась: «оба теперь ловит линтер» относилось
+    к другим двум вещам из того же поста, а «ЗАКРЫТО КОДОМ… но помечается, не режется» — к чеку,
+    который лишь флажит (такие выпускать запрещено, промпт ещё предотвращает дефект)."""
+    f = tmp_path / "scope_lessons.md"
+    f.write_text(
+        "# Уроки\n\n"
+        # 1) штамп поставлен автором → выпускаем
+        "- (2026-08-19) БЕССОЮЗНАЯ АНТИТЕЗА только как панч в конце строки "
+        "— _правка владельца SEC 19.08; 📦 ловит линтер (только scope)_\n"
+        # 2) проза про линтер БЕЗ штампа, да ещё про соседние правила → не трогаем
+        "- (2026-08-05) ОТРИЦАНИЕ БЕЗ УТВЕРЖДЕНИЯ — недоделанная мысль "
+        "— _редактура владельца 05.08; в том же посте снят штамп и подводка-ярлык, оба теперь ловит линтер_\n"
+        # 3) «закрыто кодом», но чек только ПОМЕЧАЕТ → не трогаем
+        "- (2026-08-17) «НЕ A, А Б» — проверь, было ли A "
+        "— _правка владельца 17.08; ЗАКРЫТО КОДОМ, но помечается, не режется, решаешь ты_\n"
+        # 4) обычный живой урок
+        "- (2026-09-02) ИМЯ ИСТОЧНИКА в тексте — только если читатель его узнаёт — _правка 02.09_\n",
+        encoding="utf-8")
+    moved, size = creator_tools.graduate_enforced(f)
+    raw = f.read_text(encoding="utf-8")
+    active, graduated = creator_tools._split_graduated(raw)
+    assert moved == 1
+    assert "БЕССОЮЗНАЯ АНТИТЕЗА" in graduated and "БЕССОЮЗНАЯ АНТИТЕЗА" not in active
+    assert "ОТРИЦАНИЕ БЕЗ УТВЕРЖДЕНИЯ" in active     # проза про линтер без штампа не выпускает
+    assert "НЕ A, А Б" in active                      # «закрыто кодом», но чек только флажит
+    assert "ИМЯ ИСТОЧНИКА" in active
+    assert size == len(active)
+    # выпущенное не едет в промпт, но лежит в файле — обратимо
+    assert "БЕССОЮЗНАЯ АНТИТЕЗА" not in creator_tools.load_lessons_for_context(f)
+
+
+def test_budget_gate_blocks_write_until_space_freed(tmp_path, monkeypatch):
+    f = tmp_path / "scope_lessons.md"
+    monkeypatch.setattr(creator_tools, "LESSONS_BUDGET_CHARS", 1200)
+    fat = "".join(f"- (2026-08-0{i}) Правило номер {i}. " + "слова правила. " * 20 + "\n"
+                  for i in range(1, 6))
+    f.write_text("# Уроки\n\n" + fat, encoding="utf-8")
+    out = creator_tools._record_lesson({"lesson": "НОВОЕ правило про заголовок-обещание"}, f)
+    assert "Бюджет уроков исчерпан" in out
+    assert "НОВОЕ правило" not in f.read_text(encoding="utf-8")
+    # освободили место (выпустили половину под 📦) — запись проходит
+    raw = f.read_text(encoding="utf-8").replace("- (2026-08-03)", creator_tools.GRADUATED_MARK + "\n- (2026-08-03)")
+    f.write_text(raw, encoding="utf-8")
+    out2 = creator_tools._record_lesson({"lesson": "НОВОЕ правило про заголовок-обещание"}, f)
+    assert "записан" in out2
+
+
+def test_panel_line_shows_budget_state(tmp_path, monkeypatch):
+    f = tmp_path / "scope_lessons.md"
+    monkeypatch.setattr(creator_tools, "LESSONS_BUDGET_CHARS", 1000)
+    monkeypatch.setattr(creator_tools, "LESSONS_WARN_CHARS", 800)
+    f.write_text("# Уроки\n\n- (2026-08-01) Короткое правило\n", encoding="utf-8")
+    assert creator_tools.lessons_panel_line(f).startswith("✅")
+    f.write_text("# Уроки\n\n" + "- (2026-08-01) Правило. " + "слова. " * 200 + "\n", encoding="utf-8")
+    line = creator_tools.lessons_panel_line(f)
+    assert line.startswith("⛔") and "БЮДЖЕТ ИСЧЕРПАН" in line

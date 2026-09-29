@@ -21,30 +21,21 @@ import json
 from collections import Counter
 from datetime import date, timedelta
 
-from core import (analytics, category_scoring, config, io_safe, post_angle, self_learn, tg_scoring,
-                  threads_distill_journal, topic_category as tc, topic_datapoints)
+from core import (analytics, category_scoring, config, io_safe, post_angle, published_journal,
+                  self_learn, tg_scoring, threads_distill_journal, topic_category as tc,
+                  topic_datapoints)
 from connectors.threads import scoring as th_scoring
 
-_FLAGSHIPS = config.ROOT / "data" / "published_flagships.jsonl"
 _THREADS_POSTS = config.ROOT / "data" / "threads_posts.json"
 _THREADS_TOPICS = config.ROOT / "data" / "threads_topics.json"
 _TG_TOPICS = config.ROOT / "data" / "post_topics.json"
 
 
-def _load_flagships() -> list[dict]:
-    if not _FLAGSHIPS.exists():
-        return []
-    rows = []
-    for ln in _FLAGSHIPS.read_text(encoding="utf-8").splitlines():
-        ln = ln.strip()
-        if ln:
-            try:
-                rows.append(json.loads(ln))
-            except json.JSONDecodeError:
-                continue
-    return rows
-
-
+# ⚠️ ВОССТАНОВЛЕНО 16.09.2026. Коммит ea10940 (перевод ветки Threads на два формата) удалил эти три
+# функции, а ВЫЗОВЫ их оставил — модуль падал NameError на первой же строке main() и был мёртв всё
+# это время. Никто не заметил, потому что на диагностику не было ни одного теста.
+# Тот же класс, что дубль Arc и осиротевший урок: рефакторинг уносит реализацию, а вызывающий код
+# остаётся. Теперь модуль покрыт тестом, который просто запускает main() и требует, чтобы он не падал.
 def _load_threads_posts() -> list[dict]:
     return io_safe.load_json(_THREADS_POSTS, [])   # битый/нет файла → [] + INFO-лог (не молча)
 
@@ -70,6 +61,12 @@ def _bank_distribution() -> None:
         print(f"    {dist.get(slug, 0):>3}  {tc.label(slug)}")
     if dist.get(tc.UNKNOWN):
         print(f"    {dist[tc.UNKNOWN]:>3}  ⚠ UNKNOWN (тема вне слоёв — проверь заголовки банка)")
+
+
+def _load_flagships() -> list[dict]:
+    """Вышедшие ФЛАГМАНЫ из общего журнала вышедших постов (скоупы сюда не берём: этот отчёт про
+    join темы флагмана с категорией; у скоупа тема — повод дня, к банку она не привязана)."""
+    return published_journal.entries("flagship")
 
 
 def _published_flagships(rows: list[dict]) -> None:
@@ -141,7 +138,7 @@ def _evaluation(flagships: list[dict]) -> None:
     rows = category_scoring.leaderboard(dps, today=date.today())
     print("\n    " + category_scoring.render(rows).replace("\n", "\n    "))
     pw = category_scoring.picker_weights(dps, today=date.today())
-    print("\n    веса пикера (эксплуатация + разведка → наклон ротации тем):")
+    print("\n    Threads-веса (СПРАВОЧНО, дормант — в боевой пикер НЕ идут; реальные ТГ-веса см. [1.5]):")
     for cat, w in sorted(pw.items(), key=lambda kv: -kv[1]):
         print(f"      {w:>5} × {tc.label(cat)}")
 
@@ -178,12 +175,28 @@ def _evaluation(flagships: list[dict]) -> None:
                  if agree else "сигналы РАЗНЫЕ (Threads ≠ ТГ) — банк на Threads-данных НЕ менять"))
 
 
+def _applied_picker_weights() -> None:
+    """РЕАЛЬНЫЙ наклон пикера флагмана — ТГ-only веса, ровно то, что применяет run_pipeline
+    (self_learn.tg_category_weights). Печатается ВСЕГДА, не завися от Threads-данных: владелец должен
+    видеть тот тилт, что реально крутит ротацию тем, а не Threads-справку из [4]. Threads в пикер НЕ идёт —
+    площадки инвертированы, ТГ учим на ТГ (решение владельца 29.07)."""
+    print("\n[1.5] ВЕСА ПИКЕРА ФЛАГМАНА — ПРИМЕНЯЮТСЯ (ТГ-only, наклон ротации тем)")
+    pw = self_learn.tg_category_weights()
+    if not pw:
+        print("    нейтрально — мало ТГ-данных, наклон самозаглушён (пикер выбирает равномерно).")
+        return
+    for cat, w in sorted(pw.items(), key=lambda kv: -kv[1]):
+        print(f"    {w:>5} × {tc.label(cat)}")
+    print("    (это СОВЕТ ротации: смещает, какие темы попадут на стол; финал за LLM по свежести/рынку.)")
+
+
 def main() -> None:
     print("=" * 70)
     print("ПРОВЕРКА ПЕТЛИ САМО-ОБУЧЕНИЯ (read-only, на реальных данных)")
     print("=" * 70)
     flagships = _load_flagships()
     _bank_distribution()
+    _applied_picker_weights()
     _published_flagships(flagships)
     _distill_journal()
     _evaluation(flagships)

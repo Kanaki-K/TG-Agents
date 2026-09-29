@@ -95,3 +95,21 @@ def follower_demographics(breakdown: str = "country") -> dict:
             return {b.get("dimension_values", ["?"])[0]: b.get("value")
                     for b in (tv.get("breakdowns") or [{}])[0].get("results", [])}
     return {}
+
+
+def followers_count() -> int | None:
+    """Текущее число подписчиков — ОДИН запрос, без since/until.
+
+    Отдельная функция, а не account_insights: у followers_count нет временного ряда (Meta отдаёт
+    только total_value «сколько сейчас»), поэтому просить его вместе с метриками за период — значит
+    таскать лишние параметры и лишние поля ради одного числа. А число это нужно КАЖДЫЙ ДЕНЬ (см.
+    core/threads_followers): подписки на пост Meta не отдаёт вообще, и дневной счётчик — единственный
+    способ увидеть, приводят ли посты людей.
+
+    Возвращает None, если метрика не пришла (у аккаунта <100 подписчиков или нет привязки к
+    Instagram — см. предупреждение в шапке модуля). None означает «не знаем», а не «ноль»."""
+    token = auth.valid_token()
+    uid = auth.user_id()
+    data = _parse(_api.get(f"{uid}/threads_insights", {"metric": "followers_count"}, token=token))
+    v = data.get("followers_count")
+    return int(v) if isinstance(v, (int, float)) else None

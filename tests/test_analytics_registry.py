@@ -4,7 +4,8 @@
 (модель по-прежнему видит инструменты — поменялась только внутренняя маршрутизация)."""
 from core import analytics_tools, analyst_tools, creator_tools, scout_tools
 
-SHARED = {"channel_summary", "find_posts", "by_theme", "themes_overview", "by_dimension", "recent_posts"}
+SHARED = {"channel_summary", "find_posts", "by_theme", "themes_overview", "by_dimension",
+          "recent_posts", "edit_report"}
 
 
 def _names(mod):
@@ -23,7 +24,7 @@ def test_schemas_preserved_after_dispatch_dedup():
     # схемы инструментов НЕ удалялись — убрали только дублирующиеся ветки dispatch
     assert {"find_posts", "by_theme", "themes_overview", "channel_summary"} <= _names(scout_tools)
     assert {"find_posts", "by_theme", "themes_overview", "channel_summary",
-            "by_dimension", "recent_posts"} <= _names(analyst_tools)
+            "by_dimension", "recent_posts", "edit_report"} <= _names(analyst_tools)
     assert {"find_posts", "by_theme", "themes_overview", "by_dimension", "recent_posts"} <= _names(creator_tools)
 
 

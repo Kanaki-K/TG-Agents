@@ -16,6 +16,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from core import io_safe
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
@@ -68,7 +69,7 @@ def main() -> None:
         })
         added += 1
 
-    SNAPS.write_text(json.dumps(snaps, ensure_ascii=False, indent=2), encoding="utf-8")
+    io_safe.dump_json(SNAPS, snaps)  # атомарно (аудит 29.09)
     mode = "ВСЕ посты (обновить)" if force_all else f"посты младше {FRESH_DAYS} дн."
     print(f"Снапшот ({mode}): добавлено {added} записей. Всего в истории: {len(snaps)}.")
 

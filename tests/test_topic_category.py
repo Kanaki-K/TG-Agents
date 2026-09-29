@@ -59,4 +59,4 @@ def test_missing_bank_file(tmp_path, monkeypatch):
 def test_helpers():
     assert tc.label("рынок") == "Рынок, on-chain, математика, макро"
     assert set(tc.all_slugs()) == {"применение", "психология", "рынок", "философия",
-                                   "антиказино", "словарь", "ai-крипта"}
+                                   "антиказино", "словарь", "ai-крипта", "институции"}

@@ -28,7 +28,7 @@ import logging
 import re
 from datetime import datetime
 
-from telethon.errors import MediaCaptionTooLongError, PhotoInvalidDimensionsError
+from telethon.errors import BadRequestError, MediaCaptionTooLongError, PhotoInvalidDimensionsError
 from telethon.tl import functions
 
 from connectors.telegram_export.collect import _client
@@ -125,6 +125,14 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
 
         def done(mode: str, msg) -> dict:
             out = {"ok": True, "mode": mode}
+            # ОПОЗНАВАТЕЛЬ ПОСТА (11.09.2026): номер сообщения с ТЕКСТОМ (во всех ветках ниже в done
+            # приходит именно оно) + назначенное время. По ним Threads-ветка находит пост в отложке, даже
+            # если админ его поправил: номер от правки текста не меняется. Вышедший пост Telegram
+            # перенумеровывает, но выходит он ровно в назначенное время — это второй якорь.
+            if getattr(msg, "id", None) is not None:
+                out["msg_id"] = msg.id
+            if getattr(msg, "date", None):
+                out["scheduled_at"] = msg.date.isoformat()
             if when is None:  # у отложенного публичной ссылки ещё нет
                 out["link"] = _post_link(entity, msg)
             return out
@@ -133,11 +141,15 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
         # data/custom_emoji.json; премиум-аккаунт их шлёт). Сбой разметки → чистый текст (пост не теряем).
         html = tg_format.to_telegram_html(text, custom_emoji=True)
 
+        # ПОВТОР ДРУГИМ СПОСОБОМ — ТОЛЬКО НА ЯВНЫЙ ОТКАЗ TELEGRAM (400), аудит 29.09.2026. Раньше любой
+        # except повторял отправку: сетевой таймаут ПОСЛЕ того, как сервер принял сообщение, давал ВТОРОЙ
+        # пост в отложке (random_id новый — сервер дубль не схлопнет). Сетевые сбои теперь идут наверх:
+        # publish() вернёт {ok: False}, и прогон честно скажет «не поставил» — лучше, чем дубль в канале.
         async def _msg(target):
             try:
                 return await client.send_message(target, html, parse_mode="html",
                                                  link_preview=False, schedule=when)
-            except Exception:
+            except BadRequestError:
                 logging.exception("[публикатор] HTML отклонён — чистым текстом")
                 return await client.send_message(target, text, parse_mode=None,
                                                  link_preview=False, schedule=when)
@@ -157,7 +169,7 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
                 break  # подпись длиннее лимита Telegram — уходим на два сообщения
             except PhotoInvalidDimensionsError:
                 break  # неверные размеры для ФОТО — ниже пробуем документом (примет любые размеры)
-            except Exception:
+            except BadRequestError:
                 logging.exception("[публикатор] подпись (%s) отклонена — пробую дальше", pm)
         # Подпись не вместила текст → фото отдельным сообщением + текст (два отложенных; пост не теряем).
         if caption_too_long:
@@ -166,14 +178,14 @@ async def _publish_async(channel: str, text: str, cover: str | None, when: datet
                 return done("фото + текст (два сообщения — текст не влез в подпись)", await _msg(entity))
             except PhotoInvalidDimensionsError:
                 pass  # размеры невалидны для фото → уйдём документом ниже
-            except Exception:
+            except BadRequestError:
                 logging.exception("[публикатор] фото отдельным сообщением отклонено — пробую документом")
         # Крайний фолбэк: Telegram не принял картинку как ФОТО (кривые размеры и т.п.) → шлём её ДОКУМЕНТОМ
         # + текст (не теряем ни картинку, ни пост). Если и это не вышло — только текст. НИКОГДА не роняем прогон.
         try:
             await client.send_file(entity, cover, force_document=True, schedule=when)
             return done("картинка документом + текст (размеры не подошли под фото)", await _msg(entity))
-        except Exception:
+        except BadRequestError:
             logging.exception("[публикатор] и документом картинку не отправил — публикую только текстом")
             return done("только текст (картинку Telegram отклонил)", await _msg(entity))
     finally:
@@ -187,12 +199,10 @@ async def _scheduled_async(channel: str) -> list:
     try:
         if not await client.is_user_authorized():
             return []
-        try:
-            entity = await _resolve_entity(client, channel)
-            msgs = await client.get_messages(entity, scheduled=True, limit=100)
-        except Exception:
-            logging.exception("[публикатор] не смог прочитать отложенные")
-            return []
+        # Сбой чтения — ИСКЛЮЧЕНИЕ, а не [] (аудит 29.09): пустой список вызывающие читали как «все слоты
+        # свободны» и ставили второй пост на занятый день. Все вызывающие уже в try и сами решают, что делать.
+        entity = await _resolve_entity(client, channel)
+        msgs = await client.get_messages(entity, scheduled=True, limit=100)
         return [m.date for m in msgs if getattr(m, "date", None)]
     finally:
         await client.disconnect()
@@ -239,6 +249,138 @@ def scheduled_times(channel: str) -> list:
     return asyncio.run(_scheduled_async((channel or "").strip()))
 
 
+async def _scheduled_texts_async(channel: str) -> list:
+    """Тексты отложенных постов канала (для анти-повтора). Сбой/нет сессии → [] (fail-open)."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return []
+        try:
+            entity = await _resolve_entity(client, channel)
+            msgs = await client.get_messages(entity, scheduled=True, limit=100)
+        except Exception:
+            logging.exception("[публикатор] не смог прочитать тексты отложенных")
+            return []
+        return [m.message for m in msgs if getattr(m, "message", None)]
+    finally:
+        await client.disconnect()
+
+
+def scheduled_texts(channel: str) -> list:
+    """Синхронно: тексты постов, лежащих в отложке канала.
+
+    Зачем отдельно от scheduled_times (баг 05.08): анти-повтор смотрел только в ЧЕРНОВИКИ на диске, а
+    отложка — это ИСТИНА о том, что реально выйдет. Отличия критичны: (1) владелец правит пост уже В
+    ОТЛОЖКЕ, и его финальный заголовок черновику неизвестен; (2) слоты уходят на 3-5 дней вперёд, то
+    есть пост живёт в очереди дольше, чем окно свежести черновиков. Из-за этого канал получил два поста
+    про валидаторов сети Arc подряд. Никогда не бросает: нет сессии/сети → [], гейт отработает на
+    черновиках.
+    """
+    try:
+        return asyncio.run(_scheduled_texts_async((channel or "").strip()))
+    except Exception:
+        logging.exception("[публикатор] чтение отложенных упало — анти-повтор пойдёт по черновикам")
+        return []
+
+
+async def _cancel_scheduled_async(channel: str, msg_id: int = 0) -> dict:
+    """Снять отложенный пост канала: по id, либо САМЫЙ СВЕЖИЙ из добавленных (максимальный id)."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return {"ok": False, "error": "MTProto-сессия не авторизована (TELEGRAM_SESSION)"}
+        entity = await _resolve_entity(client, channel)
+        msgs = await client.get_messages(entity, scheduled=True, limit=100)
+        if not msgs:
+            return {"ok": False, "error": "в отложке канала ничего нет"}
+        target = next((m for m in msgs if m.id == msg_id), None) if msg_id else max(msgs, key=lambda m: m.id)
+        if target is None:
+            return {"ok": False, "error": f"в отложке нет сообщения id={msg_id}"}
+        await client(functions.messages.DeleteScheduledMessagesRequest(peer=entity, id=[target.id]))
+        left = await client.get_messages(entity, scheduled=True, limit=100)
+        gone = all(m.id != target.id for m in left)
+        return {"ok": gone, "id": target.id, "date": getattr(target, "date", None),
+                "text": (getattr(target, "message", "") or "")[:120], "left": len(left),
+                "error": "" if gone else "Telegram не подтвердил удаление — глянь «Отложенные» руками"}
+    finally:
+        await client.disconnect()
+
+
+def cancel_scheduled(channel: str, msg_id: int = 0) -> dict:
+    """Снять пост из нативных «Отложенных» канала. ОПАСНАЯ операция — зовётся ТОЛЬКО руками.
+
+    ЗАЧЕМ. 12.09.2026 завод поставил в отложку пост, который владелец забраковал целиком («заголовок
+    дерьмище, финал дерьмище, пользы 0»), и снимать его пришлось бы вручную в клиенте. Завод умеет
+    ставить, но не умел убирать — а ошибку надо уметь отменять там же, где её сделал.
+    ⚠️ Пайплайн это НЕ вызывает и вызывать не должен: удаление чужого решения — дело человека.
+    Снимает по id или самый свежий (максимальный id — это и есть «то, что я только что поставил»)."""
+    try:
+        return asyncio.run(_cancel_scheduled_async((channel or "").strip(), int(msg_id or 0)))
+    except Exception as e:
+        logging.exception("[публикатор] снятие отложки упало")
+        return {"ok": False, "error": f"снять не удалось: {e}"}
+
+
+async def _scheduled_list_async(channel: str) -> list:
+    """[{id, date, text}] всей отложки канала — для показа человеку перед снятием."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return []
+        entity = await _resolve_entity(client, channel)
+        msgs = await client.get_messages(entity, scheduled=True, limit=100)
+        return [{"id": m.id, "date": getattr(m, "date", None),
+                 "text": (getattr(m, "message", "") or "").strip()} for m in msgs]
+    finally:
+        await client.disconnect()
+
+
+def scheduled_list(channel: str) -> list:
+    """Синхронно: вся отложка канала с id и текстом (для CLI-снятия)."""
+    try:
+        return asyncio.run(_scheduled_list_async((channel or "").strip()))
+    except Exception:
+        logging.exception("[публикатор] чтение отложки для снятия упало")
+        return []
+
+
+async def _channel_snapshot_async(channel: str, recent: int) -> dict:
+    """Отложка и свежая лента канала за ОДНО подключение: [{id, date, text}] в каждой."""
+    client = _client()
+    await client.connect()
+    try:
+        if not await client.is_user_authorized():
+            return {"ok": False, "error": "MTProto-сессия не авторизована (TELEGRAM_SESSION)"}
+        entity = await _resolve_entity(client, channel)
+
+        def rows(msgs) -> list:
+            return [{"id": m.id, "date": m.date.isoformat() if getattr(m, "date", None) else "",
+                     "text": m.message} for m in msgs if getattr(m, "message", None)]
+
+        scheduled = await client.get_messages(entity, scheduled=True, limit=100)
+        feed = await client.get_messages(entity, limit=recent)
+        return {"ok": True, "scheduled": rows(scheduled), "recent": rows(feed)}
+    finally:
+        await client.disconnect()
+
+
+def channel_snapshot(channel: str, recent: int = 60) -> dict:
+    """Синхронно: что сейчас лежит в отложке канала и что недавно вышло.
+
+    Зачем (11.09.2026): Threads-ветка берёт из журнала только тот пост, который админ ОСТАВИЛ в канале.
+    Лента нужна потому, что в 16:00 пост уходит из отложки в ленту — он не удалён, он вышел.
+    ok=False отличает «канал не прочитался» от «в канале пусто»: при первом Threads берёт последний пост
+    журнала с предупреждением, при втором — честно говорит, что брать нечего. Никогда не бросает."""
+    try:
+        return asyncio.run(_channel_snapshot_async((channel or "").strip(), recent))
+    except Exception as e:
+        logging.exception("[публикатор] не смог прочитать отложку и ленту канала")
+        return {"ok": False, "error": f"канал не прочитан: {e}"}
+
+
 async def _notify_async(user: str, text: str) -> dict:
     """Отправить ЛС от аккаунта-публикатора пользователю (мейну владельца). user — @username/t.me/id."""
     client = _client()
@@ -261,5 +403,13 @@ def check(channel: str = "") -> dict:
 
 
 def notify(user: str, text: str) -> dict:
-    """Синхронно отправить уведомление в ЛС (мейну владельца) аккаунтом-публикатором."""
-    return asyncio.run(_notify_async((user or "").strip(), text))
+    """Синхронно отправить уведомление в ЛС (мейну владельца) аккаунтом-публикатором. Никогда не бросает.
+
+    Подключение живёт ВНЕ try внутри _notify_async: без обёртки здесь обрыв сети в момент уведомления ронял
+    Threads-пайплайн трейсбеком уже ПОСЛЕ постановки постов — без метки аналитики и итога расходов, а бот
+    отвечал «не смог», и повторный запуск давал дубль в отложке (аудит 11.09.2026)."""
+    try:
+        return asyncio.run(_notify_async((user or "").strip(), text))
+    except Exception as e:
+        logging.exception("[публикатор] уведомление не отправлено")
+        return {"ok": False, "error": f"уведомление не отправлено: {e}"}

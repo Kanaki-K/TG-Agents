@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from core import config, creator_tools
+from core import config, cover_variety, creator_tools
 from connectors.gpt_image import generate as gen
 
 # Тестовый пост владельца (реальный, обучающий формат про ETF) — на случай, если
@@ -53,8 +53,18 @@ def _load_post() -> tuple[str, str]:
 
 
 if __name__ == "__main__":
+    import sys
+
     title, post_text = _load_post()
-    prompt = creator_tools._build_image_prompt(title, post_text)  # тот же код, что у Криейтора
+    # Анти-повтор кадра — тот же код, что у Криейтора, иначе тест показывал бы НЕ то, что уйдёт в бот.
+    # В журнал обложек тут НЕ пишем: тестовые прогоны не должны сдвигать ротацию боевых постов.
+    shot_block, forbid_block, offered = cover_variety.build_blocks(
+        cover_variety.load_shots(), cover_variety.recent())
+    prompt = creator_tools._build_image_prompt(title, post_text, "", shot_block, forbid_block)
     print(f"Заголовок: {title}")
+    print(f"Кадры в этот раз: {', '.join(offered) or '—'}")
+    if "--dry" in sys.argv:  # посмотреть промпт, не тратя дневной лимит бёрнера
+        print("\n" + "=" * 70 + "\n" + prompt)
+        raise SystemExit(0)
     print("Рендерю обложку по шаблону стиля (одна генерация — бережём лимит бёрнера)…")
     print("✓ Готово:", gen.generate(prompt))

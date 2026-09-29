@@ -21,10 +21,12 @@ from datetime import datetime
 from pathlib import Path
 
 RATES = {
+    "claude-opus-5": (5.0, 25.0),        # скоуп-писатель; раньше шёл по _DEFAULT — цена та же, строка для ясности (28.09)
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-sonnet-5": (2.0, 10.0),      # дешевле 4.6 ($3/$15) И новее — рабочая лошадь ролей без мышления
+    "claude-sonnet-4-6": (3.0, 15.0),    # остаётся у Скаута: ему нужен budget_tokens, на 5 он снят
     "claude-haiku-4-5": (1.0, 5.0),
 }
 _DEFAULT = (5.0, 25.0)  # незнакомая модель — считаем по Opus-тарифу (консервативно)
@@ -84,8 +86,10 @@ def _usage_dict(usage) -> dict:
     g = lambda n: int(getattr(usage, n, 0) or 0)  # noqa: E731
     cache_w = g("cache_creation_input_tokens")
     # Разбивка записей кэша по TTL: 1h биллится 2×, 5m — 1.25×. Если API разбивку не дал —
-    # консервативно считаем всё по 2× (llm.py ставит системному блоку именно 1h, а система —
-    # подавляющий объём записи; завысить копейки безопаснее, чем снова занижать счёт).
+    # консервативно считаем всё по 2× (завысить копейки безопаснее, чем снова занижать счёт).
+    # ⚠️ С 17.08 боевой прогон пишет системный блок меткой 5m (llm._system_cache_control), 1h
+    # остался только в /test — то есть этот запасной путь стал ХУДШИМ случаем, а не типичным.
+    # На практике API разбивку отдаёт всегда, и в журнале боевые строки идут без cache_w_1h.
     cc = getattr(usage, "cache_creation", None)
     w1h = int(getattr(cc, "ephemeral_1h_input_tokens", 0) or 0) if cc else 0
     w5m = int(getattr(cc, "ephemeral_5m_input_tokens", 0) or 0) if cc else 0

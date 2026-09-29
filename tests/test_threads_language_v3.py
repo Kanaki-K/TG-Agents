@@ -1,0 +1,370 @@
+"""Threads под правила языка v3 ТГ-канала — мини-скоуп 23.09.2026.
+
+Владелец: «"Каждый перевод с биржи на личный кошелёк - это не транзакция. Это подпись" — не это, а вот
+это; ошибка ровно та, что была у скоупа». Свод Threads запрещал это текстом, кода не было, и писатель
+построил на антитезе заголовок, середину и финал.
+"""
+from core import threads_creator as tc
+from core import threads_lint as tl
+from tests._realdata import load_real, needs_memory
+
+POST_23_09 = (
+    "Каждый перевод с биржи (где Вы подтвердили паспорт) на личный кошелёк - это не транзакция. Это подпись.\n\n"
+    "Время платежа, размер, частота газа по отдельности - шум. Вместе - почерк, уникальный как отпечаток пальца.\n\n"
+    "Бутерин проверил это на себе: попросил AI найти текст, который он анонимно опубликовал годы назад. "
+    "Модель вычислила его не по словам - по манере рассуждать.\n\n"
+    "В блокчейне данных для такого разбора на порядок больше. И они лежат открыто. Навсегда.\n\n"
+    "Псевдонимность означала не \"меня не найдут\". Она означала \"меня пока не искали\"."
+)
+
+CLEAN = (
+    "AI сопоставляет переводы с биржи на кошелёк и находит владельца по привычкам\n\n"
+    "Время платежа, размер и частота переводов вместе складываются в почерк.\n\n"
+    "Бутерин проверил это на себе: модель нашла его старый анонимный текст по манере рассуждать.\n\n"
+    "Каждый перевод с биржи с проверкой паспорта добавляет ещё одну связку между адресом и именем."
+)
+
+
+def test_live_23_09_post_is_caught_in_all_three_places():
+    got = " | ".join(tl.language(POST_23_09))
+    assert "ЗАГОЛОВКЕ" in got and "ФИНАЛЕ" in got and "передоз" in got and "Это не X. Это Y" in got
+
+
+def test_clean_post_has_no_language_defects():
+    assert tl.language(CLEAN) == []
+
+
+def test_one_antithesis_in_the_body_is_allowed():
+    """Замер: «не X, а Y» в 45% принятых постов канала — одна в теле не брак, брак в заголовке/финале."""
+    body = CLEAN.replace("складываются в почерк.", "складываются не в шум, а в почерк.")
+    assert tl.language(body) == []
+
+
+def test_tg_formatting_rules_do_not_leak_into_threads():
+    """Жирный заголовок, футер, эмодзи-набор — правила оформления ТГ, у Threads свои."""
+    got = " ".join(tl.language(CLEAN))
+    assert "жирный" not in got and "футер" not in got
+
+
+def test_check_reports_language_to_the_owner():
+    assert any("ЗАГОЛОВКЕ" in x for x in tl.check(POST_23_09))
+
+
+def test_one_fix_round_by_the_author(monkeypatch):
+    calls = []
+
+    def reply(model, system, hist, user, *a, **k):
+        calls.append(user)
+        return CLEAN, None
+    monkeypatch.setattr(tc.llm, "reply", reply)
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    out = tc._enforce_language([POST_23_09], "scope", "k", "m")
+    assert out == [CLEAN] and len(calls) == 1
+    assert "⛔ ДЕФЕКТЫ" in calls[0]
+    assert "→ 0" in tc.LAST_LANGUAGE_NOTE and "за 1 круг" in tc.LAST_LANGUAGE_NOTE
+
+
+def test_clean_posts_cost_nothing(monkeypatch):
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (_ for _ in ()).throw(AssertionError("вызов")))
+    assert tc._enforce_language([CLEAN], "scope", "k", "m") == [CLEAN]
+
+
+def test_wrong_answer_keeps_the_originals(monkeypatch):
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: ("пост1\n[[POST]]\nпост2", None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    assert tc._enforce_language([POST_23_09], "scope", "k", "m") == [POST_23_09]
+    assert "оставил исходные" in tc.LAST_LANGUAGE_NOTE
+
+
+@needs_memory
+def test_manuals_no_longer_teach_the_antithesis():
+    for f in ("memory/threads_scope_manual.md", "memory/threads_flagship_manual.md"):
+        t = open(f, encoding="utf-8").read()
+        assert "парадокс / контраст / вопрос" not in t and "парадокс/контраст/вопрос" not in t
+        assert "формула-афоризм" not in t
+
+
+def test_length_mark_names_the_cut_and_echo_is_stripped():
+    assert tc._unmark("❌ [703 знаков — убрать минимум 224] Текст поста") == "Текст поста"
+
+
+def test_second_length_round_if_the_first_falls_short(monkeypatch):
+    """Живой мини-скоуп 23.09: один круг дал 703 → 654, всё ещё за потолком 499."""
+    monkeypatch.setattr(tc, "_same_post", lambda a, b: True)   # механика кругов, не защита от подмены
+    answers = iter(["я" * (tc.MAX_LEN + 100), "я" * (tc.MAX_LEN - 10)])
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(answers), None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    out = tc._enforce_length(["я" * (tc.MAX_LEN + 200)], "scope", "k", "m")
+    assert len(out[0]) <= tc.MAX_LEN and "в норму" in tc.LAST_LENGTH_NOTE
+
+
+def test_forms_the_writer_escaped_to_are_caught():
+    """Второй живой прогон 23.09: писатель ушёл в соседние формы антитезы."""
+    got = " ".join(tl.language(
+        "Приватность в блокчейне не взламывают - её вычисляют\n\n" + CLEAN.split("\n\n", 1)[1]
+        + "\n\nВопрос не в том, знают ли его. В том, сколько связок осталось"))
+    assert "ЗАГОЛОВКЕ" in got and "ФИНАЛЕ" in got
+
+
+def test_plain_dash_after_negation_is_not_an_antithesis():
+    """Замер канала: «Коду доверять не нужно - он либо пропускает операцию» — обычная фраза."""
+    assert tl.language(CLEAN + "\n\nКоду доверять не нужно - он либо пропускает операцию, либо нет") == []
+
+
+def test_second_language_round_if_the_first_leaves_a_defect(monkeypatch):
+    """Живой прогон 23.09: антитеза в финале пережила один круг (1 → 1)."""
+    answers = iter([POST_23_09, CLEAN])
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(answers), None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    assert tc._enforce_language([POST_23_09], "scope", "k", "m") == [CLEAN]
+    assert "за 2 круг" in tc.LAST_LANGUAGE_NOTE
+
+
+def test_third_live_run_escapes_are_caught():
+    """Третий живой прогон 23.09: заголовок буквально «Не X. Это Y» и финал «Вопрос не в том…»."""
+    rest = CLEAN.split("\n\n", 1)[1]
+    got = " ".join(tl.language("Не X. Это Y\n\n" + rest))
+    assert "ШАБЛОН" in got and "ЗАГОЛОВКЕ" in got
+    got = " ".join(tl.language(CLEAN + "\n\nВопрос не в том, знают ли Ваше имя. Вопрос - сколько переводов связать"))
+    assert "ФИНАЛЕ" in got
+
+
+def test_fourth_live_run_escapes_are_caught():
+    rest = CLEAN.split("\n\n", 1)[1]
+    got = " ".join(tl.language(CLEAN + "\n\nВопрос не \"знают ли Ваше имя\". Вопрос - сколько связок нужно"))
+    assert "ФИНАЛЕ" in got
+    got = " ".join(tl.language("Приватность в блокчейне уже не работает - и дело не в криптографии\n\n" + rest))
+    assert "ЗАГОЛОВКЕ" in got
+
+
+def test_vy_is_capitalized_by_code():
+    """Живой прогон 23.09: «выдаёт вас», «о вас уже знают». Канал с 11.08: строчных 0, заглавных 55."""
+    got = tc._capital_vy("Ваш кошелёк выдаёт вас манерой. Его сверяют с тем, что о вас знают, и вам не скрыться")
+    assert got == "Ваш кошелёк выдаёт Вас манерой. Его сверяют с тем, что о Вас знают, и Вам не скрыться"
+    assert tc._capital_vy("Вызов и вывод") == "Вызов и вывод"      # слова, начинающиеся с «вы», не трогаем
+
+
+FACTORY_23_09 = (
+    "Приватность будущего Вас предаст, но не сегодня.\n\n"
+    "23 сентября Виталик Бутерин признал: прятать имя за адресом кошелька больше не работает. Модель "
+    "сопоставляет время транзакций, размер, частоту газа - и получает поведенческий отпечаток. В июне AI "
+    "вычислил самого Бутерина по манере рассуждения в старом тексте.\n\n"
+    "Данные в блокчейне лежат открыто и навсегда, и сравнивать их будут моделями, которых ещё не написали. "
+    "Псевдоним - это отложенный срок на раскрытие.")
+OWNER_23_09 = (
+    "Приватность будущего Вас предаст, но не сегодня\n\n"
+    "23 сентября Виталик Бутерин признал: прятать имя за адресом кошелька больше не работает\n\n"
+    "Модель сопоставляет время транзакций, размер, частоту газа - и получает поведенческий отпечаток\n\n"
+    "В июне AI вычислил самого Бутерина по манере рассуждения в старом тексте\n\n"
+    "Данные в блокчейне лежат открыто и навсегда, и сравнивать их будут моделями, которых ещё не написали\n\n"
+    "Псевдоним - это отложенный срок на раскрытие")
+
+
+def test_beats_reproduce_the_owner_edit_of_23_09():
+    """Владелец: «переделал структуру и точки в конце предложения». Код делает ровно ту же правку."""
+    assert tc._beats(FACTORY_23_09) == OWNER_23_09
+
+
+def test_short_two_sentence_line_is_kept_and_numbers_are_safe():
+    """Короткий абзац из двух предложений у владельца норма (медиана 66 знаков) — не режем; 6.25 не рвём."""
+    t = "Мнение бесплатно. Поэтому оно ничего и не стоит\n\nВыплата упала с 6.25 до 3.125 BTC..."
+    assert tc._beats(t) == t
+
+
+def test_reverse_pair_split_by_beats_is_caught_in_the_finale():
+    """Прогон после строк-битов: «Псевдоним прячет имя» / «Он не прячет то, как Вы думаете»."""
+    got = " ".join(tl.language(CLEAN + "\n\nПсевдоним прячет имя\n\nОн не прячет то, как Вы думаете"))
+    assert "ФИНАЛЕ" in got
+
+
+def test_owner_edit_of_23_09_is_clean():
+    """Пост в правке владельца проходит проверку языка — иначе линтер спорит с ним самим."""
+    assert tl.language(OWNER_23_09) == []
+
+
+def test_headline_split_by_beats_is_caught():
+    """Прогон 23.09: «Приватность в блокчейне никогда не была про имя» / «Она была про то, сколько связок»."""
+    rest = CLEAN.split("\n\n", 1)[1]
+    t = ("Приватность в блокчейне никогда не была про имя\n\nОна была про то, сколько связок нужно\n\n" + rest)
+    assert any("ЗАГОЛОВКЕ" in x for x in tl.language(t))
+
+
+def test_language_is_rechecked_after_the_length_round():
+    import inspect
+    src = inspect.getsource(tc.write)
+    assert src.index("_enforce_length(posts") < src.rindex("_enforce_language(posts")
+
+
+def test_typography_follows_the_62_published_posts():
+    assert tc._typo("Он сказал «нет» — и ушёл") == 'Он сказал "нет" - и ушёл'
+
+
+def test_colon_and_parentheses_go_to_the_fix_round():
+    got = " ".join(tl.language(CLEAN + "\n\nБутерин признал: адрес не прячет (ни один). Итог: связки"))
+    assert "двоеточий" in got and "скобках" in got
+    assert tl.language(OWNER_23_09) == []          # одно двоеточие владелец оставил сам
+
+
+def test_threads_measure_minuses_go_to_the_fix_round():
+    rest = CLEAN.split("\n\n", 1)[1]
+    got = " ".join(tl.language("Как устроен отпечаток кошелька в блокчейне\n\n" + rest + "\n\nА ты проверь свой кошелёк"))
+    assert "«ты»" in got and "устройство" in got
+
+
+def test_vy_in_headline_is_allowed_like_the_owner_did():
+    assert not any("ЗАГОЛОВКЕ" in x for x in tl.virality(OWNER_23_09))
+
+
+def test_leading_emoji_is_stripped():
+    assert tc._typo("🔒 Кошелёк выдаёт владельца\n\nТекст") == "Кошелёк выдаёт владельца\n\nТекст"
+
+
+def test_published_posts_do_not_trigger_the_new_hard_rules():
+    """Жёсткие правила Threads не должны спорить с тем, что владелец уже опубликовал (кроме v3-антитезы)."""
+    posts = load_real("threads_posts.json")
+    fm = load_real("threads_factory_map.json")
+    pub = [p["text"] for p in posts if (fm.get(str(p["id"])) or {}).get("by") not in (None, "не опознан")
+           and len(p.get("text") or "") > 150 and not tl._TY.search(p.get("text") or "")]
+    hits = [t for t in pub if any(x.startswith(("заголовок обещает", "⛔ ссылка")) for x in tl.language(t))]
+    assert len(hits) <= 1, hits
+
+
+def test_single_newlines_become_beats():
+    assert tc._beats("Сказал простую вещь\nПрятать имя больше не работает") == \
+        "Сказал простую вещь\n\nПрятать имя больше не работает"
+
+
+def test_antithesis_across_undotted_lines_is_caught():
+    """Прогон 23.09: «Модель собирает не имя» / «Она собирает привычки» — строки без точек."""
+    t = CLEAN + "\n\nМодель собирает не имя\nОна собирает привычки"
+    assert tl._anti_count(t) == 1
+    assert any("ФИНАЛЕ" in x for x in tl.language(t))
+
+
+def test_service_word_in_headline():
+    assert any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок про биткоин\n\n" + CLEAN.split("\n\n", 1)[1]))
+
+
+@needs_memory
+def test_scrap_post_in_a_series_is_dropped(monkeypatch):
+    series = "Я нашёл его нужную сумму денег\n[[POST]]\n" + CLEAN
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (series, None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    monkeypatch.setattr(tc, "_save", lambda *a, **k: None)
+    src = {"text": "исходный пост", "theme": "t", "date": "2026-09-23"}
+    out = tc.write("flagship", src=src, record=False)
+    assert "нужную сумму" not in out and "Бутерин" in out
+
+
+def test_too_fragmented_post_goes_to_the_fix_round():
+    """Живой прогон 23.09: 10 абзацев по фразе. У опубликованных 5-6, больше 7 — у 3 из 62."""
+    t = "\n\n".join(["Приватность в блокчейне кончилась"] + [f"Короткая фраза номер {i}" for i in range(9)])
+    assert any("дробно" in x for x in tl.language(t))
+    assert not any("дробно" in x for x in tl.language(OWNER_23_09))
+
+
+def test_first_owner_test_run_24_09_escapes_are_caught():
+    """Тест-прогон владельца 24.09 (халвинг): три антитезы прошли проверку как «чисто»."""
+    rest = CLEAN.split("\n\n", 1)[1]
+    for head in ("Здоровье халвинга не в дате - в блоке 1 050 000",
+                 "Халвинг предсказывает эмиссию, не цену"):
+        assert any("ЗАГОЛОВКЕ" in x for x in tl.language(head + "\n\n" + rest)), head
+    fin = CLEAN + "\n\nОн говорит, сколько монет родится. Не говорит, сколько за них заплатят"
+    assert any("ФИНАЛЕ" in x for x in tl.language(fin))
+
+
+def _stake_llm(monkeypatch, answers):
+    it = iter(answers)
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(it), None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+
+
+def test_stakeless_thread_is_rewritten_from_the_source(monkeypatch):
+    _stake_llm(monkeypatch, ["1 | да | майнеры теряют половину\n2 | нет | механика без потерь",
+                             CLEAN, "1 | да | x\n2 | да | y"])
+    out = tc._enforce_stake([POST_23_09, "Механика без ставки " * 10], "flagship", "k", "m", "ИСТОЧНИК")
+    assert out == [POST_23_09, CLEAN] and "ставка появилась" in tc.LAST_STAKE_NOTE
+
+
+def test_series_drops_a_thread_that_still_has_no_stake(monkeypatch):
+    _stake_llm(monkeypatch, ["1 | да | x\n2 | нет | механика", "НЕТ СТАВКИ", "1 | да | x\n2 | нет | механика"])
+    out = tc._enforce_stake([POST_23_09, "Механика без ставки " * 10], "flagship", "k", "m", "ИСТОЧНИК")
+    assert out == [POST_23_09] and "выбросил" in tc.LAST_STAKE_NOTE
+
+
+def test_single_post_is_only_marked_never_rewritten(monkeypatch):
+    """Одиночный пост: судья строже владельца (его принятый заголовок — «без ставки» 3/3), поэтому
+    только пометка. Threads всегда при ТГ-посте (решение 11.09)."""
+    calls = []
+
+    def reply(*a, **k):
+        calls.append(1)
+        return "1 | нет | абстракция", None
+    monkeypatch.setattr(tc.llm, "reply", reply)
+    out = tc._enforce_stake([POST_23_09], "scope", "k", "m", "ИСТОЧНИК")
+    assert out == [POST_23_09] and "⚠" in tc.LAST_STAKE_NOTE and len(calls) == 1
+
+
+def test_stake_judge_failure_does_not_block(monkeypatch):
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("сеть")))
+    assert tc.stake_verdicts(["a", "b"], "k", "m") == [(True, "судья недоступен")] * 2
+
+
+def test_service_word_is_markup_not_a_bitcoin_term():
+    rest = CLEAN.split("\n\n", 1)[1]
+    assert not any("СЛУЖЕБНОЕ" in x for x in tl.language("Строка кода 15-летней давности решает за банки\n\n" + rest))
+    assert not any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок блока стоит больше выплаты\n\n" + rest))
+    assert any("СЛУЖЕБНОЕ" in x for x in tl.language("Заголовок про биткоин не сдался\n\n" + rest))
+
+
+def test_fix_rounds_use_the_light_system(monkeypatch):
+    """Цена 24.09: круг правки слал весь свод (~20 тыс. токенов, $0.045 за круг). Теперь лёгкая система."""
+    seen = []
+    monkeypatch.setattr(tc.llm, "reply", lambda model, system, *a, **k: (seen.append(system), (CLEAN, None))[1])
+    tc._enforce_language([POST_23_09], "scope", "k", "m")
+    assert seen and all(s == tc.FIX_SYSTEM for s in seen) and len(tc.FIX_SYSTEM) < 2000
+
+
+def test_fix_round_cannot_replace_the_post_with_a_request(monkeypatch):
+    """Аудит 24.09: круг сжатия ответил «Нужен сам пост - пришлите его текст» — и это стало постом."""
+    junk = "Нужен сам пост - пришлите его текст, пожалуйста\n\nДайте полный текст поста, и я сожму его"
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (junk, None))
+    long = POST_23_09 + "\n\n" + "Ещё абзац для длины поста. " * 10
+    assert tc._enforce_length([long], "flagship", "k", "m")[0] == long
+    assert tc._enforce_language([POST_23_09], "scope", "k", "m")[0] == POST_23_09
+    assert not tc._same_post(POST_23_09, junk)
+    assert tc._same_post(POST_23_09, POST_23_09.replace(".", "").replace(" Это подпись", ""))  # настоящая правка
+
+
+REASONING = ("Смотрю источник на предмет конкретного проигравшего\n\nЕдинственный кандидат со ставкой: день "
+             "халвинга\n\nВторой пост честно не имеет отдельной ставки - не буду её выдумывать\n\n" + CLEAN)
+
+
+def test_stake_round_cannot_turn_reasoning_into_a_post(monkeypatch):
+    """Аудит 24.09: круг ставки вернул рассуждения на 1530 знаков — и они стали постом."""
+    _stake_llm(monkeypatch, ["1 | да | x\n2 | нет | механика", REASONING, "1 | да | x\n2 | нет | механика"])
+    out = tc._enforce_stake([POST_23_09, CLEAN], "flagship", "k", "m", "ИСТОЧНИК")
+    assert all("Смотрю источник" not in p for p in out)
+
+
+@needs_memory
+def test_last_line_of_defence_keeps_a_real_post(monkeypatch):
+    """Что бы ни натворили круги — в ревью уходит пост, а не рассуждение."""
+    answers = iter([POST_23_09, "1 | да | x"] + ["1 | да | x"] * 5)
+    monkeypatch.setattr(tc.llm, "reply", lambda *a, **k: (next(answers), None))
+    monkeypatch.setattr(tc, "_system", lambda kind: "")
+    monkeypatch.setattr(tc, "_save", lambda *a, **k: None)
+    monkeypatch.setattr(tc, "_enforce_language", lambda posts, *a, **k: [REASONING * 2])
+    out = tc.write("scope", src={"text": "исходник", "theme": "t", "date": "2026-09-23"}, record=False)
+    body = out.split("[[КОММЕНТЫ]]")[0]
+    assert "Смотрю источник" not in body          # рассуждение в ревью не ушло
+    assert "Каждый перевод" in body               # ушла рабочая версия писателя
+
+
+def test_connected_body_paragraph_is_not_cut_into_bricks():
+    """24.09, тред ETF: связный абзац из 2–3 фраз (≤190) резался на отдельные строки — «кирпичи».
+    Замер 178 постов владельца в Threads: многофразовые абзацы у 157, p95 длины абзаца 185."""
+    body = ("Но купить его мог кто угодно и в 2013-м. Любая биржа, пять минут, без разрешения. "
+            "Розница и так была внутри")
+    t = "Заголовок со ставкой про фонды\n\n" + body + "\n\nФинал одной фразой"
+    assert body in tc._beats(t).split("\n\n")

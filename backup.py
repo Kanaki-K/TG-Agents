@@ -32,21 +32,36 @@ IRREPLACEABLE = [
     "data/scout_owner.txt",              # чаты владельца для проактивных отчётов
     "data/creator_owner.txt",
     "data/channel-analyst_owner.txt",
-    "data/published_flagships.jsonl",    # журнал ВЫШЕДШИХ флагманов — вход Threads-дистиллятора;
+    "data/published_posts.jsonl",        # журнал ВЫШЕДШИХ ТГ-постов (флагман+скоуп) — вход Threads-ветки;
                                          # датированная история (драфты эфемерны, а этот — нет)
+    "data/published_flagships.jsonl",    # он же ДО 09.09.2026 (флагман-только): мигрируется один раз,
+                                         # но пока лежит на диске — бэкапим, чтобы не потерять историю
     "data/threads_distillations.jsonl",  # журнал дистилляций (флагман→Threads-серия+категория) —
                                          # append-only вход линкера петли обучения, не пересоздать
     "data/threads_my_replies.json",      # корпус живого голоса (4966 реплик из Threads); формально
                                          # пересобирается через API, но это сотни запросов — не повторяем
     "data/psychotype_notes.md",          # ручная выжимка корпуса (17 партий через LLM) — не пересоздать
     "data/threads_psychotype.md",        # аватар голоса, синтез по всему корпусу — не пересоздать
+    "data/plan_settings.json",           # расписание, настроенное владельцем ИЗ ЧАТА (дни/время выхода,
+                                         # лид автопилота) — его решения, перекрывают .env
+    # ── аудит 29.09.2026: бэкап дрейфовал в третий раз (после N-27/N-39) — эти ряды не попадали никуда ──
+    "data/threads_followers.jsonl",      # дневной ряд подписчиков Threads — задним числом не собрать
+    "data/threads_account_insights.jsonl",  # ряд Insights аккаунта — то же
+    "data/threads_app_metrics.json",     # РУЧНОЙ ввод метрик из приложения Threads
+    "data/threads_factory_map.json",     # связи «заводской пост ↔ Threads», часть — правки руками (by:рука)
+    "data/journal_covers",               # обложки постов журнала: на них ссылается published_posts.jsonl
+    "data/snapshots.json",               # ежедневный ряд просмотров постов канала — задним числом не собрать
+                                         # (стоял в СКРЕТЧ ошибочно: выгрузка даёт только «сейчас»)
+    "data/post_formats.json",            # форматы постов, часть — ручной set_format (стоял в СКРЕТЧ ошибочно)
+    "data/cover_log.jsonl",              # журнал обложек флагмана — вход анти-повтора обложек
+    "data/scope_cover_log.jsonl",        # то же для скоупа
     "memory",                            # ВСЯ обученность/состояние агентов (gitignored: уроки, банки,
 ]                                        # леджеры, брифы, драфты) — в репозитории её НЕТ
 
 # 🟢 СКРЕТЧ — НЕ бэкапим (пересобирается refresh.py / повторной тягой):
 SCRATCH = [
-    "data/channel_posts.json", "data/channel_stats.json", "data/snapshots.json",
-    "data/post_topics.json", "data/post_formats.json",
+    "data/channel_posts.json", "data/channel_stats.json",
+    "data/post_topics.json",
     "data/posts_analytics.csv", "data/posts_analytics.xlsx",
     "data/threads_posts.json", "data/threads_stats.json", "data/threads_topics.json",
     "data/threads_analytics.csv", "data/threads_analytics.xlsx",
@@ -55,6 +70,23 @@ SCRATCH = [
     "data/creator_pending_media.txt",
     "data/scout_seen.json",              # watermark разведки — пересоберётся следующим прогоном Скаута
     "data/.login_code_hash",
+    "data/autopilot_state.json",         # дата последнего автопрогона + метки предупреждений — эфемерно
+    "data/autopilot.log",                # собственный лог автопилота (с ротацией)
+    # Выключатели автопилота (свой на каждый формат) — НАМЕРЕННО не бэкапим: после восстановления на
+    # новой машине автопилот обязан быть ВЫКЛЮЧЕН, включает владелец осознанно (иначе он тихо начнёт
+    # публиковать). `autopilot_on` без суффикса — старое общее имя, оставлено ради старых бэкапов.
+    "data/autopilot_on",
+    "data/autopilot_on_flagship",
+    "data/autopilot_on_scope",
+    # Стоп-кран сети Threads — как выключатели автопилота: после восстановления сеть обязана быть ЗАКРЫТА.
+    "data/threads_unlocked",
+    "data/published_covers",             # эталон обложек канала — dump_covers.py выгружает его заново
+    "data/cover_probe",                  # вывод разового замера tools/probe_covers.py (23 МБ)
+    "data/parked_2026-09-23",            # страховочные копии журнала до чистки 23.09 (журнал бэкапится)
+    "data/threads_api_log.jsonl",        # лог вызовов API Threads (предохранитель квоты) — эфемерно
+    "data/threads_insights_queue.txt", "data/threads_insights_request.txt",
+    "data/threads_metric_watch.json",    # последний список метрик Meta — сторож спросит заново
+    "data/pipeline.lock",                # замок идущего прогона — восстанавливать его нельзя
 ]
 
 
@@ -96,7 +128,19 @@ def make_backup(dest_dir: Path) -> Path:
     if missing:
         print("   ⚠ не найдено (нормально, если не используешь):", ", ".join(missing))
     print("   скретч пропущен НАМЕРЕННО (пересобирается refresh.py).")
+    # Страж громко и на КАЖДОМ бэкапе, а не только в --list (аудит 29.09: --list никто не запускал).
+    for u in unclassified_paths():
+        print(f"   ⚠ НЕ классифицировано — в бэкап НЕ попало: {u} (впиши в IRREPLACEABLE или SCRATCH)")
     return out
+
+
+def unclassified_paths() -> list:
+    known = set(IRREPLACEABLE) | set(SCRATCH)
+    data_dir = ROOT / "data"
+    if not data_dir.exists():
+        return []
+    return [f"data/{p.name}" for p in sorted(data_dir.iterdir())
+            if f"data/{p.name}" not in known and not p.name.startswith(".")]
 
 
 def print_lists() -> None:
@@ -107,15 +151,11 @@ def print_lists() -> None:
     for r in SCRATCH:
         print(f"   {r}")
     # Страж рецидива N-27: новый важный файл в data/ не должен остаться невидимым для бэкапа.
-    known = set(IRREPLACEABLE) | set(SCRATCH)
-    data_dir = ROOT / "data"
-    if data_dir.exists():
-        unclassified = [f"data/{p.name}" for p in sorted(data_dir.iterdir())
-                        if f"data/{p.name}" not in known and not p.name.startswith(".")]
-        if unclassified:
-            print("⚠ НЕ классифицировано (реши IRREPLACEABLE/SCRATCH — иначе НЕ попадёт в бэкап):")
-            for u in unclassified:
-                print(f"   ? {u}")
+    unclassified = unclassified_paths()
+    if unclassified:
+        print("⚠ НЕ классифицировано (реши IRREPLACEABLE/SCRATCH — иначе НЕ попадёт в бэкап):")
+        for u in unclassified:
+            print(f"   ? {u}")
 
 
 def main() -> int:

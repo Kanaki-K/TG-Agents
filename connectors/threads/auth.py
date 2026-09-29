@@ -22,7 +22,7 @@ import urllib.parse
 from pathlib import Path
 
 from connectors.threads import _api
-from core import config
+from core import config, io_safe
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def _save_token(access_token: str, user_id: str, expires_in: int, *,
         "expires_at": now + int(expires_in),
     }
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    io_safe.dump_json(TOKEN_FILE, data)  # атомарно (аудит 29.09)
     return data
 
 
