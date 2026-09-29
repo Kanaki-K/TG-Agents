@@ -32,15 +32,12 @@ python backup.py "D:\Cloud\tg-agents"     # ← путь к облачной п�
 включается — пересобирается `refresh.py`. Посмотреть классификацию без архива: `python backup.py --list`.
 Без аргумента архив ложится в `./backups/` (gitignored) — но держи копию ОФФ-машинно (облако/внешний диск).
 
-**Альтернатива (PowerShell, если нет Python под рукой):**
+**Только `backup.py`.** Ручной рецепт PowerShell отсюда убран (аудит 29.09): он брал 5 путей из ~25
+незаменимых и пропускал даже журнал вышедших постов. Список живёт в одном месте — в `backup.py`, и бэкап
+сам печатает «⚠ НЕ классифицировано», если в `data/` появился файл, которого там нет.
 
-```powershell
-$stamp = Get-Date -Format "yyyy-MM-dd"
-$dst = "$HOME\Backups\tg-agents"
-New-Item -ItemType Directory -Force $dst | Out-Null
-Compress-Archive -Path .env, data\mtproto.session, data\threads_token.json, data\gpt_profile, memory `
-                 -DestinationPath "$dst\tg-agents-$stamp.zip" -Force
-```
+⚠️ В архиве лежат секреты: файл ключей, сессия Telegram, токен Threads, профиль ChatGPT. Облачная папка —
+только личная, не общая и не расшаренная.
 
 Держи 2-3 последних архива. **Проверь восстановление хоть раз** (распакуй в чистую папку, запусти `--draft-only`).
 

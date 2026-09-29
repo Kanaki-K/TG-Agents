@@ -35,3 +35,12 @@ def test_make_backup_zips_only_irreplaceable(tmp_path, monkeypatch):
     assert "data/mtproto.session" in names
     assert "memory/post_lessons.md" in names
     assert "data/channel_posts.json" not in names   # скретч НЕ бэкапится
+
+
+def test_every_live_data_path_is_classified():
+    """Аудит 29.09: бэкап дрейфовал в третий раз — 15 путей data/ не попадали никуда, среди них
+    незаменимые ряды Threads. Новый файл в data/ обязан быть явно отнесён к бэкапу или к скретчу."""
+    import pytest
+    if not (backup.ROOT / "data").exists():
+        pytest.skip("нет data/ (CI-раннер)")
+    assert backup.unclassified_paths() == []
