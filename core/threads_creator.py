@@ -397,14 +397,20 @@ def _enforce_stake(posts: list[str], kind: str, key: str, model: str, source: st
     return fixed
 
 
-def _enforce_language(posts: list[str], kind: str, key: str, model: str, rounds_max: int = 0) -> list[str]:
+def _lang_marks(post: str, source: str = "") -> list[str]:
+    """Замечания круга языка: правила v3 + валюта, сверенная с исходным постом (01.10.2026)."""
+    from core import threads_lint
+    return threads_lint.language(post) + threads_lint.currency(post, source)
+
+
+def _enforce_language(posts: list[str], kind: str, key: str, model: str, rounds_max: int = 0,
+                      source: str = "") -> list[str]:
     """Дефекты языка v3 → круг автора → перепроверка кодом, до LANGUAGE_ROUNDS кругов. Сбой/не тот
     ответ → последние целые посты. Живой прогон 23.09: антитеза в финале пережила один круг (1 → 1),
     второй круг стоит копейки (Sonnet, 500 знаков) — дешевле, чем брак в ревью."""
     global LAST_LANGUAGE_NOTE
-    from core import threads_lint
     LAST_LANGUAGE_NOTE = ""
-    marks = [threads_lint.language(p) for p in posts]
+    marks = [_lang_marks(p, source) for p in posts]
     before = sum(len(m) for m in marks)
     if not before:
         return posts
@@ -430,7 +436,7 @@ def _enforce_language(posts: list[str], kind: str, key: str, model: str, rounds_
                                   + ("исходные" if cur is posts else "итог прошлого круга") + ", дефекты ниже")
             return cur
         cur = fixed
-        marks = [threads_lint.language(p) for p in cur]
+        marks = [_lang_marks(p, source) for p in cur]
     after = sum(len(m) for m in marks)
     LAST_LANGUAGE_NOTE = f"язык v3: замечаний {before} → {after} за {rounds} круг(а) автора"
     return cur
@@ -561,7 +567,7 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
         return (text or "").strip()          # модель ничего не выдала — отдаём сырое, пайплайн покажет
     originals = [_beats(_typo(_capital_vy(p))) for p in posts]   # версия писателя — последний рубеж, см. ниже
     posts = _enforce_stake(posts, k, key, model, src.get("text") or "")  # первым: пост проверит круг языка
-    posts = _enforce_language(posts, k, key, model)   # до длины: правка может удлинить пост
+    posts = _enforce_language(posts, k, key, model, source=src.get("text") or "")   # до длины: правка может удлинить пост
     posts = _enforce_length(posts, k, key, model)
     posts = [_beats(_typo(_capital_vy(p))) for p in posts]   # последним: круги правок пишут это заново
     if any(len(p) > MAX_LEN for p in posts):            # разрез добавляет переносы — перебор возможен
@@ -572,10 +578,10 @@ def write(kind: str = "flagship", hint: str = "", back: int = 0, src: dict | Non
     # ИТОГОВАЯ СТАВКА ДЛЯ ОТЧЁТА (аудит 24.09): круги языка и длины идут ПОСЛЕ круга ставки и могут
     # переписать заголовок — живой прогон заменил годный на «Приватность будущего кода не обещает…».
     # Переделывать ещё раз не будем (круги кончатся), но отчёт обязан сказать, что ушло на самом деле.
-    from core import threads_lint
-    if any(threads_lint.language(p) for p in posts):
+    if any(_lang_marks(p, src.get("text") or "") for p in posts):
         _note = LAST_LANGUAGE_NOTE
-        posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_language(posts, k, key, model, rounds_max=1)]
+        posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_language(posts, k, key, model, rounds_max=1,
+                                                                           source=src.get("text") or "")]
         globals()["LAST_LANGUAGE_NOTE"] = (_note + "; после сжатия — " + LAST_LANGUAGE_NOTE).strip("; ")
         if any(len(p) > MAX_LEN for p in posts):        # правка языка могла удлинить (живой прогон: 502)
             posts = [_beats(_typo(_capital_vy(p))) for p in _enforce_length(posts, k, key, model)]

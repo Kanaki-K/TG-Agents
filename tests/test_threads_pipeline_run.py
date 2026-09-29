@@ -76,7 +76,7 @@ def _cycle_env(monkeypatch, publish_results, check=None):
     monkeypatch.setattr(rtp.threads_source, "resolve",
                         lambda k, b: {"text": "ТГ-флагман", "date": "2026-09-15", "theme": "т", "origin": "журнал"})
     monkeypatch.setattr(rtp.threads_creator, "write", lambda *a, **kw: f"пост один\n{sep}\nпост два")
-    monkeypatch.setattr(rtp.threads_lint, "check_series", lambda posts: "")
+    monkeypatch.setattr(rtp.threads_lint, "check_series", lambda posts, source="": "")
     monkeypatch.setattr(rtp.runmode, "get", lambda: {"mode": "main", "model": "m"})
     monkeypatch.setattr(rtp, "_review_channel", lambda: "ревью")
     monkeypatch.setattr(rtp.config, "get_optional", lambda k: "@мейн" if k == "PUBLISH_NOTIFY" else None)

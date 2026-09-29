@@ -270,14 +270,14 @@ def virality(text: str) -> list[str]:
     return out
 
 
-def check_series(posts: list[str]) -> str:
+def check_series(posts: list[str], source: str = "") -> str:
     """Отчёт по серии: претензии по постам + сводка. Пустая строка = придраться не к чему.
 
     Отдельно считаем, сколько постов серии БЕЗ ставки: тред без своей ставки — главный обитатель дна
     корпуса (вторые и третьи посты серий, где ставка была только у первого)."""
     rows, no_stake = [], 0
     for i, p in enumerate(posts, 1):
-        problems = check(p)
+        problems = check(p) + currency(p, source)   # валюта сверяется с исходным постом (01.10)
         if any("НЕТ ставки" in x for x in problems):
             no_stake += 1
         if problems:
@@ -288,3 +288,40 @@ def check_series(posts: list[str]) -> str:
     tail = (f"\n  ⚠️ Постов без своей ставки: {no_stake} из {len(posts)}. У каждого треда серии "
             "ставка своя — «зеркало к первому» и есть дно корпуса." if no_stake else "")
     return head + "\n" + "\n".join(rows) + tail
+
+
+# ── ВАЛЮТА ПЕРЕЕХАЛА (01.10.2026) ────────────────────────────────────────────────────────────────
+# Тред про ASX: во флагмане «250 млн австралийских долларов», в треде «250 млн$». «$» по-русски читается
+# как доллар США — сумма в треде раздута в полтора раза (A$250 млн ≈ US$165 млн). У Threads-ветки нет
+# своего фактчека (она дистиллирует уже проверенный пост), поэтому валюту сверяем кодом с источником.
+_NUM = r"(\d[\d\s]*(?:[.,]\d+)?)\s*(млрд|млн|тыс\.?)?"
+_FOREIGN = re.compile(_NUM + r"\s*((?:австралийск\w+|канадск\w+|новозеландск\w+|гонконгск\w+|сингапурск\w+|"
+                      r"тайваньск\w+)\s+доллар\w*)|" + _NUM + r"\s*(евро|[ий]ен\w*|фунт\w*|юан\w*|рубл\w*|"
+                      r"франк\w*|рупи\w*|лир\w*|вон\b)", re.IGNORECASE)
+_USD = re.compile(_NUM + r"\s*\$", re.IGNORECASE)
+
+
+def _money_key(num: str, unit: str) -> tuple:
+    n = re.sub(r"\s+", "", num or "").replace(",", ".")
+    return n, (unit or "").lower().rstrip(".")
+
+
+def currency(post: str, source: str) -> list[str]:
+    """Число со знаком «$» в треде, которое в ИСТОЧНИКЕ стоит в другой валюте. Пусто — всё сходится."""
+    if not (post and source):
+        return []
+    foreign = {}
+    for m in _FOREIGN.finditer(source):
+        if m.group(1):
+            foreign[_money_key(m.group(1), m.group(2))] = m.group(3)
+        else:
+            foreign[_money_key(m.group(4), m.group(5))] = m.group(6)
+    usd_in_source = {_money_key(m.group(1), m.group(2)) for m in _USD.finditer(source)}
+    out = []
+    for m in _USD.finditer(post):
+        k = _money_key(m.group(1), m.group(2))
+        if k in foreign and k not in usd_in_source:
+            right = " ".join(x for x in (m.group(1).strip(), m.group(2) or "", foreign[k]) if x)
+            out.append(f"⛔ ВАЛЮТА: «{m.group(0).strip()}» — в исходном посте это «{right}». Знак «$» читается "
+                       f"как доллар США и искажает сумму. Верни валюту как в источнике: «{right}».")
+    return out

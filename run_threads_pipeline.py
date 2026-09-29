@@ -224,7 +224,7 @@ def run_threads_cycle(hint: str = "", publish: bool = True, emit=print, kind: st
     # ПРОВЕРКА ПО ЗАМЕРУ ВИРАЛЬНОСТИ (09.09.2026). Текст НЕ переписываем: линтер называет цену
     # («нет ставки» = ×3.6 мимо), решает автор в отложке. Проверено на 64 живых постах — у лидеров
     # корпуса претензий нет, у дна есть у всех, поэтому претензии можно читать всерьёз.
-    lint_report = threads_lint.check_series(posts)
+    lint_report = threads_lint.check_series(posts, src.get("text") or "")
     if lint_report:
         out(lint_report + "\n")
     # Блок для ВЛАДЕЛЬЦА (что осталось в ТГ, какой спор пойдёт в ответах, что честно отвечать).
